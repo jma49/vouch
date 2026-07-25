@@ -1,0 +1,17 @@
+# Example fact-extraction sidecar (docs/design.md section 4).
+# One file per upstream tool. Extraction is schema-driven and
+# deterministic: adding a tool means adding config, not code.
+tool: get_indicators
+entity_ptr: /symbol
+asof_ptr: /as_of
+facts:
+  - ptr: /rsi_14
+    metric: rsi_14
+    tol_class: indicator
+  - ptr: /macd/histogram
+    metric: macd_hist
+    tol_class: indicator
+  - ptr: /close
+    metric: close_price
+    unit: USD
+    tol_class: price
