@@ -1,0 +1,40 @@
+{
+  "description": "Shared canonicalization test vectors. Both the Go proxy and the Python verifier must produce byte-identical output for these inputs. Seed set: object key sorting, nesting, arrays, unicode passthrough, and number literals that round-trip identically in both languages. Exponent-form numbers are deliberately excluded until full RFC 8785 number normalization lands (see docs/design.md section 7).",
+  "vectors": [
+    {
+      "name": "key_sorting_flat",
+      "input": "{\"b\": 1, \"a\": 2, \"c\": 3}",
+      "canonical": "{\"a\":2,\"b\":1,\"c\":3}"
+    },
+    {
+      "name": "key_sorting_nested",
+      "input": "{\"outer\": {\"z\": true, \"a\": null}, \"first\": false}",
+      "canonical": "{\"first\":false,\"outer\":{\"a\":null,\"z\":true}}"
+    },
+    {
+      "name": "array_order_preserved",
+      "input": "{\"series\": [3, 1, 2], \"symbol\": \"NVDA\"}",
+      "canonical": "{\"series\":[3,1,2],\"symbol\":\"NVDA\"}"
+    },
+    {
+      "name": "decimal_and_int_literals",
+      "input": "{\"rsi_14\": 62.3, \"close\": 181.5, \"volume\": 52400000, \"tick\": 0.01}",
+      "canonical": "{\"close\":181.5,\"rsi_14\":62.3,\"tick\":0.01,\"volume\":52400000}"
+    },
+    {
+      "name": "unicode_passthrough",
+      "input": "{\"note\": \"café ✓\", \"symbol\": \"NVDA\"}",
+      "canonical": "{\"note\":\"café ✓\",\"symbol\":\"NVDA\"}"
+    },
+    {
+      "name": "empty_containers",
+      "input": "{\"facts\": [], \"meta\": {}}",
+      "canonical": "{\"facts\":[],\"meta\":{}}"
+    },
+    {
+      "name": "deep_nesting_with_arrays_of_objects",
+      "input": "{\"bars\": [{\"o\": 180.1, \"c\": 181.5}, {\"c\": 182.0, \"o\": 181.5}], \"tf\": \"1d\"}",
+      "canonical": "{\"bars\":[{\"c\":181.5,\"o\":180.1},{\"c\":182.0,\"o\":181.5}],\"tf\":\"1d\"}"
+    }
+  ]
+}
