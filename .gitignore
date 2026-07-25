@@ -1,0 +1,30 @@
+# Binaries
+/bin/
+*.exe
+
+# Go
+proxy/vouch
+*.test
+*.out
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Receipts and fixtures (generated locally; see docs/design.md §12)
+/receipts/
+/fixtures/
+
+# Env and editors
+.env
+.env.*
+.DS_Store
+.idea/
+.vscode/
