@@ -25,10 +25,18 @@ import (
 	"github.com/jma49/vouch/proxy/internal/store"
 )
 
+// Caller is the upstream call surface. *mcp.Client is the live
+// implementation; the fixture recorder and replayer wrap or replace it
+// (docs/design.md section 8.1).
+type Caller interface {
+	Call(method string, params any) (json.RawMessage, error)
+	Notify(method string, params any) error
+}
+
 // Upstream is one federated MCP server.
 type Upstream struct {
 	Name   string
-	Client *mcp.Client
+	Client Caller
 	Close  func() error
 }
 
@@ -43,10 +51,6 @@ type Server struct {
 	SessionID string
 	Clock     clock.Clock
 	Logf      func(format string, args ...any)
-
-	// Recorder, when set, observes every (tool, args, result) triple —
-	// the hook the fixture recorder attaches to.
-	Recorder func(tool string, argsCanonical, result json.RawMessage)
 
 	routes map[string]*Upstream
 	turn   int
@@ -232,10 +236,6 @@ func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int
 			return err
 		}
 		dataAsOf = schema.ResultAsOf(resultCanon)
-	}
-
-	if s.Recorder != nil {
-		s.Recorder(tool, argsCanon, result)
 	}
 
 	r := &receipt.Receipt{

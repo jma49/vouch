@@ -17,6 +17,7 @@ import (
 
 	"github.com/jma49/vouch/proxy/internal/clock"
 	"github.com/jma49/vouch/proxy/internal/extract"
+	"github.com/jma49/vouch/proxy/internal/fixture"
 	"github.com/jma49/vouch/proxy/internal/mcp"
 	"github.com/jma49/vouch/proxy/internal/proxy"
 	"github.com/jma49/vouch/proxy/internal/store"
@@ -61,11 +62,16 @@ func runProxy(args []string) error {
 	receiptsDir := fs.String("receipts", "receipts", "directory for the receipt log")
 	schemasDir := fs.String("schemas", "schemas", "directory of fact-extraction sidecar configs")
 	session := fs.String("session", "", "session id (default: random)")
+	mode := fs.String("mode", "live", "live | record | replay (docs/design.md section 8.1)")
+	fixturesDir := fs.String("fixtures", "fixtures", "fixture directory for record/replay")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if len(upstreams) == 0 {
-		return fmt.Errorf("at least one --upstream is required")
+	if *mode != "live" && *mode != "record" && *mode != "replay" {
+		return fmt.Errorf("invalid --mode %q", *mode)
+	}
+	if len(upstreams) == 0 && *mode != "replay" {
+		return fmt.Errorf("at least one --upstream is required (except in replay mode)")
 	}
 	key := []byte(os.Getenv("VOUCH_HMAC_KEY"))
 	if len(key) == 0 {
@@ -85,14 +91,42 @@ func runProxy(args []string) error {
 	}
 	defer rlog.Close()
 
+	fixStore := &fixture.Store{Dir: *fixturesDir}
+	var clk clock.Clock = &clock.Wall{}
 	var ups []*proxy.Upstream
-	for _, cmd := range upstreams {
-		u, err := proxy.Spawn(cmd)
+
+	switch *mode {
+	case "replay":
+		tools, err := fixStore.LoadAllTools()
 		if err != nil {
 			return err
 		}
-		defer u.Close()
-		ups = append(ups, u)
+		if len(tools) == 0 {
+			return fmt.Errorf("replay: no recorded upstreams in %s (run --mode=record first)", *fixturesDir)
+		}
+		epoch, err := fixStore.Epoch()
+		if err != nil {
+			return err
+		}
+		clk = &clock.Logical{Epoch: epoch}
+		for name, toolsResult := range tools {
+			ups = append(ups, &proxy.Upstream{
+				Name:   name,
+				Client: &fixture.Replayer{Upstream: name, Store: fixStore, Tools: toolsResult},
+			})
+		}
+	default: // live, record
+		for _, cmd := range upstreams {
+			u, err := proxy.Spawn(cmd)
+			if err != nil {
+				return err
+			}
+			defer u.Close()
+			if *mode == "record" {
+				u.Client = fixture.NewRecorder(u.Name, u.Client, fixStore, clk.Now)
+			}
+			ups = append(ups, u)
+		}
 	}
 
 	srv := &proxy.Server{
@@ -102,10 +136,10 @@ func runProxy(args []string) error {
 		Log:       rlog,
 		Key:       key,
 		SessionID: *session,
-		Clock:     &clock.Wall{},
+		Clock:     clk,
 	}
-	fmt.Fprintf(os.Stderr, "vouch proxy: session %s, %d upstream(s), receipts in %s\n",
-		*session, len(ups), *receiptsDir)
+	fmt.Fprintf(os.Stderr, "vouch proxy: mode %s, session %s, %d upstream(s), receipts in %s\n",
+		*mode, *session, len(ups), *receiptsDir)
 	return srv.Run()
 }
 
