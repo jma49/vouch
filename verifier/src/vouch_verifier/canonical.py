@@ -29,20 +29,40 @@ class _NumberLiteral:
         self.literal = literal
 
 
+def parse_preserving(raw: str | bytes) -> object:
+    """Parse JSON with number literals preserved (as _NumberLiteral).
+
+    The parsed tree round-trips through serialize() byte-for-byte, which
+    is what receipt signature re-verification depends on.
+    """
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    try:
+        return json.loads(raw, parse_float=_NumberLiteral, parse_int=_NumberLiteral)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"canonicalize: parse: {e}") from e
+
+
+def serialize(value: object) -> str:
+    """Serialize a parse_preserving() tree in canonical form."""
+    parts: list[str] = []
+    _write(parts, value)
+    return "".join(parts)
+
+
+def number_value(value: object) -> float:
+    """Return the numeric value of a preserved number literal."""
+    if isinstance(value, _NumberLiteral):
+        return float(value.literal)
+    raise ValueError(f"not a number literal: {value!r}")
+
+
 def canonicalize(raw: str | bytes) -> str:
     """Parse raw JSON and re-serialize it in canonical form.
 
     Raises ValueError on invalid JSON or trailing data.
     """
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8")
-    try:
-        value = json.loads(raw, parse_float=_NumberLiteral, parse_int=_NumberLiteral)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"canonicalize: parse: {e}") from e
-    parts: list[str] = []
-    _write(parts, value)
-    return "".join(parts)
+    return serialize(parse_preserving(raw))
 
 
 def _write(parts: list[str], value: object) -> None:
