@@ -205,6 +205,21 @@ func factAt(doc any, m FactMapping, absPtr, entity, asOf string) (receipt.Fact, 
 	}, true, nil
 }
 
+// ResultAsOf resolves the schema's asof_ptr against a canonical result,
+// for the receipt-level data_asof field. Returns "" when unset or absent.
+func (s *Schema) ResultAsOf(resultCanonical []byte) string {
+	if s.AsOfPtr == "" {
+		return ""
+	}
+	dec := json.NewDecoder(bytes.NewReader(resultCanonical))
+	dec.UseNumber()
+	var doc any
+	if err := dec.Decode(&doc); err != nil {
+		return ""
+	}
+	return stringAt(doc, s.AsOfPtr)
+}
+
 // stringAt resolves ptr and returns the string value, or "" when the
 // pointer is empty, absent, or non-string.
 func stringAt(doc any, ptr string) string {
