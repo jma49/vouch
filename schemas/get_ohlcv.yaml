@@ -1,0 +1,20 @@
+# Fact extraction for get_ohlcv: one fact per field per bar (each:).
+tool: get_ohlcv
+entity_ptr: /symbol
+facts:
+  - ptr: /bars
+    each:
+      - ptr: /open
+        metric: open_price
+        unit: USD
+        tol_class: price
+        asof_ptr: /t
+      - ptr: /close
+        metric: close_price
+        unit: USD
+        tol_class: price
+        asof_ptr: /t
+      - ptr: /volume
+        metric: volume
+        tol_class: count
+        asof_ptr: /t

@@ -1,0 +1,18 @@
+# Fact extraction for get_quote: last price, day change, volume.
+tool: get_quote
+entity_ptr: /symbol
+asof_ptr: /as_of
+facts:
+  - ptr: /last
+    metric: last_price
+    unit: USD
+    tol_class: price
+  - ptr: /change_pct
+    metric: change_pct
+    unit: pct
+    tol_class: percentage
+    timeframe: 1d
+  - ptr: /volume
+    metric: volume
+    tol_class: count
+    timeframe: 1d

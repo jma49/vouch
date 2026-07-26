@@ -1,0 +1,18 @@
+# Fact extraction for get_indicators (docs/design.md section 4).
+tool: get_indicators
+entity_ptr: /symbol
+asof_ptr: /as_of
+facts:
+  - ptr: /rsi_14
+    metric: rsi_14
+    tol_class: indicator
+    timeframe: 1d
+  - ptr: /macd/histogram
+    metric: macd_hist
+    tol_class: indicator
+    timeframe: 1d
+  - ptr: /close
+    metric: close_price
+    unit: USD
+    tol_class: price
+    timeframe: 1d
