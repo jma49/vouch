@@ -1,0 +1,24 @@
+[project]
+name = "vouch-harness"
+version = "0.0.1.dev0"
+description = "Eval harness for vouch: mutation injection, gold sets, repeated-run evaluation with variance reporting."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = ["vouch-verifier", "pyyaml>=6"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+vouch-eval = "vouch_harness.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
