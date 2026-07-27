@@ -88,6 +88,10 @@ DEFAULT_METRIC_SYNONYMS: dict[str, str] = {
 # "AMD is down 1.35%" claims change_pct.
 _PCT_FALLBACK_METRIC = "change_pct"
 
+# "down 1.35%" claims -1.35, not 1.35 — without this, sign flips are
+# invisible to the matcher.
+_NEGATION_RE = re.compile(r"\b(down|fell|dropped|declined|lost|slid)\b", re.IGNORECASE)
+
 
 def _parse_number(text: str) -> tuple[float, str | None]:
     """Parse one matched numeric span into (value, unit)."""
@@ -191,6 +195,13 @@ def extract_claims(
         value, unit = _parse_number(m.group())
         sent_start, sent_end = _sentence_bounds(answer, m.start())
         sentence = answer[sent_start:sent_end]
+        if (
+            unit == "pct"
+            and value > 0
+            and not m.group().lstrip().startswith(("+", "-"))
+            and _NEGATION_RE.search(sentence[: m.start() - sent_start])
+        ):
+            value = -value
         entity = _nearest_entity(sentence, sent_start, m.start(), set(known_entities))
         metric = _nearest_keyword(sentence, sent_start, m.start(), synonyms)
         if metric is None and unit == "pct":

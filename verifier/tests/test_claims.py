@@ -31,11 +31,16 @@ def test_tier2_entity_and_metric_scan():
     assert all(c.tier == 2 for c in ex.claims)
 
 
-def test_tier2_percentage_fallback_metric():
+def test_tier2_percentage_fallback_metric_and_direction_sign():
     ex = extract_claims("AMD is down 1.35% on the day.", ENTITIES)
     assert len(ex.claims) == 1
     c = ex.claims[0]
-    assert (c.entity, c.metric, c.value, c.unit) == ("AMD", "change_pct", 1.35, "pct")
+    assert (c.entity, c.metric, c.value, c.unit) == ("AMD", "change_pct", -1.35, "pct")
+
+
+def test_explicit_sign_wins_over_direction_word():
+    ex = extract_claims("AMD fell to +1.35% territory.", ENTITIES)
+    assert ex.claims[0].value == 1.35
 
 
 def test_tier2_thousands_separators():

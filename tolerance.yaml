@@ -1,0 +1,8 @@
+# Tolerance policy (docs/design.md section 6.3). Versioned with the
+# eval and printed in every report. Rounding is not hallucination:
+# display_rel is the display-layer slack that keeps "62.3 reported as
+# 62" legitimate while "62.3 reported as 68" stays CONTRADICTED.
+price:      { abs: 0.01 }
+indicator:  { rel: 1.0e-6, display_rel: 0.005 }
+percentage: { abs: 0.05 }   # unit: percentage points
+count:      { abs: 0 }
