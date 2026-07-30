@@ -2,7 +2,7 @@
 
 > Every number, vouched for. A verification layer for tool-using LLM agents: every tool call gets a signed receipt, and every numeric claim in the agent's answer is audited against those receipts.
 
-**Status:** early development — MVP in progress. See [docs/design.md](docs/design.md) for the full design.
+**Status:** MVP complete and tested end to end (proxy → receipts → verifier → eval). See [docs/design.md](docs/design.md) for the full design.
 
 ---
 
@@ -44,32 +44,57 @@ No cooperation from the agent or the upstream is required — the proxy sits on 
 
 ## Metrics
 
+Produced by `vouch-eval` over the gold set in `testdata/receipts_golden.jsonl`, N=10 runs. Reproduce with `make eval`.
+
 | Metric | Value |
 |---|---|
-| Hallucination detection rate (per mutation type) | _pending first eval_ |
-| False-positive rate | _pending_ |
-| Claim coverage | _pending_ |
-| Verification latency p50 / p99 | _pending_ |
-| Verdict stability across 10 runs | _pending_ |
+| Mutation detection rate | 0.89 ± 0.00 (95% CI [0.89, 0.89]) |
+| False-positive rate on clean answers | 0.00 ± 0.00 |
+| Claim coverage (non-`UNVERIFIABLE`) | 1.00 ± 0.00 |
+| Tier 1 (cited) share of claims | 0.46 ± 0.00 |
+| Verdict stability across 10 runs | 1.00 |
+
+Per-mutation recall: `digit_swap`, `magnitude_shift`, `entity_swap`, `sign_flip`, `fabricated_citation` all 1.00; `false_absence` 0.00. The last one is a known MVP gap — an absent claim produces no verdict to flag — and it stays in the gold set precisely so the table reports it.
 
 ## Quickstart
 
-_Coming with the MVP. The intended flow:_
+```bash
+make build           # build the Go proxy
+make install-py      # install verifier + harness into a venv
+
+export VOUCH_HMAC_KEY="$(openssl rand -hex 32)"
+
+# 1. Put the proxy in front of your upstream MCP server(s).
+#    Point your agent at this process instead of the upstream.
+./proxy/bin/vouch proxy \
+    --upstream "uvx some-market-data-mcp" \
+    --receipts ./receipts --schemas ./schemas
+
+# 2. Audit the agent's final answer against the receipts it generated.
+vouch-verify --answer answer.txt \
+    --receipts ./receipts/receipts.jsonl --tolerances tolerance.yaml
+
+# 3. Measure the verifier itself against machine-generated known-bad answers.
+vouch-eval --receipts ./receipts/receipts.jsonl --n 10
+```
+
+Record once, then replay deterministically (no network, logical clock):
 
 ```bash
-vouch proxy --upstream <mcp-server> --receipts ./receipts   # run the proxy
-vouch verify --answer answer.txt --receipts ./receipts       # audit an answer
+./proxy/bin/vouch proxy --mode=record --upstream "..." --fixtures ./fixtures ...
+./proxy/bin/vouch proxy --mode=replay --fixtures ./fixtures ...
 ```
 
 ## Repository layout
 
 | Path | Language | Role |
 |---|---|---|
-| `proxy/` | Go | Federating MCP proxy; receipt emission; HMAC signing |
-| `verifier/` | Python | Claim extraction, fact matching, verdict assignment |
-| `harness/` | Python | Fixture record/replay, mutation injection, variance reports |
+| `proxy/` | Go | Federating MCP proxy; receipt emission; HMAC signing; fixture record/replay |
+| `verifier/` | Python | Claim extraction, fact matching, verdict assignment, `vouch-verify` |
+| `harness/` | Python | Mutation injection, gold set, repeated-run eval, `vouch-eval` |
 | `schemas/` | YAML | Per-tool fact-extraction configs |
-| `testdata/` | JSON | Cross-language canonicalization test vectors |
+| `tolerance.yaml` | YAML | Tolerance policy, versioned with the eval |
+| `testdata/` | JSON | Cross-language canonicalization vectors and the golden receipt log |
 
 ## Non-goals
 

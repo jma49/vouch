@@ -1,0 +1,39 @@
+# vouch: proxy, verifier, and harness in one image sharing a receipts
+# volume. VOUCH_HMAC_KEY must be set in the environment — receipts are
+# signed, and there is no default key on purpose.
+services:
+  # The proxy speaks MCP over stdio, so it is run attached rather than
+  # as a background service:
+  #   docker compose run --rm proxy proxy --upstream "..." --receipts /app/receipts
+  proxy:
+    build: .
+    environment:
+      VOUCH_HMAC_KEY: ${VOUCH_HMAC_KEY:?set VOUCH_HMAC_KEY}
+    volumes:
+      - receipts:/app/receipts
+      - fixtures:/app/fixtures
+    stdin_open: true
+
+  # docker compose run --rm verify --answer /app/answer.txt \
+  #     --receipts /app/receipts/receipts.jsonl --tolerances /app/tolerance.yaml
+  verify:
+    build: .
+    entrypoint: ["vouch-verify"]
+    environment:
+      VOUCH_HMAC_KEY: ${VOUCH_HMAC_KEY:?set VOUCH_HMAC_KEY}
+    volumes:
+      - receipts:/app/receipts
+      - ./answer.txt:/app/answer.txt:ro
+
+  # docker compose run --rm eval --receipts /app/receipts/receipts.jsonl --n 10
+  eval:
+    build: .
+    entrypoint: ["vouch-eval"]
+    environment:
+      VOUCH_HMAC_KEY: ${VOUCH_HMAC_KEY:?set VOUCH_HMAC_KEY}
+    volumes:
+      - receipts:/app/receipts
+
+volumes:
+  receipts:
+  fixtures:
