@@ -62,9 +62,27 @@ func fakeUpstream(t *testing.T, conn *mcp.Conn) {
 	}
 }
 
+// session is one running proxy wired between an in-process fake
+// upstream and an agent-side connection. agent and raw share one Conn,
+// so a test may mix typed calls with raw frames as long as it does not
+// read from both concurrently.
+type session struct {
+	agent    *mcp.Client
+	raw      *mcp.Conn
+	send     io.Writer // raw bytes into the proxy's downstream reader
+	logPath  string
+	shutdown func()
+}
+
 // startProxy wires a Server between an in-process fake upstream and a
 // returned agent-side client.
 func startProxy(t *testing.T) (*mcp.Client, func(), string) {
+	t.Helper()
+	s := startSession(t)
+	return s.agent, s.shutdown, s.logPath
+}
+
+func startSession(t *testing.T) *session {
 	t.Helper()
 
 	upIn, proxyToUp := io.Pipe()   // proxy writes -> upstream reads
@@ -97,7 +115,7 @@ func startProxy(t *testing.T) (*mcp.Client, func(), string) {
 	done := make(chan error, 1)
 	go func() { done <- srv.Run() }()
 
-	agent := mcp.NewClient(mcp.NewConn(downOut, agentOut))
+	raw := mcp.NewConn(downOut, agentOut)
 	shutdown := func() {
 		agentOut.Close()
 		if err := <-done; err != nil {
@@ -105,7 +123,7 @@ func startProxy(t *testing.T) (*mcp.Client, func(), string) {
 		}
 		rlog.Close()
 	}
-	return agent, shutdown, logPath
+	return &session{agent: mcp.NewClient(raw), raw: raw, send: agentOut, logPath: logPath, shutdown: shutdown}
 }
 
 func TestFederationEndToEnd(t *testing.T) {

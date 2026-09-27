@@ -64,10 +64,24 @@ func (s *Server) logf(format string, args ...any) {
 	}
 }
 
-// Run serves the downstream connection until EOF.
+// Run serves the downstream connection until EOF. Only EOF or an I/O
+// error ends the session; a malformed frame is answered and skipped.
 func (s *Server) Run() error {
 	for {
 		m, err := s.Down.Read()
+		var fe *mcp.FrameError
+		if errors.As(err, &fe) {
+			// JSON-RPC 2.0 section 5.1: when the id cannot be read, the
+			// error response carries id null.
+			s.logf("proxy: %v", err)
+			if err := s.Down.Write(&mcp.Message{
+				ID:    json.RawMessage("null"),
+				Error: &mcp.Error{Code: fe.Code, Message: fe.Err.Error()},
+			}); err != nil {
+				return err
+			}
+			continue
+		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil

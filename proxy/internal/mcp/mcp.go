@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -39,10 +40,31 @@ func (e *Error) Error() string {
 
 // Standard JSON-RPC error codes used by the proxy.
 const (
+	CodeParseError     = -32700
+	CodeInvalidRequest = -32600
 	CodeMethodNotFound = -32601
 	CodeInvalidParams  = -32602
 	CodeInternalError  = -32603
 )
+
+// MaxFrame bounds one newline-delimited frame. A peer that exceeds it
+// loses that frame, not the connection.
+const MaxFrame = 16 << 20
+
+// ErrFrameTooLarge is wrapped by the FrameError for a line over the
+// frame limit.
+var ErrFrameTooLarge = errors.New("frame exceeds size limit")
+
+// FrameError reports one line that is not a usable JSON-RPC message.
+// The connection stays readable: the caller decides whether to answer
+// it (a server, JSON-RPC 2.0 section 5.1) or skip it (a client).
+type FrameError struct {
+	Code int // CodeParseError or CodeInvalidRequest
+	Err  error
+}
+
+func (e *FrameError) Error() string { return "mcp: bad frame: " + e.Err.Error() }
+func (e *FrameError) Unwrap() error { return e.Err }
 
 // IsNotification reports whether m is a notification (no id).
 func (m *Message) IsNotification() bool {
@@ -52,39 +74,100 @@ func (m *Message) IsNotification() bool {
 // Conn frames Messages over a newline-delimited JSON transport.
 // Reads and writes are independently serialized.
 type Conn struct {
-	rmu sync.Mutex
-	wmu sync.Mutex
-	sc  *bufio.Scanner
-	w   io.Writer
+	rmu      sync.Mutex
+	wmu      sync.Mutex
+	r        *bufio.Reader
+	w        io.Writer
+	maxFrame int
+	line     []byte
 }
 
 // NewConn wraps a reader/writer pair (stdin/stdout of a process, or a
 // pipe in tests).
 func NewConn(r io.Reader, w io.Writer) *Conn {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 1<<20), 16<<20)
-	return &Conn{sc: sc, w: w}
+	return &Conn{r: bufio.NewReaderSize(r, 64<<10), w: w, maxFrame: MaxFrame}
 }
 
-// Read returns the next message, or io.EOF when the peer closes.
+// Read returns the next message, or io.EOF when the peer closes. A
+// line that is not a single JSON-RPC object yields a *FrameError and
+// leaves the connection positioned at the next line, so one bad frame
+// never ends a session. (bufio.Scanner, used before, could not resume
+// after an oversized line: its error is sticky.)
 func (c *Conn) Read() (*Message, error) {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
-	for c.sc.Scan() {
-		line := bytes.TrimSpace(c.sc.Bytes())
+	for {
+		raw, err := c.readLine()
+		if err != nil {
+			return nil, err
+		}
+		line := bytes.TrimSpace(raw)
 		if len(line) == 0 {
 			continue
 		}
-		var m Message
-		if err := json.Unmarshal(line, &m); err != nil {
-			return nil, fmt.Errorf("mcp: bad frame: %w", err)
+		return decodeFrame(line)
+	}
+}
+
+func decodeFrame(line []byte) (*Message, error) {
+	if !json.Valid(line) {
+		var v any
+		err := json.Unmarshal(line, &v) // for a precise syntax error
+		if err == nil {
+			err = errors.New("invalid JSON")
 		}
-		return &m, nil
+		return nil, &FrameError{Code: CodeParseError, Err: err}
 	}
-	if err := c.sc.Err(); err != nil {
-		return nil, err
+	switch line[0] {
+	case '{':
+	case '[':
+		// MCP 2025-06-18 removed JSON-RPC batching, and the proxy's
+		// one-receipt-per-call path is serial by design.
+		return nil, &FrameError{Code: CodeInvalidRequest, Err: errors.New("batch requests are not supported")}
+	default:
+		return nil, &FrameError{Code: CodeInvalidRequest, Err: errors.New("message is not a JSON object")}
 	}
-	return nil, io.EOF
+	var m Message
+	if err := json.Unmarshal(line, &m); err != nil {
+		return nil, &FrameError{Code: CodeInvalidRequest, Err: err}
+	}
+	return &m, nil
+}
+
+// readLine returns the next line, terminator included. A final line
+// without a newline is still returned. A line longer than maxFrame is
+// consumed through its newline and reported as ErrFrameTooLarge, so
+// the next read starts on a frame boundary.
+func (c *Conn) readLine() ([]byte, error) {
+	c.line = c.line[:0]
+	for {
+		chunk, err := c.r.ReadSlice('\n')
+		if len(c.line)+len(chunk) > c.maxFrame+1 { // +1: the newline
+			for errors.Is(err, bufio.ErrBufferFull) {
+				_, err = c.r.ReadSlice('\n')
+			}
+			if err != nil && !errors.Is(err, io.EOF) {
+				return nil, err
+			}
+			c.line = c.line[:0]
+			return nil, &FrameError{Code: CodeInvalidRequest,
+				Err: fmt.Errorf("%w of %d bytes", ErrFrameTooLarge, c.maxFrame)}
+		}
+		c.line = append(c.line, chunk...)
+		switch {
+		case err == nil:
+			return c.line, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case errors.Is(err, io.EOF):
+			if len(c.line) > 0 {
+				return c.line, nil
+			}
+			return nil, io.EOF
+		default:
+			return nil, err
+		}
+	}
 }
 
 // Write sends one message as a single line.
