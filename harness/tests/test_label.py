@@ -303,3 +303,37 @@ assert.equal(off.toCp(answer.length), {len(EMOJI_ANSWER)});
 assert.equal(off.toU16({len(EMOJI_ANSWER)}), answer.length);
 """
     run_node(tmp_path, page_script("offsets") + checks)
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_page_keeps_unsaved_manual_spans_across_refreshes(tmp_path: Path) -> None:
+    checks = """
+const assert = require("node:assert/strict");
+const token = (start, end, text) => ({ start, end, text });
+const label = (start, end, text, lbl, source) =>
+  ({ start, end, text, label: lbl, source, note: "" });
+const spans = [token(19, 25, "160.36"), token(30, 35, "1.15%")];
+const unsaved = new Map();
+const keys = (list) => list.map((s) => `${s.start}:${s.end}:${s.label || "-"}:${s.source}`);
+// Two missed numbers added by hand, not yet labeled.
+unsaved.set("r", [
+  { start: 0, end: 4, text: "NVDA", source: "manual" },
+  { start: 40, end: 42, text: "24", source: "manual" },
+]);
+// Labeling a different span: the server reply carries only labeled spans.
+let run = { id: "r", spans, labels: [label(19, 25, "160.36", "SUPPORTED", "token")] };
+assert.deepEqual(keys(mergeSpans(run, unsaved)),
+  ["0:4:-:manual", "19:25:SUPPORTED:token", "30:35:-:token", "40:42:-:manual"]);
+// Labeling a manual span saves it; it is no longer pending.
+run.labels.push(label(0, 4, "NVDA", "UNSUPPORTED", "manual"));
+assert.deepEqual(keys(mergeSpans(run, unsaved)),
+  ["0:4:UNSUPPORTED:manual", "19:25:SUPPORTED:token", "30:35:-:token", "40:42:-:manual"]);
+assert.deepEqual(unsaved.get("r").map((s) => s.start), [40]);
+// Clearing that label removes the span instead of resurrecting it.
+run.labels.pop();
+assert.deepEqual(keys(mergeSpans(run, unsaved)),
+  ["19:25:SUPPORTED:token", "30:35:-:token", "40:42:-:manual"]);
+// Another run's unsaved spans stay out.
+assert.equal(mergeSpans({ id: "other", spans: [], labels: [] }, unsaved).length, 0);
+"""
+    run_node(tmp_path, page_script("spans") + checks)

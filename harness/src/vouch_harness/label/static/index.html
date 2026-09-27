@@ -132,7 +132,8 @@ const HELP = {
   UNVERIFIABLE: "A number, but not a data claim (threshold, count, hypothetical).",
   NOT_A_CLAIM: "Not a numeric claim at all (date, name, list marker).",
 };
-const S = { labeler: "", labelNames: [], runs: [], idx: -1, run: null, spans: [], cur: 0 };
+const S = { labeler: "", labelNames: [], runs: [], idx: -1, run: null, spans: [], cur: 0,
+  unsaved: new Map() };  // run id -> hand-added spans not yet labeled
 const $ = (id) => document.getElementById(id);
 const el = (tag, props = {}, ...kids) => {
   const n = document.createElement(tag);
@@ -186,16 +187,27 @@ function offsetMap(text) {
 }
 // END offsets
 
-function mergeSpans(run) {
+// BEGIN spans
+// A span added by hand is saved by its first label; until then it exists
+// only in the page. Server replies carry tokenizer spans and labeled
+// spans, so every list rebuilt from one merges the run's unsaved spans
+// back in. A span that gets labeled leaves the unsaved list, so clearing
+// its label later removes it rather than bringing it back.
+function mergeSpans(run, unsaved) {
+  const key = (s) => `${s.start}:${s.end}`;
   const byKey = new Map();
-  for (const s of run.spans) byKey.set(`${s.start}:${s.end}`, { ...s, source: "token" });
+  for (const s of run.spans) byKey.set(key(s), { ...s, source: "token" });
   for (const l of run.labels) {
-    const k = `${l.start}:${l.end}`;
-    byKey.set(k, { ...(byKey.get(k) || { start: l.start, end: l.end, text: l.text }),
+    byKey.set(key(l), { ...(byKey.get(key(l)) || { start: l.start, end: l.end, text: l.text }),
       source: l.source, label: l.label, note: l.note });
   }
+  const labeled = new Set(run.labels.map(key));
+  const pending = (unsaved.get(run.id) || []).filter((s) => !labeled.has(key(s)));
+  unsaved.set(run.id, pending);
+  for (const s of pending) if (!byKey.has(key(s))) byKey.set(key(s), { ...s });
   return [...byKey.values()].sort((a, b) => a.start - b.start || b.end - a.end);
 }
+// END spans
 
 function renderRuns() {
   const nav = $("runs"); nav.replaceChildren();
@@ -262,7 +274,7 @@ async function openRun(i) {
   if (i < 0 || i >= S.runs.length) return;
   S.idx = i;
   S.run = await api(`/api/run?id=${encodeURIComponent(S.runs[i].id)}`);
-  S.spans = mergeSpans(S.run);
+  S.spans = mergeSpans(S.run, S.unsaved);
   const firstOpen = S.spans.findIndex((s) => !s.label);
   S.cur = firstOpen >= 0 ? firstOpen : 0;
   renderRuns(); renderView(); renderEvidence();
@@ -284,10 +296,16 @@ function enqueue(action) {
 }
 
 function refreshAfter(run) {
-  const spans = mergeSpans(run);
+  const spans = mergeSpans(run, S.unsaved);
   const entry = S.runs.find((r) => r.id === run.id);
   if (entry) { entry.labeled = run.labels.length; entry.total = spans.length; }
-  if (S.run && S.run.id === run.id) { S.run = run; S.spans = spans; }
+  if (S.run && S.run.id === run.id) {
+    // Keep the cursor on the same span, not the same index.
+    const cur = S.spans[S.cur];
+    const i = cur ? spans.findIndex((s) => s.start === cur.start && s.end === cur.end) : -1;
+    S.run = run; S.spans = spans;
+    S.cur = i >= 0 ? i : Math.min(S.cur, Math.max(0, spans.length - 1));
+  }
   renderRuns();
 }
 
@@ -318,7 +336,9 @@ async function addSelection() {
   if (start === end) return;
   const existing = S.spans.findIndex((s) => s.start === start && s.end === end);
   if (existing >= 0) { select(existing); return; }
-  S.spans.push({ start, end, text: chars.slice(start, end).join(""), source: "manual" });
+  const span = { start, end, text: chars.slice(start, end).join(""), source: "manual" };
+  S.spans.push(span);
+  S.unsaved.set(S.run.id, [...(S.unsaved.get(S.run.id) || []), span]);
   S.spans.sort((a, b) => a.start - b.start || b.end - a.end);
   S.cur = S.spans.findIndex((s) => s.start === start && s.end === end);
   sel.removeAllRanges();
@@ -328,7 +348,11 @@ async function addSelection() {
 async function clearManual() {
   const s = S.spans[S.cur];
   if (!s || s.source !== "manual") { toast("Only spans you added can be removed."); return; }
-  if (!s.label) { S.spans.splice(S.cur, 1); select(S.cur - 1); return; }
+  if (!s.label) {
+    const pending = S.unsaved.get(S.run.id) || [];
+    S.unsaved.set(S.run.id, pending.filter((x) => x.start !== s.start || x.end !== s.end));
+    S.spans.splice(S.cur, 1); select(S.cur - 1); return;
+  }
   refreshAfter(await api("/api/label", {
     run: S.run.id, start: s.start, end: s.end, text: s.text, label: "CLEARED", source: "manual",
   }));

@@ -40,7 +40,9 @@ pre-marks the numbers the tokenizer found. Two kinds of correction:
   then label it. Include magnitude words and percent signs in the
   selection (*"41.2 million"*, *"1.35%"*), but not currency symbols.
   Missed spans are how the evaluation measures the verifier's recall,
-  so do not skip them.
+  so do not skip them. An added span is saved when you label it; until
+  then it stays in the open page (labeling other spans or switching
+  runs keeps it) but a page reload drops it.
 
 ## Labels
 
