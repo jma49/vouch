@@ -1,0 +1,47 @@
+# Models for the real-agent evaluation (vouch-agent --model <name>).
+#
+# Every entry speaks the OpenAI-compatible Chat Completions API, which
+# covers most providers, so a new model is a new entry, not new code.
+#
+#   base_url      provider's OpenAI-compatible base (".../chat/completions" is appended)
+#   model         the provider's model id; check the provider's model list, ids change
+#   api_key_env   environment variable holding the key (never put keys in this file)
+#   rpm           client-side request rate limit; set it to your account's limit
+#   params        extra request fields (temperature, reasoning effort, ...);
+#                 leave empty to measure the provider's default behavior
+#
+# The evaluation keeps provider defaults unless a field is set here, and
+# the settings used are part of every run's cache key.
+
+gemini-flash:
+  base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+  model: gemini-3.8-flash
+  api_key_env: GEMINI_API_KEY
+  rpm: 8   # conservative for free-tier keys; see AI Studio for your actual limit
+
+# Further providers, disabled until someone runs them:
+#
+# gpt:
+#   base_url: https://api.openai.com/v1/
+#   model: <model id>
+#   api_key_env: OPENAI_API_KEY
+#
+# claude:
+#   base_url: https://api.anthropic.com/v1/
+#   model: <model id>
+#   api_key_env: ANTHROPIC_API_KEY
+#
+# deepseek:
+#   base_url: https://api.deepseek.com/v1/
+#   model: <model id>
+#   api_key_env: DEEPSEEK_API_KEY
+#
+# openrouter:          # one key, many vendors' models
+#   base_url: https://openrouter.ai/api/v1/
+#   model: <vendor/model id>
+#   api_key_env: OPENROUTER_API_KEY
+#
+# local:               # Ollama or vLLM on this machine
+#   base_url: http://localhost:11434/v1/
+#   model: <model id>
+#   api_key_env: OLLAMA_API_KEY   # any non-empty value

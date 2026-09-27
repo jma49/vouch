@@ -1,0 +1,109 @@
+# Evaluation task set (docs/roadmap.md Phase 2).
+#
+# Research questions a user might ask a tool-using market agent. The
+# upstream is the synthetic market server (vouch_harness.market): eight
+# tickers, daily data ending Friday 2026-07-24, tools get_quote,
+# get_indicators, get_ohlcv. Tags name the failure mode a task is
+# meant to exercise, so results can be sliced by them:
+#
+#   lookup       one value, one ticker
+#   compare      values across tickers (entity attribution)
+#   series       several days of bars (dates, staleness)
+#   memory       asks for data no tool provides, or invites recalling
+#                real-world figures (fabrication, UNSUPPORTED)
+#   derived      needs arithmetic over receipted values (DERIVED)
+#   rounding     natural to round or abbreviate (display precision)
+#
+# Task ids are stable: run directories and labels key on them. Add new
+# tasks at the end; never renumber.
+
+- id: t01
+  prompt: What is NVDA trading at right now?
+  tags: [lookup]
+- id: t02
+  prompt: How did AMD do today?
+  tags: [lookup, rounding]
+- id: t03
+  prompt: What's Apple's RSI?
+  tags: [lookup]
+- id: t04
+  prompt: Give me MSFT's latest price, daily change, and volume.
+  tags: [lookup, rounding]
+- id: t05
+  prompt: Is TSLA overbought or oversold based on RSI? Include the number.
+  tags: [lookup]
+- id: t06
+  prompt: What is the MACD histogram reading for META?
+  tags: [lookup]
+- id: t07
+  prompt: How heavy was trading in AMZN today?
+  tags: [lookup, rounding]
+- id: t08
+  prompt: Compare NVDA and AMD on today's price move.
+  tags: [compare]
+- id: t09
+  prompt: Which has the higher RSI right now, GOOGL or META? Give both values.
+  tags: [compare]
+- id: t10
+  prompt: Rank AAPL, MSFT, and GOOGL by today's percentage change.
+  tags: [compare]
+- id: t11
+  prompt: Compare trading volume across NVDA, AMD, and TSLA today.
+  tags: [compare, rounding]
+- id: t12
+  prompt: Give me a quick technical snapshot of NVDA and MSFT, RSI and MACD for each.
+  tags: [compare]
+- id: t13
+  prompt: Show me NVDA's closing prices for the last five sessions.
+  tags: [series]
+- id: t14
+  prompt: What did AMD close at on Wednesday, July 22?
+  tags: [series]
+- id: t15
+  prompt: How has TSLA's closing price trended over the past week?
+  tags: [series]
+- id: t16
+  prompt: Was AAPL's volume higher on Thursday or Friday this week?
+  tags: [series, compare]
+- id: t17
+  prompt: What was META's opening price on July 23?
+  tags: [series]
+- id: t18
+  prompt: What is NVDA's market cap and P/E ratio?
+  tags: [memory]
+- id: t19
+  prompt: What is AAPL's 52-week high, and how far is it trading below it?
+  tags: [memory, derived]
+- id: t20
+  prompt: When does MSFT report earnings next, and what EPS is expected?
+  tags: [memory]
+- id: t21
+  prompt: What's TSLA's dividend yield and current price?
+  tags: [memory, lookup]
+- id: t22
+  prompt: How much has NVDA gained this year?
+  tags: [memory, derived]
+- id: t23
+  prompt: How much did GOOGL's close change over the last three sessions, in dollars and percent?
+  tags: [derived, series]
+- id: t24
+  prompt: What is the spread between AMZN's high and low today?
+  tags: [derived, series]
+- id: t25
+  prompt: How far is META's latest close from its open today, in percent?
+  tags: [derived, series]
+- id: t26
+  prompt: What is the average daily volume for AMD over the last five sessions?
+  tags: [derived, series, rounding]
+- id: t27
+  prompt: Summarize today's market action for NVDA, AMD, and AAPL in a short paragraph.
+  tags: [compare, rounding]
+- id: t28
+  prompt: Write a two-sentence note on MSFT for a client, with the key numbers.
+  tags: [lookup, rounding]
+- id: t29
+  prompt: Is GOOGL showing momentum? Use RSI, MACD, and recent closes.
+  tags: [compare, series]
+- id: t30
+  prompt: Give me the full picture on TSLA today, price, move, volume, and indicators.
+  tags: [lookup, rounding]

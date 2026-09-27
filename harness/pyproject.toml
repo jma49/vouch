@@ -12,6 +12,7 @@ dev = ["pytest>=8", "ruff>=0.16", "mypy>=1.10", "types-PyYAML", "pytest-cov>=5"]
 
 [project.scripts]
 vouch-eval = "vouch_harness.cli:main"
+vouch-agent = "vouch_harness.agent.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
