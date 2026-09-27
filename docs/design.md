@@ -4,8 +4,10 @@
 
 **Positioning in one line:** We do not build market data, strategies, or agents. We answer exactly one question — *is the number the agent just said actually a number its tools returned?*
 
-**Status:** Design / MVP in progress
-**License:** MIT (planned)
+**Status:** MVP implemented. This document states the design *intent*;
+where the code does not yet meet it, the section says so and links the
+tracking entry in [pitfalls.md](pitfalls.md) or [roadmap.md](roadmap.md).
+**License:** MIT
 **Scope guard:** Read-only, research-only. No order execution, no trading capability, ever.
 
 ---
@@ -34,8 +36,8 @@ vouch addresses both: capture ground truth at the only moment it exists (the too
                 ┌─────────────────────┐         ┌──────────────────┐
                 │  Verification proxy  │ ──────▶ │   Receipt log    │
                 │  (federating MCP     │  write  │ (append-only     │
-                │   server, Go)        │         │  JSONL + SQLite  │
-                └──────┬──────────────┘         │  index)          │
+                │   server, Go)        │         │  JSONL)          │
+                └──────┬──────────────┘         │                  │
                        │ forwards to            └────────┬─────────┘
                        ▼                                  │ read
                 ┌─────────────────────┐                   │
@@ -60,13 +62,12 @@ Key property: **the proxy sits on the only path where ground truth exists.** No 
 
 | Component | Language | Role |
 |---|---|---|
-| `proxy/` | Go | Federating MCP server; receipt emission; HMAC signing |
-| `verifier/` | Python | Claim extraction, fact matching, verdict assignment |
-| `harness/` | Python | Fixture record/replay, mutation injection, repeated-run eval, variance reports |
+| `proxy/` | Go | Federating MCP server; receipt emission; HMAC signing; fixture record/replay |
+| `verifier/` | Python | Claim extraction, fact matching, verdict assignment, markdown/JSON reports |
+| `harness/` | Python | Mutation injection, gold set, repeated-run eval, variance reports |
 | `schemas/` | YAML | Per-tool fact-extraction sidecar configs |
-| `report/` | Python | HTML/markdown verdict report rendering |
 
-The two runtime languages communicate only through the receipt log (JSONL) and, optionally, gRPC for streaming verification. Loose coupling is deliberate: either side is replaceable.
+The two runtime languages communicate only through the receipt log (JSONL). Loose coupling is deliberate: either side is replaceable. (gRPC streaming verification is a possible later addition, not implemented.)
 
 ---
 
@@ -95,6 +96,8 @@ One receipt per tool call, appended to the log. Immutable after write.
 ```
 
 **On the HMAC signature — what it is for and what it is not for.** In a single-process setup the LLM cannot write to our storage anyway; the signature is *not* protecting against the model. Its actual value: (a) tamper-evidence when receipts cross process/machine boundaries or rest on disk, (b) making eval results reproducible and auditable — a third party can re-verify that a verdict report was computed against unmodified receipts, (c) replay protection via `(session_id, turn_index)` uniqueness. We keep it, and we are honest about its threat model.
+
+**Current gaps against that model.** (1) HMAC is symmetric: anyone who can verify a receipt holds the key and can therefore forge one, so (b) holds only among parties who already trust each other with the key. Genuine third-party verifiability needs a public-key signature (Ed25519). (2) Receipts are signed individually, with no hash chain or checkpoint binding them, so deleting, truncating, or reordering lines goes undetected. Both are tracked as roadmap Phase 3 and pitfalls P-011, P-012.
 
 ### 3.2 Fact
 
@@ -200,13 +203,17 @@ count:      { abs: 0 }
 
 Both `args_canonical` and `result_canonical` — and the digest and signature over them — depend on a stable canonical JSON form:
 
+**Target (RFC 8785 / JCS semantics):**
+
 - Object keys sorted lexicographically (recursive)
 - Numbers serialized in a fixed format: shortest round-trip representation; `-0` normalized to `0`; no exponent form below 1e21
 - Strings NFC-normalized; no escaped forward slashes
 - No insignificant whitespace
 - UTC ISO-8601 timestamps with explicit `Z`
 
-This is the part that silently breaks cross-language (Go writes, Python verifies) if hand-rolled inconsistently. Implementation follows RFC 8785 (JCS) semantics; both sides are tested against a shared vector file (`testdata/canonical_vectors.json`).
+**Implemented today (literal-preserving contract):** keys sorted recursively, compact output, UTF-8 passthrough with no HTML escaping, and number literals *preserved exactly as the upstream wrote them*. There is no number normalization and no NFC pass, so `62.30` and `62.3` digest differently (pitfalls P-010). The contract is internally consistent and pinned across Go and Python by `testdata/canonical_vectors.json` and a CI job that regenerates the Go-written golden log and fails on drift. Closing the gap to JCS, with differential fuzzing between the two implementations, is roadmap Phase 4.
+
+This is the part that silently breaks cross-language (Go writes, Python verifies) if hand-rolled inconsistently.
 
 ---
 
@@ -225,6 +232,8 @@ All time reads go through a `Clock` interface. Replay runs on a logical clock de
 ### 8.3 Repeated runs; distributions, not points
 
 LLMs are not deterministic even at temperature 0. Every eval runs N times (default N=10) and reports mean, standard deviation, range, and a bootstrap confidence interval. **The CLI refuses to print a single-run score.** This is an opinion expressed as a product decision.
+
+*Current limitation:* the MVP eval has no LLM in the loop. The verifier is deterministic and the synthetic gold set varies only in entity-swap targets, so the reported variance is zero by construction, not by measurement (pitfalls P-041). The machinery becomes meaningful once real agent runs feed it (roadmap Phase 2).
 
 ### 8.4 Look-ahead detection (backtest integration)
 
@@ -246,7 +255,9 @@ A verifier without a gold set is a demo, not a measurement. The injector takes a
 | Fabricated citation | cites a receipt_id that does not exist |
 | False absence | "no data available" when a receipt exists |
 
-Each mutation type gets its own precision/recall in the report. The gold set ships with the repo and is regenerated deterministically from fixtures.
+Each mutation type gets its own precision/recall in the report. The gold set is regenerated deterministically from a receipt log (today: the Go-written `testdata/receipts_golden.jsonl`).
+
+*Current limitation:* clean answers are synthesized from templates that are kept in sync with the verifier's own Tier 2 keyword table, and mutations are applied to spans that same extractor found. The gold set therefore measures detection of *known mutation shapes* on *extractor-friendly prose*, not verifier quality on real agent output (pitfalls P-040). A human-labeled set over real agent answers is roadmap Phase 2.
 
 ---
 
@@ -255,7 +266,7 @@ Each mutation type gets its own precision/recall in the report. The gold set shi
 - Detection rate and false-positive rate, **per mutation type**
 - Claim coverage: fraction of numeric claims receiving a verdict other than `UNVERIFIABLE`
 - Citation-protocol adherence (Tier 1 share of claims)
-- Verification latency p50 / p99 (published receipt-verification baselines run under ~15 ms; that is the bar)
+- Verification latency p50 / p99 (published receipt-verification baselines run under ~15 ms; that is the bar) — *not yet measured; roadmap Phase 5*
 - Verdict stability across N repeated runs (agreement rate, variance)
 
 ---
@@ -263,6 +274,8 @@ Each mutation type gets its own precision/recall in the report. The gold set shi
 ## 11. MVP plan
 
 ### Weeks 1–2 — the line at which this is resume-ready
+
+Status: all six items are implemented. The SQLite index is built in memory by the verifier from the JSONL log, not persisted by the proxy.
 
 1. Federating MCP proxy (Go) with receipt emission → JSONL + SQLite index
 2. Schema-driven fact extraction for 3–5 upstream tools
@@ -287,17 +300,17 @@ Each mutation type gets its own precision/recall in the report. The gold set shi
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Proxy language | Go (pending SDK check) | I/O-bound forwarding suits Go; **verify Go MCP SDK maturity before committing** — fall back to TypeScript if the SDK costs more than two days |
+| Proxy language | Go, stdlib JSON-RPC | I/O-bound forwarding suits Go. Resolved: the federated surface (initialize, tools/list, tools/call) is small enough that a stdlib implementation costs less than an SDK dependency |
 | Verifier language | Python | Numeric tooling and eval ecosystem |
-| Receipt store | JSONL + SQLite index | Append-only survives crashes mid-write; SQLite for lookup; no server dependency |
+| Receipt store | JSONL, SQLite index derived by the verifier | Append-only survives crashes mid-write; the index is disposable and rebuilt from the log; no server dependency |
 | Signing | HMAC-SHA256 | Symmetric is sufficient for the stated threat model (§3.1); asymmetric adds ops burden with no benefit here |
 | Canonical JSON | RFC 8785 (JCS) | Cross-language stability; shared test vectors |
 | Upstream servers | Existing open-source market-data MCP servers | We deliberately do not rebuild market data; the README says so |
 
-**Open questions to resolve during week 1:**
-- Go MCP SDK maturity (blocking for language choice)
+**Open questions:**
+- ~~Go MCP SDK maturity~~ — resolved: stdlib implementation (see table above)
 - Whether fixture files containing upstream market data can be redistributed in a public repo — **check each data source's ToS; default plan is to ship the recorder + schemas and let users generate fixtures with their own API keys**
-- MCP protocol details for transparent federation (capability merging, notification forwarding)
+- MCP protocol details for transparent federation (capability merging, notification forwarding, server-to-client requests, cancellation) — partially open; see roadmap Phase 5 and pitfalls P-021, P-022
 
 ---
 
