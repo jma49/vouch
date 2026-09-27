@@ -6,6 +6,7 @@ the cross-language contract from the consuming side.
 """
 
 import json
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -82,15 +83,14 @@ def test_digest_mismatch_rejected(tmp_path: Path) -> None:
 
 def test_index_lookup() -> None:
     receipts = load_log(GOLDEN, key=KEY)
-    conn = build_index(receipts)
+    with closing(build_index(receipts)) as conn:
+        hits = facts_for(conn, "NVDA", "rsi_14", "1d")
+        assert len(hits) == 1
+        receipt_id, fact = hits[0]
+        assert receipt_id == "golden-0"
+        assert fact.value == 62.3
+        assert fact.tol_class == "indicator"
 
-    hits = facts_for(conn, "NVDA", "rsi_14", "1d")
-    assert len(hits) == 1
-    receipt_id, fact = hits[0]
-    assert receipt_id == "golden-0"
-    assert fact.value == 62.3
-    assert fact.tol_class == "indicator"
-
-    # Timeframe None matches any timeframe.
-    assert len(facts_for(conn, "AMD", "last_price")) == 1
-    assert facts_for(conn, "TSLA", "rsi_14") == []
+        # Timeframe None matches any timeframe.
+        assert len(facts_for(conn, "AMD", "last_price")) == 1
+        assert facts_for(conn, "TSLA", "rsi_14") == []

@@ -22,6 +22,8 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Warnings are bugs; a leaked resource must fail the suite, not scroll by.
+filterwarnings = ["error"]
 
 [tool.mypy]
 strict = true

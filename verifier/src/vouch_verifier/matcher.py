@@ -7,6 +7,7 @@ resolve. STALE and DERIVED are explicitly later (design section 11).
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -101,46 +102,50 @@ def match_claims(
     silently dropping them would overstate coverage.
     """
     tol = DEFAULT_TOLERANCES if tolerances is None else tolerances
-    conn = build_index(receipts)
     out: list[MatchedClaim] = []
 
-    for claim in extraction.claims:
-        if claim.citation is not None:
-            out.append(_match_cited(claim, receipts, tol))
-            continue
+    # The index is per call and in-memory; close it so repeated calls
+    # (the eval runs thousands) do not leak connections.
+    with closing(build_index(receipts)) as conn:
+        for claim in extraction.claims:
+            if claim.citation is not None:
+                out.append(_match_cited(claim, receipts, tol))
+                continue
 
-        assert claim.entity is not None and claim.metric is not None
-        candidates = facts_for(conn, claim.entity, claim.metric, claim.timeframe)
-        if not candidates:
-            out.append(
-                MatchedClaim(
-                    claim,
-                    Verdict.UNSUPPORTED,
-                    note=f"no receipt covers ({claim.entity}, {claim.metric})",
+            assert claim.entity is not None and claim.metric is not None
+            candidates = facts_for(conn, claim.entity, claim.metric, claim.timeframe)
+            if not candidates:
+                out.append(
+                    MatchedClaim(
+                        claim,
+                        Verdict.UNSUPPORTED,
+                        note=f"no receipt covers ({claim.entity}, {claim.metric})",
+                    )
                 )
-            )
-            continue
+                continue
 
-        best: tuple[float, str, Fact] | None = None
-        for receipt_id, fact in candidates:
-            if compare(claim.value, fact.value, _tolerance_for(fact, tol)) is Verdict.SUPPORTED:
-                out.append(MatchedClaim(claim, Verdict.SUPPORTED, fact=fact, receipt_id=receipt_id))
-                break
-            distance = abs(claim.value - fact.value)
-            if best is None or distance < best[0]:
-                best = (distance, receipt_id, fact)
-        else:
-            assert best is not None
-            _, receipt_id, fact = best
-            out.append(
-                MatchedClaim(
-                    claim,
-                    Verdict.CONTRADICTED,
-                    fact=fact,
-                    receipt_id=receipt_id,
-                    note=f"closest receipted value is {fact.value}",
+            best: tuple[float, str, Fact] | None = None
+            for receipt_id, fact in candidates:
+                if compare(claim.value, fact.value, _tolerance_for(fact, tol)) is Verdict.SUPPORTED:
+                    out.append(
+                        MatchedClaim(claim, Verdict.SUPPORTED, fact=fact, receipt_id=receipt_id)
+                    )
+                    break
+                distance = abs(claim.value - fact.value)
+                if best is None or distance < best[0]:
+                    best = (distance, receipt_id, fact)
+            else:
+                assert best is not None
+                _, receipt_id, fact = best
+                out.append(
+                    MatchedClaim(
+                        claim,
+                        Verdict.CONTRADICTED,
+                        fact=fact,
+                        receipt_id=receipt_id,
+                        note=f"closest receipted value is {fact.value}",
+                    )
                 )
-            )
 
     for claim in extraction.unresolved:
         out.append(
