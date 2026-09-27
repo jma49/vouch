@@ -147,6 +147,9 @@ vouch-eval --receipts ./receipts/receipts.jsonl --n 10 --public-key ~/.vouch/vou
 # Anyone with the public key can check the log, and read it:
 ./proxy/bin/vouch receipts verify --public-key ~/.vouch/vouch.pub.pem ./receipts/receipts.jsonl
 ./proxy/bin/vouch receipts cat ./receipts/receipts.jsonl | jq .
+
+# The canonical form any digest in a receipt is computed over:
+echo '{"b": 1.50, "a": [1e2]}' | ./proxy/bin/vouch canon    # {"a":[1e2],"b":1.50}
 ```
 
 Record once, then replay deterministically with no network access:
@@ -165,7 +168,7 @@ vouch is an MVP. The most consequential gaps, each tracked with a reproduction i
 - **Extraction is deterministic, English-only, and keyword-driven.** It handles dates, magnitudes, units, signs (including Unicode minus and accounting parentheses), clause structure, markdown tables and lists, and pronouns that open a sentence, measured by a 166-case adversarial corpus and property-based tests. It does not do general coreference, it reads a threshold (*"below the 70 overbought line"*) as a claim, and a ticker that no tool returned is left unjudged rather than flagged. The LLM fallback (Tier 3) is not built yet.
 - **The headline metrics are synthetic.** See the note under [Measured results](#measured-results); the real evaluation is Phase 2.
 - **Cutting a log's tail needs an outside witness to detect.** Receipts are signed with Ed25519 and hash-chained, so edits, deletions, and reordering are detected, and a cleanly ended session is sealed with a signed checkpoint. But a log cut back to an earlier checkpoint is still a valid chain; only a head digest kept elsewhere (`--expect-head`) reveals it. What the receipts do and do not protect, and against whom, is in the [threat model](docs/threat-model.md).
-- **Canonicalization is vouch's own, not RFC 8785**, on purpose: number literals are kept exactly as a tool wrote them, so `62.30` and `62.3` digest differently. The rules are specified in [`docs/canonical-json.md`](docs/canonical-json.md) and pinned across Go and Python.
+- **Canonicalization is vouch's own, not RFC 8785**, on purpose: number literals are kept exactly as a tool wrote them, so `62.30` and `62.3` digest differently. The rules are specified in [`docs/canonical-json.md`](docs/canonical-json.md), pinned across Go and Python by shared vectors, and differentially fuzzed between the two.
 - **The proxy serves one request at a time** and does not yet forward server-to-client requests or cancellation.
 
 ## Roadmap
@@ -178,7 +181,7 @@ Measurement before features. Full plan with exit criteria in [`docs/roadmap.md`]
 | 1 | Verifier correctness on real prose | done |
 | 2 | Real evaluation: human-labeled claims from multiple models | tooling done, collecting data |
 | 3 | Integrity: Ed25519, hash-chained log, tamper suite, [threat model](docs/threat-model.md) | done |
-| 4 | Canonical JSON: specified contract (done), cross-language differential fuzzing | in progress |
+| 4 | Canonical JSON: specified contract, cross-language differential fuzzing (done); number-normalized fixture keys | in progress |
 | 5 | Proxy protocol completeness and latency benchmarks | planned |
 
 ## Repository layout
@@ -202,6 +205,7 @@ make lint     # gofmt, go vet, ruff, mypy --strict
 make cover    # coverage report for Go and Python
 make readme   # regenerate the measured sections of this README
 make golden   # regenerate the Go-written golden receipt log
+make fuzz     # grow the Go fuzz corpus, then replay it through Python
 ```
 
 Contribution rules for humans and coding agents alike (invariants, commit conventions, which docs to keep current) live in [`AGENTS.md`](AGENTS.md).

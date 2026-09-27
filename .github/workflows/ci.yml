@@ -28,6 +28,11 @@ jobs:
           echo "### Go coverage: $(go tool cover -func=coverage.out | tail -1 | awk '{print $NF}')" >> "$GITHUB_STEP_SUMMARY"
       - name: Build
         run: go build -o bin/vouch ./cmd/vouch
+      # A short pass on top of the committed corpus: enough to catch a
+      # canonicalizer change that panics or stops being a fixed point.
+      # Cross-language agreement is the differential test's job (golden).
+      - name: Fuzz canonical JSON (30s)
+        run: go test ./internal/receipt -run '^$' -fuzz FuzzCanonicalize -fuzztime 30s
 
   python:
     # Every supported interpreter: requires-python says >=3.11, and a
@@ -99,6 +104,13 @@ jobs:
       - name: Build proxy
         run: go build -o bin/vouch ./cmd/vouch
         working-directory: proxy
+      # Go and Python canonical JSON on generated documents and on the
+      # Go fuzz corpus: identical bytes, or both refuse (Phase 4).
+      - name: Differential canonical JSON (Go vs Python)
+        run: python -m pytest -q tests/test_differential.py -rs
+        working-directory: verifier
+        env:
+          VOUCH_DIFF_EXAMPLES: "500"
       - name: Agent end to end through the proxy
         run: python -m pytest -q tests/test_agent.py -k end_to_end -rs
         working-directory: harness

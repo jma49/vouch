@@ -65,6 +65,39 @@ entry whenever a choice closes off an alternative (AGENTS.md).
 - Revisit when: an external system requires JCS. Then add a JCS
   projection at the publishing layer; do not change the evidence.
 
+**A 256-level nesting limit, as canonical JSON v2** (#62)
+- Chosen: both implementations refuse arrays and objects nested more
+  than 256 levels; the spec, receipt payload type (`version=4`), and
+  checkpoint type (`version=2`) were bumped, per the spec's own rule
+  that any rule change is a new version.
+- Rejected: no limit (the sides disagreed between ~1000 and 10000
+  levels, and Python crashed); only catching `RecursionError` (the
+  boundary would then depend on the interpreter's recursion limit and
+  stack in use); a limit near 1000 (too close to CPython's default).
+  Also rejected: calling it a v1 clarification, which would have been
+  cheaper to explain but would break the versioning promise.
+- Why: agreement needs a limit both sides can enforce exactly; 256 is
+  far beyond real tool results and far below any recursion limit.
+- Cost: a tool response nested 256 levels deep fails the call
+  (invariant 2); logs written before the bump no longer verify (none
+  exist outside test data, which was regenerated).
+- Revisit when: a real upstream legitimately nests deeper.
+
+**Differential fuzzing runs through a CLI, not a shared library** (#63)
+- Chosen: `vouch canon --lines` (base64 in, base64 or `!error` out);
+  the Python test batches documents through it. The Go fuzz target
+  checks Go-only properties; its corpus is committed and replayed
+  through both sides by Python.
+- Rejected: calling Python from inside `go test -fuzz` (needs a Python
+  environment in every Go run and caps throughput); cgo or a C
+  extension (a build dependency for a test).
+- Why: one process per batch keeps the test fast, and the command is
+  also useful to users reproducing a digest.
+- Cost: the differential test skips without a built binary; `make
+  test-py` now builds first, and CI runs it only in the golden job.
+  Go-found inputs reach Python only once someone commits the corpus
+  (`make fuzz`), not continuously.
+
 **Signatures: Ed25519 replaces HMAC outright** (#53)
 - Chosen: Ed25519 only, keys via `vouch keygen`, verifier keyring.
 - Rejected: supporting HMAC and Ed25519 side by side.

@@ -39,6 +39,7 @@ make lint          # gofmt, go vet, ruff check + format --check, mypy --strict
 make fmt           # apply gofmt and ruff fixes
 make cover         # coverage for Go and Python (reported, not gated)
 make golden        # regenerate testdata/receipts_golden.jsonl from Go
+make fuzz          # grow the canonical-JSON fuzz corpus, check it against Python
 make eval          # vouch-eval over the golden log, N=10
 make build         # proxy/bin/vouch
 ```
@@ -56,7 +57,8 @@ Breaking one of these is a bug even if every test passes.
    byte-identical across both. Any change to `proxy/internal/receipt`
    or `verifier/src/vouch_verifier/canonical.py` requires updating
    `testdata/canonical_vectors.json`, running `make golden`, and
-   passing both suites. CI fails on golden-log drift.
+   passing both suites, including the differential test
+   (`verifier/tests/test_differential.py`). CI fails on golden-log drift.
 2. **The receipt is the product.** If a receipt cannot be written, the
    tool call fails. Never pass unverifiable data through silently.
 3. **The verifier never guesses.** Ambiguity yields `UNVERIFIABLE` or
