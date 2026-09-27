@@ -28,3 +28,5 @@ build/
 .DS_Store
 .idea/
 .vscode/
+.coverage
+coverage.out

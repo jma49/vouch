@@ -10,10 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from vouch_verifier.receipts import Receipt
-
 from vouch_harness.answers import synthesize
 from vouch_harness.mutate import inject
+from vouch_verifier.receipts import Receipt
 
 
 @dataclass(frozen=True)

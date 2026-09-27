@@ -9,10 +9,10 @@ not hallucination: the two-level tolerance (exact + display) separates
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class Verdict(str, Enum):
+class Verdict(StrEnum):
     SUPPORTED = "SUPPORTED"
     CONTRADICTED = "CONTRADICTED"
     UNSUPPORTED = "UNSUPPORTED"

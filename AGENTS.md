@@ -34,17 +34,18 @@ verifier. Full design: `docs/design.md`. Plan: `docs/roadmap.md`.
 ## Commands
 
 ```bash
-make test          # go vet + go test, then both Python suites
-make test-go       # proxy only
-make lint          # gofmt -l + go vet
+make test          # go vet + go test -race, then both Python suites
+make lint          # gofmt, go vet, ruff check + format --check, mypy --strict
+make fmt           # apply gofmt and ruff fixes
+make cover         # coverage for Go and Python (reported, not gated)
 make golden        # regenerate testdata/receipts_golden.jsonl from Go
 make eval          # vouch-eval over the golden log, N=10
 make build         # proxy/bin/vouch
 ```
 
-Run `go test -race ./...` in `proxy/` before committing Go changes.
-If `make test-py` fails with "bad interpreter", the venv is stale — see
-`docs/pitfalls.md`.
+`make test lint` must pass before any commit; CI runs the same checks.
+`make install-py` (a dependency of the Python targets) rebuilds the
+venv on its own if it is stale.
 
 ## Non-negotiable invariants
 
@@ -109,9 +110,8 @@ Breaking one of these is a bug even if every test passes.
 - Python >= 3.11, full type hints, `from __future__ import annotations`.
 - Frozen dataclasses for data; no mutable module state.
 - Raise specific exceptions (`ReceiptError`), never bare `Exception`.
-- pytest; tests live in `<package>/tests/`.
-- ruff and mypy are planned (roadmap Phase 0); write code that would
-  pass `mypy --strict` now.
+- pytest; tests live in `<package>/tests/`. Warnings are errors.
+- ruff (config in `ruff.toml`) and `mypy --strict` over src and tests.
 
 ## Maintained documents
 
@@ -124,6 +124,17 @@ same change that makes them stale.
 | `docs/pitfalls.md` | Known traps: symptom, cause, fix | You hit or discover a non-obvious trap, or fix one |
 | `docs/handoff.md` | Session-to-session state | End of every working session |
 | `docs/design.md` | Architecture and rationale | Design decisions change; keep its claims true |
+| `README.md` | The project's front page | Any user-visible change: behavior, CLI, verdicts, roadmap status, limitations |
+
+`README.md` rules: it is the first thing a reviewer reads, so hold it
+to a professional standard. Lead with the problem and a concrete
+example, not a feature list. Every claim must be true of the current
+code. Measured sections sit between `BEGIN/END GENERATED` markers and
+are produced by `make readme`; never edit them by hand (CI runs
+`make readme-check`). After any significant change, re-read the whole
+README: update the roadmap status table, "Known limitations", and any
+example the change affects. Plain, precise English; no hype, no emoji
+beyond status marks.
 
 `docs/handoff.md` rules: overwrite the "Current state" and "Next
 steps" sections each session (it is a snapshot, not a log); append one

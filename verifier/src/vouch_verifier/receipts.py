@@ -64,14 +64,16 @@ def _parse_receipt(line: str, lineno: int) -> Receipt:
     if not isinstance(tree, dict):
         raise ReceiptError(f"line {lineno}: receipt is not an object")
 
-    def text(key: str, required: bool = True) -> str | None:
+    def optional_text(key: str) -> str | None:
         v = tree.get(key)
-        if v is None:
-            if required:
-                raise ReceiptError(f"line {lineno}: missing {key}")
-            return None
-        if not isinstance(v, str):
+        if v is not None and not isinstance(v, str):
             raise ReceiptError(f"line {lineno}: {key} is not a string")
+        return v
+
+    def text(key: str) -> str:
+        v = optional_text(key)
+        if v is None:
+            raise ReceiptError(f"line {lineno}: missing {key}")
         return v
 
     def integer(key: str) -> int:
@@ -108,7 +110,7 @@ def _parse_receipt(line: str, lineno: int) -> Receipt:
         result_canonical=serialize(tree.get("result_canonical")),
         result_digest=text("result_digest"),
         facts=tuple(facts),
-        data_asof=text("data_asof", required=False),
+        data_asof=optional_text("data_asof"),
         wall_time=text("wall_time"),
         logical_time=integer("logical_time"),
         upstream_latency_ms=integer("upstream_latency_ms"),
@@ -144,9 +146,7 @@ def load_log(path: str | Path, key: bytes | None = None) -> list[Receipt]:
                 continue
             r = _parse_receipt(line, lineno)
             if _sha256_digest(r.result_canonical) != r.result_digest:
-                raise ReceiptError(
-                    f"line {lineno}: result_digest does not match result_canonical"
-                )
+                raise ReceiptError(f"line {lineno}: result_digest does not match result_canonical")
             dup = seen.get((r.session_id, r.turn_index))
             if dup is not None:
                 raise ReceiptError(

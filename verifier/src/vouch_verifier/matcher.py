@@ -7,6 +7,7 @@ resolve. STALE and DERIVED are explicitly later (design section 11).
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,19 +64,28 @@ def _match_cited(
     assert claim.citation is not None
     matching = [r for r in receipts if r.receipt_id.startswith(claim.citation.receipt_id)]
     if not matching:
-        return MatchedClaim(claim, Verdict.UNSUPPORTED,
-                            note=f"cited receipt {claim.citation.receipt_id!r} does not exist")
+        return MatchedClaim(
+            claim,
+            Verdict.UNSUPPORTED,
+            note=f"cited receipt {claim.citation.receipt_id!r} does not exist",
+        )
     if len(matching) > 1:
-        return MatchedClaim(claim, Verdict.UNSUPPORTED,
-                            note=f"citation {claim.citation.receipt_id!r} is ambiguous "
-                                 f"({len(matching)} receipts)")
+        return MatchedClaim(
+            claim,
+            Verdict.UNSUPPORTED,
+            note=f"citation {claim.citation.receipt_id!r} is ambiguous ({len(matching)} receipts)",
+        )
     receipt = matching[0]
     for fact in receipt.facts:
         if fact.json_ptr == claim.citation.json_ptr:
             verdict = compare(claim.value, fact.value, _tolerance_for(fact, tolerances))
             return MatchedClaim(claim, verdict, fact=fact, receipt_id=receipt.receipt_id)
-    return MatchedClaim(claim, Verdict.UNSUPPORTED, receipt_id=receipt.receipt_id,
-                        note=f"receipt has no fact at {claim.citation.json_ptr}")
+    return MatchedClaim(
+        claim,
+        Verdict.UNSUPPORTED,
+        receipt_id=receipt.receipt_id,
+        note=f"receipt has no fact at {claim.citation.json_ptr}",
+    )
 
 
 def match_claims(
@@ -92,37 +102,56 @@ def match_claims(
     silently dropping them would overstate coverage.
     """
     tol = DEFAULT_TOLERANCES if tolerances is None else tolerances
-    conn = build_index(receipts)
     out: list[MatchedClaim] = []
 
-    for claim in extraction.claims:
-        if claim.citation is not None:
-            out.append(_match_cited(claim, receipts, tol))
-            continue
+    # The index is per call and in-memory; close it so repeated calls
+    # (the eval runs thousands) do not leak connections.
+    with closing(build_index(receipts)) as conn:
+        for claim in extraction.claims:
+            if claim.citation is not None:
+                out.append(_match_cited(claim, receipts, tol))
+                continue
 
-        assert claim.entity is not None and claim.metric is not None
-        candidates = facts_for(conn, claim.entity, claim.metric, claim.timeframe)
-        if not candidates:
-            out.append(MatchedClaim(claim, Verdict.UNSUPPORTED,
-                                    note=f"no receipt covers ({claim.entity}, {claim.metric})"))
-            continue
+            assert claim.entity is not None and claim.metric is not None
+            candidates = facts_for(conn, claim.entity, claim.metric, claim.timeframe)
+            if not candidates:
+                out.append(
+                    MatchedClaim(
+                        claim,
+                        Verdict.UNSUPPORTED,
+                        note=f"no receipt covers ({claim.entity}, {claim.metric})",
+                    )
+                )
+                continue
 
-        best: tuple[float, str, Fact] | None = None
-        for receipt_id, fact in candidates:
-            if compare(claim.value, fact.value, _tolerance_for(fact, tol)) is Verdict.SUPPORTED:
-                out.append(MatchedClaim(claim, Verdict.SUPPORTED, fact=fact, receipt_id=receipt_id))
-                break
-            distance = abs(claim.value - fact.value)
-            if best is None or distance < best[0]:
-                best = (distance, receipt_id, fact)
-        else:
-            assert best is not None
-            _, receipt_id, fact = best
-            out.append(MatchedClaim(claim, Verdict.CONTRADICTED, fact=fact, receipt_id=receipt_id,
-                                    note=f"closest receipted value is {fact.value}"))
+            best: tuple[float, str, Fact] | None = None
+            for receipt_id, fact in candidates:
+                if compare(claim.value, fact.value, _tolerance_for(fact, tol)) is Verdict.SUPPORTED:
+                    out.append(
+                        MatchedClaim(claim, Verdict.SUPPORTED, fact=fact, receipt_id=receipt_id)
+                    )
+                    break
+                distance = abs(claim.value - fact.value)
+                if best is None or distance < best[0]:
+                    best = (distance, receipt_id, fact)
+            else:
+                assert best is not None
+                _, receipt_id, fact = best
+                out.append(
+                    MatchedClaim(
+                        claim,
+                        Verdict.CONTRADICTED,
+                        fact=fact,
+                        receipt_id=receipt_id,
+                        note=f"closest receipted value is {fact.value}",
+                    )
+                )
 
     for claim in extraction.unresolved:
-        out.append(MatchedClaim(claim, Verdict.UNVERIFIABLE,
-                                note="no entity/metric resolution (Tier 3 not enabled)"))
+        out.append(
+            MatchedClaim(
+                claim, Verdict.UNVERIFIABLE, note="no entity/metric resolution (Tier 3 not enabled)"
+            )
+        )
     out.sort(key=lambda mc: mc.claim.span)
     return out

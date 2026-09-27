@@ -16,6 +16,7 @@ from __future__ import annotations
 import random
 import re
 from dataclasses import dataclass
+from itertools import pairwise
 
 from vouch_verifier.claims import Claim, extract_claims
 from vouch_verifier.receipts import Receipt
@@ -50,7 +51,7 @@ def _digit_swap(answer: str, claims: list[Claim], rng: random.Random) -> Mutant 
     for claim in claims:
         text = claim.text
         digits = [i for i, ch in enumerate(text) if ch.isdigit()]
-        for a, b in zip(digits, digits[1:]):
+        for a, b in pairwise(digits):
             if text[a] != text[b]:
                 chars = list(text)
                 chars[a], chars[b] = chars[b], chars[a]
@@ -90,7 +91,9 @@ def _magnitude_shift(answer: str, claims: list[Claim], rng: random.Random) -> Mu
     return None
 
 
-def _entity_swap(answer: str, claims: list[Claim], entities: set[str], rng: random.Random) -> Mutant | None:
+def _entity_swap(
+    answer: str, claims: list[Claim], entities: set[str], rng: random.Random
+) -> Mutant | None:
     for claim in claims:
         if claim.entity is None:
             continue
@@ -109,7 +112,12 @@ def _entity_swap(answer: str, claims: list[Claim], entities: set[str], rng: rand
     return None
 
 
-_TIMEFRAME_SWAPS = [("1d", "1h"), ("daily", "hourly"), ("on the day", "on the hour"), ("today", "this hour")]
+_TIMEFRAME_SWAPS = [
+    ("1d", "1h"),
+    ("daily", "hourly"),
+    ("on the day", "on the hour"),
+    ("today", "this hour"),
+]
 
 
 def _timeframe_swap(answer: str, claims: list[Claim], rng: random.Random) -> Mutant | None:
@@ -119,8 +127,14 @@ def _timeframe_swap(answer: str, claims: list[Claim], rng: random.Random) -> Mut
     return None
 
 
-_DIRECTION_SWAPS = [("down", "up"), ("fell", "rose"), ("dropped", "jumped"),
-                    ("declined", "advanced"), ("lost", "gained"), ("slid", "climbed")]
+_DIRECTION_SWAPS = [
+    ("down", "up"),
+    ("fell", "rose"),
+    ("dropped", "jumped"),
+    ("declined", "advanced"),
+    ("lost", "gained"),
+    ("slid", "climbed"),
+]
 
 
 def _sign_flip(answer: str, claims: list[Claim], rng: random.Random) -> Mutant | None:

@@ -1,13 +1,19 @@
-VENV := verifier/.venv
-PY   := $(VENV)/bin/python
-PIP  := $(VENV)/bin/pip
+VENV  := verifier/.venv
+PY    := $(VENV)/bin/python
+STAMP := $(VENV)/.installed
 
-.PHONY: test test-go test-py test-harness lint build install-py eval golden clean
+# A venv is healthy only if it imports both packages from *this*
+# checkout. Venvs hardcode absolute paths, so a moved or re-cloned repo
+# leaves one that exists but imports nothing (docs/pitfalls.md P-001).
+VENV_OK := $(PY) -c 'import sys, vouch_verifier, vouch_harness; \
+	sys.exit(not vouch_verifier.__file__.startswith("$(CURDIR)/"))'
+
+.PHONY: test test-go test-py test-harness lint lint-go lint-py fmt cover build install-py eval golden readme readme-check clean
 
 test: test-go test-py test-harness
 
 test-go:
-	cd proxy && go vet ./... && go test ./...
+	cd proxy && go vet ./... && go test -race ./...
 
 test-py: install-py
 	cd verifier && ../$(PY) -m pytest -q
@@ -15,16 +21,42 @@ test-py: install-py
 test-harness: install-py
 	cd harness && ../$(PY) -m pytest -q
 
-lint:
-	cd proxy && gofmt -l . && go vet ./...
+lint: lint-go lint-py
+
+# gofmt -l exits 0 even when it lists files; fail on any output.
+lint-go:
+	cd proxy && test -z "$$(gofmt -l .)" || { gofmt -l .; exit 1; }
+	cd proxy && go vet ./...
+
+lint-py: install-py
+	$(VENV)/bin/ruff check verifier harness
+	$(VENV)/bin/ruff format --check verifier harness
+	cd verifier && ../$(VENV)/bin/mypy
+	cd harness && ../$(VENV)/bin/mypy
+
+fmt: install-py
+	cd proxy && gofmt -w .
+	$(VENV)/bin/ruff check --fix verifier harness
+	$(VENV)/bin/ruff format verifier harness
+
+# Coverage is reported, not gated (docs/roadmap.md Phase 0).
+cover: install-py
+	cd proxy && go test -coverprofile=coverage.out ./... >/dev/null && go tool cover -func=coverage.out | tail -1
+	cd verifier && ../$(PY) -m pytest -q --cov=vouch_verifier --cov-report=term-missing:skip-covered
+	cd harness && ../$(PY) -m pytest -q --cov=vouch_harness --cov-report=term-missing:skip-covered
 
 build:
 	cd proxy && go build -o bin/vouch ./cmd/vouch
 
-install-py: $(VENV)
-$(VENV):
-	python3 -m venv $(VENV)
-	$(PIP) install -q -e "verifier[dev]" -e "harness[dev]"
+# Rebuilds the venv when it is broken, reinstalls when a pyproject
+# changed, and is a no-op otherwise.
+install-py:
+	@if [ -f $(STAMP) ] && ! $(VENV_OK) 2>/dev/null; then \
+		echo "install-py: venv is stale, rebuilding"; rm -rf $(VENV); fi
+	@if [ ! -x $(PY) ]; then python3 -m venv $(VENV); fi
+	@if [ ! -f $(STAMP) ] || [ verifier/pyproject.toml -nt $(STAMP) ] \
+			|| [ harness/pyproject.toml -nt $(STAMP) ]; then \
+		$(PY) -m pip install -q -e "verifier[dev]" -e "harness[dev]" && touch $(STAMP); fi
 
 # Regenerate the Go-produced golden receipt log that the Python tests read.
 golden:
@@ -34,5 +66,13 @@ eval: install-py
 	VOUCH_HMAC_KEY=vouch-golden-key $(VENV)/bin/vouch-eval \
 		--receipts testdata/receipts_golden.jsonl --n 10 --tolerances tolerance.yaml
 
+# README metrics and the example report are generated, never hand-edited
+# (AGENTS.md invariant 7). readme-check is what CI runs.
+readme: install-py
+	VOUCH_HMAC_KEY=vouch-golden-key $(PY) -m vouch_harness.readme README.md
+
+readme-check: install-py
+	VOUCH_HMAC_KEY=vouch-golden-key $(PY) -m vouch_harness.readme README.md --check
+
 clean:
-	rm -rf $(VENV) proxy/bin
+	rm -rf $(VENV) proxy/bin proxy/coverage.out

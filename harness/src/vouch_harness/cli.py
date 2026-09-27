@@ -12,11 +12,10 @@ import argparse
 import os
 import sys
 
-from vouch_verifier.matcher import load_tolerances
-from vouch_verifier.receipts import load_log
-
 from vouch_harness.eval import run_eval
 from vouch_harness.report import to_json, to_markdown
+from vouch_verifier.matcher import load_tolerances
+from vouch_verifier.receipts import load_log
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -30,8 +29,9 @@ def main(argv: list[str] | None = None) -> int:
 
     key = os.environ.get("VOUCH_HMAC_KEY", "").encode() or None
     if key is None:
-        print("vouch-eval: warning: VOUCH_HMAC_KEY not set, signatures not checked",
-              file=sys.stderr)
+        print(
+            "vouch-eval: warning: VOUCH_HMAC_KEY not set, signatures not checked", file=sys.stderr
+        )
 
     receipts = load_log(args.receipts, key=key)
     tolerances = load_tolerances(args.tolerances) if args.tolerances else None
@@ -41,8 +41,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"vouch-eval: {e}", file=sys.stderr)
         return 2
 
-    print(to_json(result, seed=args.seed) if args.format == "json"
-          else to_markdown(result, seed=args.seed))
+    print(
+        to_json(result, seed=args.seed)
+        if args.format == "json"
+        else to_markdown(result, seed=args.seed)
+    )
     return 0
 
 

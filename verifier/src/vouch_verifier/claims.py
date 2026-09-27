@@ -107,8 +107,8 @@ def _sentence_bounds(answer: str, pos: int) -> tuple[int, int]:
     start = 0
     for m in _SENTENCE_SPLIT_RE.finditer(answer, 0, pos):
         start = m.end()
-    m = _SENTENCE_SPLIT_RE.search(answer, pos)
-    return start, m.start() + 1 if m else len(answer)
+    end = _SENTENCE_SPLIT_RE.search(answer, pos)
+    return start, end.start() + 1 if end else len(answer)
 
 
 def _nearest_keyword(
@@ -154,7 +154,8 @@ def extract_claims(
         )
 
     numbers = [
-        m for m in _NUMBER_RE.finditer(answer)
+        m
+        for m in _NUMBER_RE.finditer(answer)
         # Numbers inside a citation marker are not claims.
         if not any(c.start() <= m.start() < c.end() for c in _CITATION_RE.finditer(answer))
         and not is_parameter(m)
@@ -168,7 +169,8 @@ def extract_claims(
     for cit in _CITATION_RE.finditer(answer):
         sent_start, _ = _sentence_bounds(answer, cit.start())
         candidates = [
-            i for i, m in enumerate(numbers)
+            i
+            for i, m in enumerate(numbers)
             if i not in consumed and sent_start <= m.start() and m.end() <= cit.start()
         ]
         if not candidates:

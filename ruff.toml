@@ -1,0 +1,18 @@
+# Shared lint and format policy for verifier/ and harness/. Explicit
+# rule selection so results do not drift with ruff's defaults.
+target-version = "py311"
+line-length = 100
+
+[lint]
+select = [
+    "E", "W",  # pycodestyle
+    "F",       # pyflakes
+    "I",       # isort
+    "B",       # bugbear
+    "UP",      # pyupgrade
+    "SIM",     # simplify
+    "RUF",     # ruff-specific
+]
+
+[lint.isort]
+known-first-party = ["vouch_verifier", "vouch_harness"]
