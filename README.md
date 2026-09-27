@@ -2,7 +2,7 @@
 
 > Every number, vouched for. A verification layer for tool-using LLM agents: every tool call gets a signed receipt, and every numeric claim in the agent's answer is audited against those receipts.
 
-**Status:** MVP complete and tested end to end (proxy → receipts → verifier → eval). See [docs/design.md](docs/design.md) for the full design.
+**Status:** MVP complete and tested end to end (proxy → receipts → verifier → eval). See [docs/design.md](docs/design.md) for the full design, [docs/roadmap.md](docs/roadmap.md) for what comes next, and [docs/pitfalls.md](docs/pitfalls.md) for known limitations.
 
 ---
 
