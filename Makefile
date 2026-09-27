@@ -34,9 +34,13 @@ lint-py: install-py
 	cd verifier && ../$(VENV)/bin/mypy
 	cd harness && ../$(VENV)/bin/mypy
 
+# Format first, then apply lint autofixes. --exit-zero keeps an
+# unfixable finding from aborting the target before the rest has run;
+# `make lint` is the gate that reports it.
 fmt: install-py
 	cd proxy && gofmt -w .
-	$(VENV)/bin/ruff check --fix verifier harness
+	$(VENV)/bin/ruff format verifier harness
+	$(VENV)/bin/ruff check --fix --exit-zero verifier harness
 	$(VENV)/bin/ruff format verifier harness
 
 # Coverage is reported, not gated (docs/roadmap.md Phase 0).
