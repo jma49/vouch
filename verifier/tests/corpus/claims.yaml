@@ -185,6 +185,18 @@ cases:
   - text: NVDA MACD histogram is －0.42.
     expect: ["－0.42 -> SUPPORTED"]
 
+  # --- accounting negatives: parentheses sign only a signed metric (#10) ---
+  - text: AMD change was (1.35%) today.
+    expect: ["1.35% -> SUPPORTED (AMD change_pct)"]
+  - text: NVDA MACD histogram is (0.42).
+    expect: ["0.42 -> SUPPORTED (NVDA macd_hist)"]
+  - text: AMD was down (1.35%) on the day.
+    expect: ["1.35% -> SUPPORTED (AMD change_pct)"]
+  - text: NVDA RSI (62.3) is elevated.
+    expect: ["62.3 -> SUPPORTED (NVDA rsi_14)"]
+  - text: NVDA closed at (181.52).
+    expect: ["181.52 -> SUPPORTED (NVDA close_price)"]
+
   # --- dates, times, quarters, ordinals, periods are not claims ---
   - text: As of 2026-07-24, NVDA closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]

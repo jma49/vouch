@@ -145,6 +145,9 @@ class NumberToken:
     kind: Kind
     resolution: float  # unit of the last displayed digit: 0.1 for "62.3"
     signed: bool = False  # written with an explicit + or minus sign
+    # Wrapped in parentheses, "(1.35%)": an accounting negative or an
+    # aside, which only the metric can tell apart (see claims._resolve).
+    parenthesized: bool = False
 
 
 def _merge(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -279,6 +282,9 @@ def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberT
                 kind=kind,
                 resolution=_resolution(m["num"]) * scale,
                 signed=m["sign"] is not None,
+                parenthesized=m.start() > 0
+                and text[m.start() - 1] == "("
+                and text[m.end() : m.end() + 1] == ")",
             )
         )
 

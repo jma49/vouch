@@ -100,6 +100,12 @@ DEFAULT_METRIC_UNITS: dict[str, str | None] = {
     "change_pct": "pct",
 }
 
+# Metrics that can be negative. Financial prose writes their negatives
+# in parentheses, "(1.35%)" (issue #10); for a metric that cannot be
+# negative (a price, RSI, volume), "(62.3)" is an aside and stays
+# positive.
+DEFAULT_SIGNED_METRICS: frozenset[str] = frozenset({"change_pct", "macd_hist"})
+
 # A percentage with no percentage keyword is read as a day change when
 # the sentence talks about price or names no metric at all: "AMD is down
 # 1.35%", "NVDA closed up 1.92%". Next to a non-price metric ("volume
@@ -275,17 +281,15 @@ def _resolve(
     """Attach entity and metric to one Tier 2 numeric token."""
     value, unit = m.value, m.unit
     scope = _scope(answer, m.start)
-    # A direction word only signs the number it governs: in "Unlike AMD,
-    # which fell 1.35%, NVDA rose 1.92%" the "fell" stays in its phrase.
-    if (
+    entity = _entity(answer, m.start, scope, set(known_entities))
+    metric = _pick_metric(_keyword_hits(answer, m.start, scope, synonyms), unit, units)
+    if (m.parenthesized and not m.signed and value > 0 and metric in DEFAULT_SIGNED_METRICS) or (
         unit == "pct"
         and value > 0
         and not m.signed
         and _NEGATION_RE.search(answer, scope.phrase[0], m.start)
     ):
         value = -value
-    entity = _entity(answer, m.start, scope, set(known_entities))
-    metric = _pick_metric(_keyword_hits(answer, m.start, scope, synonyms), unit, units)
     return Claim(
         value=value,
         span=(m.start, m.end),
