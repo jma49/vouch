@@ -69,7 +69,11 @@ def _match_cited(
     claim: Claim, receipts: list[Receipt], tolerances: dict[str, Tolerance]
 ) -> MatchedClaim:
     assert claim.citation is not None
-    matching = [r for r in receipts if r.receipt_id.startswith(claim.citation.receipt_id)]
+    cited = claim.citation.receipt_id
+    # An exact id wins; a prefix is a convenience for long ids (issue #17).
+    matching = [r for r in receipts if r.receipt_id == cited] or [
+        r for r in receipts if r.receipt_id.startswith(cited)
+    ]
     if not matching:
         return MatchedClaim(
             claim,

@@ -6,7 +6,7 @@ import pytest
 
 from vouch_verifier.claims import Extraction, extract_claims
 from vouch_verifier.matcher import DEFAULT_TOLERANCES, MatchedClaim, load_tolerances, match_claims
-from vouch_verifier.receipts import Receipt, load_log
+from vouch_verifier.receipts import Fact, Receipt, load_log
 from vouch_verifier.report import build_report, to_json, to_markdown
 from vouch_verifier.verdict import Verdict
 
@@ -128,3 +128,55 @@ def test_load_tolerances_rejects_non_bool_display_round(tmp_path: Path) -> None:
     bad.write_text('price: { abs: 0.01, display_round: "yes" }\n')
     with pytest.raises(ValueError, match="display_round"):
         load_tolerances(bad)
+
+
+def _receipt(receipt_id: str, facts: tuple[Fact, ...], data_asof: str | None = None) -> Receipt:
+    return Receipt(
+        receipt_id=receipt_id,
+        session_id=receipt_id,  # one turn per session keeps (session, turn) unique
+        turn_index=0,
+        tool_name="t",
+        args_canonical="{}",
+        result_canonical="{}",
+        result_digest="",
+        facts=facts,
+        data_asof=data_asof,
+        wall_time="2026-07-24T21:00:00Z",
+        logical_time=0,
+        upstream_latency_ms=0,
+        sig="",
+    )
+
+
+def _close(value: float, as_of: str | None) -> Fact:
+    return Fact("NVDA", "close_price", value, "USD", as_of, "1d", "/close", "price")
+
+
+def test_undated_fact_takes_its_receipts_date() -> None:
+    # Issue #14: an undated fact used to fall outside every window.
+    receipts = [
+        _receipt("undated", (_close(181.52, None),)),
+        _receipt("older", (_close(100.0, "2026-07-20T20:00:00Z"),)),
+    ]
+    _, matched = run("NVDA closed at 181.52.", receipts)
+    assert matched[0].verdict is Verdict.SUPPORTED
+    _, matched = run("On July 24, NVDA closed at 181.52.", receipts)
+    assert matched[0].verdict is Verdict.SUPPORTED
+    _, matched = run("NVDA closed at 100.", receipts)
+    assert matched[0].verdict is Verdict.STALE
+
+
+def test_undated_fact_prefers_the_receipts_data_asof() -> None:
+    receipts = [_receipt("r", (_close(181.52, None),), data_asof="2026-07-23T20:00:00Z")]
+    _, matched = run("On July 23, NVDA closed at 181.52.", receipts)
+    assert matched[0].verdict is Verdict.SUPPORTED
+
+
+def test_exact_receipt_id_beats_a_longer_id_with_the_same_prefix() -> None:
+    # Issue #17: "golden-1" is also a prefix of "golden-10".
+    fact = Fact("NVDA", "rsi_14", 62.3, None, None, "1d", "/rsi_14", "indicator")
+    receipts = [_receipt("golden-1", (fact,)), _receipt("golden-10", (fact,))]
+    _, matched = run("NVDA RSI is 62.3 [[r:golden-1#/rsi_14]].", receipts)
+    assert (matched[0].verdict, matched[0].receipt_id) == (Verdict.SUPPORTED, "golden-1")
+    _, matched = run("NVDA RSI is 62.3 [[r:golden#/rsi_14]].", receipts)
+    assert "ambiguous" in matched[0].note
