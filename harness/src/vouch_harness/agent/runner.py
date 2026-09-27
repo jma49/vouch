@@ -92,12 +92,33 @@ def _tool_text(result: dict[str, Any]) -> str:
     return f"ERROR: {text}" if result.get("isError") else text
 
 
+def _content_text(content: Any) -> str:
+    """The answer text of an assistant message. Some OpenAI-compatible
+    providers send content as a list of parts; only the text parts are
+    the answer, and str() of the list would be labeled and scored."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(p.get("text", ""))
+            for p in content
+            if isinstance(p, dict) and p.get("type") == "text"
+        )
+    return ""
+
+
+# Finish reasons that mean the answer was cut off, not completed.
+_TRUNCATED = frozenset({"length", "content_filter"})
+
+
 @dataclass(frozen=True)
 class RunResult:
     answer: str
     turns: int
     tool_calls: int
-    finished: bool  # False when MAX_TURNS ran out before a final answer
+    # False when MAX_TURNS ran out, or the provider cut the answer off.
+    finished: bool
+    finish_reason: str | None = None  # the provider's, for the last turn
 
 
 def run_agent(
@@ -115,10 +136,15 @@ def run_agent(
     calls = 0
     for turn in range(1, MAX_TURNS + 1):
         reply = client.complete(messages, tools, sample)
-        messages.append(reply)
-        tool_calls = reply.get("tool_calls") or []
+        message = reply.message
+        messages.append(message)
+        tool_calls = message.get("tool_calls") or []
         if not tool_calls:
-            return RunResult(str(reply.get("content") or ""), turn, calls, True), messages
+            reason = reply.finish_reason
+            result = RunResult(
+                _content_text(message.get("content")), turn, calls, reason not in _TRUNCATED, reason
+            )
+            return result, messages
         for tc in tool_calls:
             calls += 1
             fn = tc.get("function", {})

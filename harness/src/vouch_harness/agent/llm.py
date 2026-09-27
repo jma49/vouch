@@ -32,12 +32,23 @@ import yaml
 Message = dict[str, Any]
 
 
+@dataclass(frozen=True)
+class Reply:
+    """One model turn: the assistant message exactly as the provider sent
+    it, and why generation stopped ("stop", "tool_calls", "length", ...;
+    None when unknown). finish_reason lives beside the message, not in
+    it, because the message is sent back to the provider verbatim."""
+
+    message: Message
+    finish_reason: str | None = None
+
+
 class ChatClient(Protocol):
-    """Returns the assistant message for a conversation so far."""
+    """Returns the assistant turn for a conversation so far."""
 
     def complete(
         self, messages: list[Message], tools: list[dict[str, Any]], sample: int
-    ) -> Message: ...
+    ) -> Reply: ...
 
 
 class LLMError(RuntimeError):
@@ -127,9 +138,7 @@ class OpenAICompatClient:
             self._sleep(self._next_slot - now)
         self._next_slot = max(now, self._next_slot) + 60.0 / self._config.rpm
 
-    def complete(
-        self, messages: list[Message], tools: list[dict[str, Any]], sample: int
-    ) -> Message:
+    def complete(self, messages: list[Message], tools: list[dict[str, Any]], sample: int) -> Reply:
         del sample  # distinct samples come from provider sampling; the cache keys on it
         body = {"model": self._config.model, "messages": messages, **self._config.params}
         if tools:
@@ -137,10 +146,14 @@ class OpenAICompatClient:
             body["tool_choice"] = "auto"
         payload = self._post(json.dumps(body).encode("utf-8"))
         try:
-            message: Message = payload["choices"][0]["message"]
+            choice = payload["choices"][0]
+            message: Message = choice["message"]
         except (KeyError, IndexError, TypeError) as e:
             raise LLMError(f"{self._config.name}: response has no message: {payload!r:.300}") from e
-        return message
+        if not isinstance(message, dict):
+            raise LLMError(f"{self._config.name}: message is not an object: {message!r:.300}")
+        reason = choice.get("finish_reason")
+        return Reply(message, reason if isinstance(reason, str) else None)
 
     def _post(self, data: bytes) -> Any:
         delay = 2.0
@@ -198,19 +211,20 @@ class CachedClient:
         )
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
-    def complete(
-        self, messages: list[Message], tools: list[dict[str, Any]], sample: int
-    ) -> Message:
+    def complete(self, messages: list[Message], tools: list[dict[str, Any]], sample: int) -> Reply:
         key = self.key(messages, tools, sample)
         path = self._dir / key[:2] / f"{key}.json"
         if path.exists():
             self.hits += 1
-            cached: Message = json.loads(path.read_text(encoding="utf-8"))
-            return cached
+            cached: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+            if "role" in cached:  # written before finish_reason was kept: a bare message
+                return Reply(cached, None)
+            return Reply(cached["message"], cached.get("finish_reason"))
         self.misses += 1
-        message = self._inner.complete(messages, tools, sample)
+        reply = self._inner.complete(messages, tools, sample)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(message, ensure_ascii=False), encoding="utf-8")
+        entry = {"message": reply.message, "finish_reason": reply.finish_reason}
+        tmp.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
         tmp.replace(path)  # atomic: an interrupted run never leaves half a response
-        return message
+        return reply

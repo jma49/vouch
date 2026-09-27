@@ -24,6 +24,7 @@ from vouch_harness.agent.llm import (
     Message,
     ModelConfig,
     OpenAICompatClient,
+    Reply,
     load_models,
 )
 from vouch_harness.agent.mcp_client import RPCError
@@ -50,15 +51,14 @@ class InProcessHost:
 class ScriptedClient:
     """Replays a fixed sequence of assistant messages."""
 
-    def __init__(self, replies: list[Message]) -> None:
+    def __init__(self, replies: list[Message | Reply]) -> None:
         self.replies = list(replies)
         self.seen: list[list[Message]] = []
 
-    def complete(
-        self, messages: list[Message], tools: list[dict[str, Any]], sample: int
-    ) -> Message:
+    def complete(self, messages: list[Message], tools: list[dict[str, Any]], sample: int) -> Reply:
         self.seen.append([dict(m) for m in messages])
-        return self.replies.pop(0)
+        reply = self.replies.pop(0)
+        return reply if isinstance(reply, Reply) else Reply(reply, "stop")
 
 
 def tool_call(name: str, args: str, call_id: str = "c1") -> Message:
@@ -89,7 +89,7 @@ def test_loop_calls_tools_then_answers() -> None:
     client = ScriptedClient([tool_call("get_quote", '{"symbol": "NVDA"}'), answer("NVDA is up.")])
     host = InProcessHost()
     result, transcript = runner.run_agent(client, host, "How is NVDA?", sample=0)
-    assert result == runner.RunResult("NVDA is up.", turns=2, tool_calls=1, finished=True)
+    assert result == runner.RunResult("NVDA is up.", 2, 1, finished=True, finish_reason="stop")
     assert host.calls == [("get_quote", {"symbol": "NVDA"})]
     assert [m["role"] for m in transcript] == ["system", "user", "assistant", "tool", "assistant"]
     assert transcript[2]["extra_content"] == {"google": {"thought_signature": "sig"}}
@@ -168,6 +168,36 @@ def test_execute_clears_a_previous_error(tmp_path: Path) -> None:
     assert not (d / "error.txt").exists()
 
 
+def test_truncated_answer_marks_the_run_unfinished() -> None:
+    client = ScriptedClient([Reply(answer("NVDA closed at 18"), "length")])
+    result, _ = runner.run_agent(client, InProcessHost(), "q", sample=0)
+    assert result == runner.RunResult(
+        "NVDA closed at 18", turns=1, tool_calls=0, finished=False, finish_reason="length"
+    )
+
+
+def test_list_content_is_joined_from_its_text_parts() -> None:
+    parts = [
+        {"type": "text", "text": "NVDA closed "},
+        {"type": "image_url", "image_url": {"url": "x"}},
+        {"type": "text", "text": "at 181.52."},
+    ]
+    client = ScriptedClient([{"role": "assistant", "content": parts}])
+    result, transcript = runner.run_agent(client, InProcessHost(), "q", sample=0)
+    assert result.answer == "NVDA closed at 181.52."
+    assert result.finished and result.finish_reason == "stop"
+    assert transcript[-1]["content"] == parts  # the transcript keeps what the provider sent
+
+
+def test_cache_reads_entries_written_before_finish_reason(tmp_path: Path) -> None:
+    client = CachedClient(ScriptedClient([]), tmp_path, identity="m")
+    msgs: list[Message] = [{"role": "user", "content": "hi"}]
+    key = client.key(msgs, [], 0)
+    (tmp_path / key[:2]).mkdir()
+    (tmp_path / key[:2] / f"{key}.json").write_text(json.dumps(answer("old")))
+    assert client.complete(msgs, [], 0) == Reply(answer("old"), None)
+
+
 def test_loop_gives_up_after_max_turns() -> None:
     client = ScriptedClient([tool_call("get_quote", '{"symbol": "AMD"}')] * runner.MAX_TURNS)
     result, _ = runner.run_agent(client, InProcessHost(), "q", sample=0)
@@ -178,9 +208,10 @@ def test_cache_keys_on_request_and_sample(tmp_path: Path) -> None:
     inner = ScriptedClient([answer("a"), answer("b")])
     client = CachedClient(inner, tmp_path, identity="m")
     msgs: list[Message] = [{"role": "user", "content": "hi"}]
-    assert client.complete(msgs, [], 0)["content"] == "a"
-    assert client.complete(msgs, [], 0)["content"] == "a"  # cached
-    assert client.complete(msgs, [], 1)["content"] == "b"  # new sample
+    assert client.complete(msgs, [], 0).message["content"] == "a"
+    cached = client.complete(msgs, [], 0)
+    assert cached == Reply(answer("a"), "stop")  # finish_reason survives the cache
+    assert client.complete(msgs, [], 1).message["content"] == "b"  # new sample
     assert (client.hits, client.misses) == (1, 2)
     assert CachedClient(inner, tmp_path, identity="other").key(msgs, [], 0) != client.key(
         msgs, [], 0
@@ -212,7 +243,11 @@ def provider() -> Iterator[FakeProvider]:
                 self.send_header("Retry-After", "0")
             self.end_headers()
             if status == 200:
-                reply = {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+                reply = {
+                    "choices": [
+                        {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                    ]
+                }
                 self.wfile.write(json.dumps(reply).encode())
 
         def log_message(self, format: str, *args: Any) -> None:
@@ -236,7 +271,8 @@ def test_http_client_retries_rate_limits_and_sends_tools(
     sleeps: list[float] = []
     client = OpenAICompatClient(config, sleep=sleeps.append)
     tools = runner.to_openai_tools(market.TOOLS)
-    assert client.complete([{"role": "user", "content": "q"}], tools, 0)["content"] == "ok"
+    reply = client.complete([{"role": "user", "content": "q"}], tools, 0)
+    assert reply == Reply({"role": "assistant", "content": "ok"}, "stop")
     assert len(provider.bodies) == 3
     body = provider.bodies[-1]
     assert (body["model"], body["temperature"], body["tool_choice"]) == ("m-1", 0, "auto")
@@ -331,7 +367,7 @@ def test_http_client_retries_transport_failures(
     flaky.actions = ["429-date", "429-garbage", "reset", "hang", "html", "ok"]
     sleeps: list[float] = []
     client = _flaky_client(flaky, monkeypatch, sleeps)
-    assert client.complete([], [], 0)["content"] == "ok"
+    assert client.complete([], [], 0).message["content"] == "ok"
     assert flaky.requests == 6
     retry_sleeps = [s for s in sleeps if s >= 1.0]  # throttle sleeps are tiny
     assert retry_sleeps[0] == pytest.approx(30.0)  # the HTTP-date form of Retry-After
@@ -383,6 +419,7 @@ def test_execute_writes_a_run_directory_and_resumes(tmp_path: Path) -> None:
     assert (d / "answer.txt").read_text() == "Fine.\n"
     meta = json.loads((d / "meta.json").read_text())
     assert meta["session"] == "fake.t01.s0" and meta["tool_calls"] == 1
+    assert meta["finish_reason"] == "stop"
     # A completed run is not repeated: the client has no replies left.
     assert runner.execute(spec, client, tmp_path, PROXY, ROOT / "schemas", {}, _in_process) == d
 

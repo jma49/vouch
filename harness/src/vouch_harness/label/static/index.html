@@ -189,7 +189,7 @@ function renderView() {
   if (!run) return;
   view.append(el("h2", { text: `Prompt · ${run.id}` }), el("p", { class: "prompt", text: run.prompt }));
   view.append(el("h2", { text: "Answer" }));
-  if (!run.finished) view.append(el("p", { class: "warn", text: "The agent ran out of turns; the answer may be empty." }));
+  if (!run.finished) view.append(el("p", { class: "warn", text: "The run did not finish (out of turns, or the answer was cut off); the answer may be empty or incomplete." }));
   const box = el("p", { class: "answer", id: "answer" });
   let pos = 0;
   S.spans.forEach((s, i) => {
