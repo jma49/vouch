@@ -261,36 +261,26 @@ cases:
   # --- units constrain the metric ---
   - text: AMD is down 1.35% on the day and is trading at 172.04.
     expect: ["1.35% -> SUPPORTED (AMD change_pct)", "172.04 -> SUPPORTED (AMD last_price)"]
-    xfail: P-034
   - text: AMD is down 1.35% and trading at 172.40.
     expect: ["1.35% -> SUPPORTED (AMD change_pct)", "172.40 -> CONTRADICTED (AMD last_price)"]
-    xfail: P-034
   - text: NVDA closed up 1.92%.
     expect: ["1.92% -> SUPPORTED (NVDA change_pct)"]
-    xfail: P-034
   - text: NVDA closed 1.92% higher at 181.52.
     expect: ["1.92% -> SUPPORTED (NVDA change_pct)", "181.52 -> SUPPORTED (NVDA close_price)"]
-    xfail: P-034
   - text: NVDA volume rose 12%.
     expect: ["12% -> UNVERIFIABLE"]
-    xfail: P-034
   - text: NVDA RSI rose 5%.
     expect: ["5% -> UNVERIFIABLE"]
-    xfail: P-034
   - text: AMD last traded at 172.04, down 1.35%.
     expect: ["172.04 -> SUPPORTED (AMD last_price)", "1.35% -> SUPPORTED (AMD change_pct)"]
-    xfail: P-034
   - text: AMD, trading at 172.04, fell 1.35%.
     expect: ["172.04 -> SUPPORTED (AMD last_price)", "1.35% -> SUPPORTED (AMD change_pct)"]
-    xfail: P-034
   - text: AMD change is 1.35.
     expect: ["1.35 -> UNVERIFIABLE"]
-    xfail: P-034
   - text: NVDA's price change was 1.92%.
     expect: ["1.92% -> SUPPORTED (NVDA change_pct)"]
   - text: AMD dropped 1.35 percent.
     expect: ["1.35 percent -> SUPPORTED (AMD change_pct)"]
-    xfail: P-034
   - text: NVDA closed at $181.52.
     expect: ["181.52 -> SUPPORTED"]
   - text: AMD last traded at $172.40.

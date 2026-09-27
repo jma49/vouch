@@ -87,8 +87,21 @@ DEFAULT_METRIC_SYNONYMS: dict[str, str] = {
     "last": "last_price",
 }
 
-# A percentage with no explicit metric keyword is read as a day change:
-# "AMD is down 1.35%" claims change_pct.
+# The unit each metric is reported in; metrics not listed have none. A
+# claim's unit must agree with its metric's: "1.35%" is never a price
+# and a bare "172.04" is never a day change. Like the synonym table,
+# callers can derive their own from their schemas.
+DEFAULT_METRIC_UNITS: dict[str, str | None] = {
+    "close_price": "USD",
+    "open_price": "USD",
+    "last_price": "USD",
+    "change_pct": "pct",
+}
+
+# A percentage with no percentage keyword is read as a day change when
+# the sentence talks about price or names no metric at all: "AMD is down
+# 1.35%", "NVDA closed up 1.92%". Next to a non-price metric ("volume
+# rose 12%") it is a change in that metric, which no receipt records.
 _PCT_FALLBACK_METRIC = "change_pct"
 
 # "down 1.35%" claims -1.35, not 1.35 — without this, sign flips are
@@ -104,18 +117,27 @@ def _sentence_bounds(answer: str, pos: int) -> tuple[int, int]:
     return start, end.start() + 1 if end else len(answer)
 
 
-def _nearest_keyword(
-    sentence: str, offset: int, num_start: int, table: dict[str, str]
-) -> str | None:
-    """Return the metric whose keyword sits closest to the number."""
-    best: tuple[int, str] | None = None
+def _keyword_hits(sentence: str, offset: int, num_start: int, table: dict[str, str]) -> list[str]:
+    """Metrics named in the sentence, nearest keyword to the number first."""
+    hits: list[tuple[int, str]] = []
     lowered = sentence.lower()
     for kw in sorted(table, key=len, reverse=True):
         for m in re.finditer(r"(?<!\w)" + re.escape(kw) + r"(?!\w)", lowered):
-            distance = abs((offset + m.start()) - num_start)
-            if best is None or distance < best[0]:
-                best = (distance, table[kw])
-    return best[1] if best else None
+            hits.append((abs((offset + m.start()) - num_start), table[kw]))
+    return [metric for _, metric in sorted(hits, key=lambda h: h[0])]
+
+
+def _unit_compatible(claim_unit: str | None, metric_unit: str | None) -> bool:
+    if claim_unit is None:
+        return metric_unit != "pct"
+    return claim_unit == metric_unit
+
+
+def _pick_metric(hits: list[str], unit: str | None, units: dict[str, str | None]) -> str | None:
+    metric = next((h for h in hits if _unit_compatible(unit, units.get(h))), None)
+    if metric is None and unit == "pct" and (not hits or units.get(hits[0]) == "USD"):
+        metric = _PCT_FALLBACK_METRIC
+    return metric
 
 
 def _nearest_entity(sentence: str, offset: int, num_start: int, entities: set[str]) -> str | None:
@@ -133,6 +155,7 @@ def _resolve(
     m: NumberToken,
     known_entities: set[str] | frozenset[str],
     synonyms: dict[str, str],
+    units: dict[str, str | None],
 ) -> Claim:
     """Attach entity and metric to one Tier 2 numeric token."""
     value, unit = m.value, m.unit
@@ -146,9 +169,7 @@ def _resolve(
     ):
         value = -value
     entity = _nearest_entity(sentence, sent_start, m.start, set(known_entities))
-    metric = _nearest_keyword(sentence, sent_start, m.start, synonyms)
-    if metric is None and unit == "pct":
-        metric = _PCT_FALLBACK_METRIC
+    metric = _pick_metric(_keyword_hits(sentence, sent_start, m.start, synonyms), unit, units)
     return Claim(
         value=value,
         span=(m.start, m.end),
@@ -166,9 +187,11 @@ def extract_claims(
     answer: str,
     known_entities: set[str] | frozenset[str] = frozenset(),
     metric_synonyms: dict[str, str] | None = None,
+    metric_units: dict[str, str | None] | None = None,
 ) -> Extraction:
     """Extract numeric claims from an answer, Tier 1 then Tier 2."""
     synonyms = DEFAULT_METRIC_SYNONYMS if metric_synonyms is None else metric_synonyms
+    units = DEFAULT_METRIC_UNITS if metric_units is None else metric_units
 
     citations = list(_CITATION_RE.finditer(answer))
     numbers = tokenize(answer, exclude=[c.span() for c in citations])
@@ -209,7 +232,7 @@ def extract_claims(
     for i, m in enumerate(numbers):
         if i in consumed:
             continue
-        claim = _resolve(answer, m, known_entities, synonyms)
+        claim = _resolve(answer, m, known_entities, synonyms, units)
         if claim.kind != "point" or claim.entity is None or claim.metric is None:
             unresolved.append(claim)
         else:

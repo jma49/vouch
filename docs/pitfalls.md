@@ -173,7 +173,7 @@ Reproduced 2026-09-27 against `testdata/receipts_golden.jsonl`.
 - **Cause:** `_nearest_keyword` picks the closest metric keyword
   ("trading at") regardless of the number's unit; the percentage
   fallback to `change_pct` only applies when no keyword is found.
-- **Status:** open. Reproduced 2026-09-27. Roadmap Phase 1. The README
+- **Status:** fixed in `fix(verifier): require a claim's unit to agree with its metric`. Reproduced 2026-09-27.
   example is phrased to avoid it.
 
 ### P-035 An integer followed by a comma keeps the comma in its span

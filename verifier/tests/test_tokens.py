@@ -105,3 +105,19 @@ def test_magnitude_needs_a_word_boundary() -> None:
     # "5 more" is not five million; "4 bars" is a period, not billions.
     assert [t.value for t in tokenize("5 more catalysts")] == [5]
     assert texts("over 4 bars") == []
+
+
+@pytest.mark.parametrize(
+    ("s", "text", "unit"),
+    [
+        ("dropped 1.35 percent", "1.35 percent", "pct"),
+        ("up 2 pct", "2 pct", "pct"),
+        ("closed at $181.52", "181.52", "USD"),
+        ("closed at USD 181.52", "181.52", "USD"),
+        ("closed at 181.52 USD", "181.52", "USD"),
+        ("closed at 181.52", "181.52", None),
+    ],
+)
+def test_units(s: str, text: str, unit: str | None) -> None:
+    (tok,) = tokenize(s)
+    assert (tok.text, tok.unit) == (text, unit)

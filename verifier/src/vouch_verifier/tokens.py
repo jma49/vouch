@@ -93,8 +93,12 @@ _MAGNITUDES = {
 _TOKEN_RE = re.compile(
     rf"(?<![\w.\-+/:])(?P<sign>[-+])?(?P<num>{_NUM})"
     r"(?P<mag>\s(?:thousand|million|mln|mn|billion|bn|trillion)\b|(?:bn|[kKmMbBtT])(?!\w))?"
-    r"(?P<pct>\s?%)?(?P<mult>[x\u00d7](?!\w))?"
+    r"(?P<pct>\s?%|\s(?:percent|per cent|pct)\b)?(?P<mult>[x\u00d7](?!\w))?"
 )
+
+# "$181.52", "USD 181.52", "181.52 USD": the currency marks a price.
+_CURRENCY_BEFORE_RE = re.compile(r"(?:\$|\bUSD\s?)$")
+_CURRENCY_AFTER_RE = re.compile(r"^\s?USD\b")
 
 
 @dataclass(frozen=True)
@@ -105,7 +109,7 @@ class NumberToken:
     end: int
     text: str
     value: float
-    unit: str | None  # "pct" or None
+    unit: str | None  # "pct", "USD", or None
     kind: Kind
     resolution: float  # unit of the last displayed digit: 0.1 for "62.3"
 
@@ -193,13 +197,19 @@ def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberT
         if m["sign"] == "-":
             value = -value
         kind: Kind = "multiple" if m["mult"] else "point"
+        unit = "pct" if m["pct"] else None
+        if unit is None and (
+            _CURRENCY_BEFORE_RE.search(text, 0, m.start())
+            or _CURRENCY_AFTER_RE.match(text[m.end() :])
+        ):
+            unit = "USD"
         tokens.append(
             NumberToken(
                 start=m.start(),
                 end=m.end(),
                 text=m.group(),
                 value=value,
-                unit="pct" if m["pct"] else None,
+                unit=unit,
                 kind=kind,
                 resolution=_resolution(m["num"]) * scale,
             )
