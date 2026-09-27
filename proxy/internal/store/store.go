@@ -10,7 +10,9 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -23,11 +25,26 @@ import (
 // are unique across the life of the log (replay protection, design
 // section 3.1).
 type Log struct {
-	mu   sync.Mutex
-	f    *os.File
-	path string
-	seen map[sessionTurn]string // -> receipt_id
+	mu     sync.Mutex
+	f      logFile
+	path   string
+	size   int64                  // bytes of complete, acknowledged lines
+	broken error                  // set when a failed append could not be rolled back
+	seen   map[sessionTurn]string // -> receipt_id
 }
+
+// logFile is the slice of *os.File the log uses; tests substitute a
+// failing implementation.
+type logFile interface {
+	io.ReadWriteSeeker
+	Sync() error
+	Truncate(size int64) error
+	Close() error
+}
+
+// stderr receives crash-recovery warnings; a variable so tests can
+// capture them.
+var stderr io.Writer = os.Stderr
 
 type sessionTurn struct {
 	session string
@@ -52,33 +69,63 @@ func Open(path string) (*Log, error) {
 	return l, nil
 }
 
+// rebuild indexes the existing log and recovers from a crash during
+// the last append. Append acknowledges a receipt only after its whole
+// line, newline included, is written and fsynced, so an unterminated
+// final line was never acknowledged: when it does not parse it is
+// residue of that crash and is truncated with a warning, and when it
+// does parse only its newline is missing and is restored. Any other
+// unparsable line cannot come from a crash and stays a hard error.
 func (l *Log) rebuild() error {
-	if _, err := l.f.Seek(0, 0); err != nil {
+	if _, err := l.f.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("store: seek: %w", err)
 	}
-	sc := bufio.NewScanner(l.f)
-	sc.Buffer(make([]byte, 0, 1<<20), 16<<20)
-	line := 0
-	for sc.Scan() {
-		line++
-		raw := bytes.TrimSpace(sc.Bytes())
+	br := bufio.NewReaderSize(l.f, 1<<20)
+	var off int64
+	for line := 1; ; line++ {
+		raw, err := br.ReadBytes('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return fmt.Errorf("store: read %s: %w", l.path, err)
+		}
 		if len(raw) == 0 {
-			continue
+			break
 		}
-		var r receipt.Receipt
-		if err := json.Unmarshal(raw, &r); err != nil {
-			return fmt.Errorf("store: %s line %d: %w", l.path, line, err)
+		terminated := raw[len(raw)-1] == '\n'
+		if body := bytes.TrimSpace(raw); len(body) > 0 {
+			var r receipt.Receipt
+			if err := json.Unmarshal(body, &r); err != nil {
+				if terminated {
+					return fmt.Errorf("store: %s line %d: %w", l.path, line, err)
+				}
+				if err := l.f.Truncate(off); err != nil {
+					return fmt.Errorf("store: truncate partial line %d of %s: %w", line, l.path, err)
+				}
+				fmt.Fprintf(stderr, "store: warning: %s line %d: dropped %d bytes of an unterminated, unparsable receipt left by an interrupted append (%v)\n",
+					l.path, line, len(raw), err)
+				break
+			}
+			key := sessionTurn{r.SessionID, r.TurnIndex}
+			if prev, dup := l.seen[key]; dup {
+				return fmt.Errorf("store: %s line %d: duplicate (session_id=%s, turn_index=%d), first seen as receipt %s",
+					l.path, line, r.SessionID, r.TurnIndex, prev)
+			}
+			l.seen[key] = r.ReceiptID
+			if !terminated {
+				if _, err := l.f.Write([]byte{'\n'}); err != nil {
+					return fmt.Errorf("store: terminate line %d of %s: %w", line, l.path, err)
+				}
+				if err := l.f.Sync(); err != nil {
+					return fmt.Errorf("store: fsync: %w", err)
+				}
+				off++
+			}
 		}
-		key := sessionTurn{r.SessionID, r.TurnIndex}
-		if prev, dup := l.seen[key]; dup {
-			return fmt.Errorf("store: %s line %d: duplicate (session_id=%s, turn_index=%d), first seen as receipt %s",
-				l.path, line, r.SessionID, r.TurnIndex, prev)
+		off += int64(len(raw))
+		if !terminated {
+			break
 		}
-		l.seen[key] = r.ReceiptID
 	}
-	if err := sc.Err(); err != nil {
-		return fmt.Errorf("store: scan %s: %w", l.path, err)
-	}
+	l.size = off
 	return nil
 }
 
@@ -104,14 +151,33 @@ func (l *Log) Append(r *receipt.Receipt) error {
 		return fmt.Errorf("store: duplicate (session_id=%s, turn_index=%d), first seen as receipt %s",
 			r.SessionID, r.TurnIndex, prev)
 	}
-	if _, err := l.f.Write(append(line, '\n')); err != nil {
-		return fmt.Errorf("store: append: %w", err)
+	if l.broken != nil {
+		return l.broken
+	}
+	line = append(line, '\n')
+	if _, err := l.f.Write(line); err != nil {
+		return l.rollback(fmt.Errorf("store: append: %w", err))
 	}
 	if err := l.f.Sync(); err != nil {
-		return fmt.Errorf("store: fsync: %w", err)
+		return l.rollback(fmt.Errorf("store: fsync: %w", err))
 	}
+	l.size += int64(len(line))
 	l.seen[key] = r.ReceiptID
 	return nil
+}
+
+// rollback truncates the log back to its last acknowledged line after
+// a failed append. Leaving a partial line would make the next append
+// land on it, corrupting a line in the middle of the log. The failed
+// receipt was never acknowledged (the call fails, invariant 2), so
+// removing it loses nothing. If the truncate fails too, the log can no
+// longer be appended to safely and refuses further appends.
+func (l *Log) rollback(cause error) error {
+	if err := l.f.Truncate(l.size); err != nil {
+		l.broken = fmt.Errorf("store: %s unusable after failed append: %w (rollback: %v)", l.path, cause, err)
+		return l.broken
+	}
+	return cause
 }
 
 // Close closes the underlying file.
