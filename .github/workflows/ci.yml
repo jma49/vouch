@@ -30,16 +30,24 @@ jobs:
         run: go build -o bin/vouch ./cmd/vouch
 
   python:
-    name: verifier + harness (python)
+    # Every supported interpreter: requires-python says >=3.11, and a
+    # 3.12-only construct once slipped past a 3.12-only CI (#48).
+    name: verifier + harness (python ${{ matrix.python }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       - name: Install
         run: pip install -e "verifier[dev]" -e "harness[dev]"
+      # Lint and formatting do not depend on the interpreter; run once.
       - name: Lint (ruff)
+        if: matrix.python == '3.12'
         run: |
           ruff check verifier harness
           ruff format --check verifier harness
@@ -50,11 +58,16 @@ jobs:
         run: mypy
         working-directory: harness
       - name: Test verifier
-        run: python -m pytest -q --cov=vouch_verifier --cov-report=term --cov-report=markdown-append:"$GITHUB_STEP_SUMMARY"
+        run: python -m pytest -q --cov=vouch_verifier --cov-report=term
         working-directory: verifier
       - name: Test harness
-        run: python -m pytest -q --cov=vouch_harness --cov-report=term --cov-report=markdown-append:"$GITHUB_STEP_SUMMARY"
+        run: python -m pytest -q --cov=vouch_harness --cov-report=term
         working-directory: harness
+      - name: Coverage summary
+        if: matrix.python == '3.12'
+        run: |
+          (cd verifier && coverage report --format=markdown) >> "$GITHUB_STEP_SUMMARY"
+          (cd harness && coverage report --format=markdown) >> "$GITHUB_STEP_SUMMARY"
 
   golden:
     name: cross-language golden log
