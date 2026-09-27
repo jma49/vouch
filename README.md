@@ -181,7 +181,7 @@ Measurement before features. Full plan with exit criteria in [`docs/roadmap.md`]
 | 1 | Verifier correctness on real prose | done |
 | 2 | Real evaluation: human-labeled claims from multiple models | tooling done, collecting data |
 | 3 | Integrity: Ed25519, hash-chained log, tamper suite, [threat model](docs/threat-model.md) | done |
-| 4 | Canonical JSON: specified contract, cross-language differential fuzzing (done); number-normalized fixture keys | in progress |
+| 4 | Canonical JSON: specified contract, cross-language differential fuzzing, number-normalized fixture keys | done |
 | 5 | Proxy protocol completeness and latency benchmarks | planned |
 
 ## Repository layout
