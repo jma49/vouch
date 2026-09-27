@@ -37,6 +37,7 @@ type Log struct {
 	size   int64                  // bytes of complete, acknowledged lines
 	broken error                  // set when a failed append could not be rolled back
 	seen   map[sessionTurn]string // -> receipt_id
+	next   map[string]int         // session_id -> its next turn_index
 	chain  chainState
 }
 
@@ -96,6 +97,7 @@ func Open(path string, signer *sign.Signer) (*Log, error) {
 	l := &Log{
 		f: f, path: path, signer: signer,
 		seen:  make(map[sessionTurn]string),
+		next:  make(map[string]int),
 		chain: chainState{head: receipt.Genesis},
 	}
 	if err := l.rebuild(); err != nil {
@@ -150,7 +152,7 @@ func (l *Log) rebuild() error {
 					return fmt.Errorf("store: %s line %d: duplicate (session_id=%s, turn_index=%d), first seen as receipt %s",
 						l.path, line, r.SessionID, r.TurnIndex, prev)
 				}
-				l.seen[key] = r.ReceiptID
+				l.index(r)
 			}
 			if !terminated {
 				if _, err := l.f.Write([]byte{'\n'}); err != nil {
@@ -192,11 +194,35 @@ func (c *chainState) accept(e *Entry) error {
 	return nil
 }
 
+// index records r as seen and advances its session's next turn.
+func (l *Log) index(r *receipt.Receipt) {
+	l.seen[sessionTurn{r.SessionID, r.TurnIndex}] = r.ReceiptID
+	if r.TurnIndex >= l.next[r.SessionID] {
+		l.next[r.SessionID] = r.TurnIndex + 1
+	}
+}
+
 // Append links, signs, appends, and fsyncs one receipt. It sets the
 // receipt's Link. It rejects (session_id, turn_index) reuse.
 func (l *Log) Append(r *receipt.Receipt) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.appendReceipt(r)
+}
+
+// AppendNextTurn is Append with the turn assigned by the log: the
+// receipt gets its session's next turn_index, one past the highest the
+// log holds for it. The proxy uses it, so a session reused after a
+// restart continues where it stopped instead of colliding with its own
+// earlier receipts (#69), and concurrent calls never race for a turn.
+func (l *Log) AppendNextTurn(r *receipt.Receipt) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r.TurnIndex = l.next[r.SessionID]
+	return l.appendReceipt(r)
+}
+
+func (l *Log) appendReceipt(r *receipt.Receipt) error {
 	key := sessionTurn{r.SessionID, r.TurnIndex}
 	if prev, dup := l.seen[key]; dup {
 		return fmt.Errorf("store: duplicate (session_id=%s, turn_index=%d), first seen as receipt %s",
@@ -211,7 +237,7 @@ func (l *Log) Append(r *receipt.Receipt) error {
 		return err
 	}
 	l.chain.receipts++
-	l.seen[key] = r.ReceiptID
+	l.index(r)
 	return nil
 }
 

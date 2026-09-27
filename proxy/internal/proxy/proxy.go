@@ -53,7 +53,6 @@ type Server struct {
 	Logf      func(format string, args ...any)
 
 	routes map[string]*Upstream
-	turn   int
 }
 
 func (s *Server) logf(format string, args ...any) {
@@ -283,7 +282,6 @@ func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int
 	r := &receipt.Receipt{
 		ReceiptID:         newID(),
 		SessionID:         s.SessionID,
-		TurnIndex:         s.turn,
 		ToolName:          tool,
 		ArgsCanonical:     argsCanon,
 		ResultCanonical:   resultCanon,
@@ -297,13 +295,10 @@ func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int
 		LogicalTime:       s.Clock.Tick(),
 		UpstreamLatencyMS: latencyMS,
 	}
-	// The log signs: the envelope's signature covers the exact bytes it
-	// writes (package sign).
-	if err := s.Log.Append(r); err != nil {
-		return err
-	}
-	s.turn++
-	return nil
+	// The log signs (the envelope's signature covers the exact bytes it
+	// writes, package sign) and assigns the turn, continuing a session
+	// already in the log (#69).
+	return s.Log.AppendNextTurn(r)
 }
 
 // isToolError reports whether an MCP tools/call result is flagged as a

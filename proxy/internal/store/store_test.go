@@ -298,3 +298,39 @@ func TestScannedLinesAreCanonical(t *testing.T) {
 		t.Fatalf("digest drift through log round trip:\nstored: %s\nrecomputed: %s", got[0].ResultDigest, d)
 	}
 }
+
+// TestAppendNextTurnContinuesASessionAcrossReopen pins #69: the log,
+// not the process, numbers a session's turns, so reusing a session id
+// after a restart continues it, and other sessions keep their own count.
+func TestAppendNextTurnContinuesASessionAcrossReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "receipts.jsonl")
+	appendNext := func(l *Log, session string) int {
+		t.Helper()
+		r := testReceipt(t, session, -1)
+		r.ReceiptID = "r-" + session + "-" + time.Now().Format(time.RFC3339Nano)
+		if err := l.AppendNextTurn(r); err != nil {
+			t.Fatal(err)
+		}
+		return r.TurnIndex
+	}
+	l, err := Open(path, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []int{appendNext(l, "s1"), appendNext(l, "s1"), appendNext(l, "s2")}; got[0] != 0 || got[1] != 1 || got[2] != 0 {
+		t.Fatalf("turns %v, want [0 1 0]", got)
+	}
+	if _, err := l.Seal("s1", time.Date(2026, 7, 25, 2, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	l.Close()
+
+	l, err = Open(path, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if got := []int{appendNext(l, "s1"), appendNext(l, "s2"), appendNext(l, "s3")}; got[0] != 2 || got[1] != 1 || got[2] != 0 {
+		t.Fatalf("turns after reopen %v, want [2 1 0]", got)
+	}
+}
