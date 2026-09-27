@@ -15,6 +15,7 @@ it can be judged.
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal
@@ -175,7 +176,10 @@ def _merge(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
 
 
 def _inside(pos: int, spans: Sequence[tuple[int, int]]) -> bool:
-    return any(s <= pos < e for s, e in spans)
+    """pos falls in one of spans, which must be sorted and non-overlapping
+    (as _merge returns them): a bisect, not a scan (#19)."""
+    i = bisect_right(spans, (pos, float("inf"))) - 1
+    return i >= 0 and spans[i][0] <= pos < spans[i][1]
 
 
 def _is_parameter(text: str, start: int, end: int) -> bool:
@@ -254,7 +258,7 @@ def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberT
         for m in rx.finditer(text):
             if _inside(m.start("a"), masked) or _inside(m.start("b"), masked):
                 continue
-            if _inside(m.start(), ranges):
+            if any(s <= m.start() < e for s, e in ranges):  # few ranges per answer
                 continue
             ranges.append(m.span())
             for g in ("a", "b"):
@@ -282,7 +286,9 @@ def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberT
         kind: Kind = "multiple" if m["mult"] else "point"
         unit = "pct" if m["pct"] else None
         if unit is None and (
-            _CURRENCY_BEFORE_RE.search(text, 0, m.start())
+            # Only the few characters before the number can be "$" or "USD ";
+            # searching the whole prefix made tokenization quadratic (#19).
+            _CURRENCY_BEFORE_RE.search(text, max(0, m.start() - 4), m.start())
             or _CURRENCY_AFTER_RE.match(text[m.end() :])
         ):
             unit = "USD"
