@@ -7,45 +7,47 @@ Snapshot of where work stands, for the next session. Overwrite
 
 ## Current state
 
-- **Phases 0 and 1 complete; Phase 2 tooling complete, data pending.**
-  Four stacked branches, each with a PR, none merged. Merge in order:
-  - `docs/agent-workflow` → `main` (PR #1)
-  - `chore/phase0-hygiene` → #1 (PR #2)
-  - `feat/phase1-verifier-prose` → #2 (PR #3)
-  - `feat/phase2-real-eval` → #3 (PR #4)
-- Phase 2 pipeline, all tested offline, plus the agent end to end through
-  the real Go proxy in CI:
-  - `vouch_harness.market`: synthetic market MCP server (8 real tickers,
-    generated data ending 2026-07-24).
-  - `vouch-agent` / `make agent`: any OpenAI-compatible model; cached,
-    resumable, `--dry-run` estimates requests.
-  - `vouch-label`: blind labeling UI (tested in a browser),
-    `docs/labeling.md`, Cohen's kappa.
-  - `vouch-eval-real` / `make eval-real`: verifier vs. labels, per-model
-    misreport rate.
-- Gemini: `gemini-3.8-flash` via the OpenAI-compatible endpoint works
-  end to end (one smoke run, 2 requests, cached in `eval/.cache`; the
-  run itself was not kept). `GEMINI_API_KEY` is set in the
-  maintainer's shell, so `make agent` will spend real requests.
-- Tests: verifier 247 + 1 xfail, harness 65, Go under `-race`.
+- **Phases 0 and 1 complete; Phase 2 tooling complete, data pending**
+  (the maintainer cannot provide Gemini runs for now; see memory).
+  Everything is merged to `main`; no open PRs.
+- **Audit 2026-09-27:** three parallel audits (proxy, verifier, harness)
+  plus fixes filed issues #8-#48, all closed. Fix PRs: #40, #41, #44,
+  #45, #46, #47, #49, #50, and this docs sync. Highlights:
+  - receipts now bind the whole result the agent received (#20);
+  - Go and Python canonical JSON agree on U+2028/2029, surrogates, and
+    duplicate keys, with "rejected" shared vectors (#9, #27);
+  - the proxy survives malformed frames, stray upstream output, and
+    crashes mid-append (#21-#28);
+  - the verifier handles Unicode minus, accounting negatives, tables,
+    lists, stacked citations, and cited signs (#8-#15, #39, #43);
+  - the harness survives malformed tool calls and transport errors;
+    the label server refuses cross-origin writes (#29-#38);
+  - extraction is linear (2000 sentences: 11.7 s to 0.3 s) (#19);
+  - CI tests Python 3.11-3.14 (#48).
+- Tests: verifier ~314 (+1 documented xfail), harness 115, Go under
+  `-race`. Corpus 166 cases.
+- Process lessons are in `docs/pitfalls.md` P-006 (stacked PR merges)
+  and P-007 (semantic conflicts between green PRs), and in AGENTS.md
+  (issue-first bugs, merge commits, test against current main).
 
 ## Next steps
 
-1. Maintainer: merge PRs #1-#4.
-2. Maintainer: approve and run the first Gemini pass. Suggested: start
-   with `make agent MODEL=gemini-flash ARGS="--samples 3"` (90 runs,
-   ~270 requests at 8/min, about 35 min), check a few answers, then
-   raise to 5 samples; completed runs and cached responses are reused.
-   Set `rpm` in `eval/models.yaml` to the account's real limit.
-3. Label with `vouch-label serve --labeler <name>`; target 200-300
-   claims. Commit `eval/runs/` and `eval/labels/`.
-4. Then: switch the README headline to `make eval-real` output (a
-   generated block), add providers, build the citation channel (P-044).
+1. Phase 2 data, when the maintainer can run a model:
+   `make agent MODEL=gemini-flash ARGS="--samples 3"` (dry-run first),
+   then label with `vouch-label serve`. Never run it without approval.
+2. Work that needs no model calls, in suggested order:
+   - Phase 3: Ed25519 signatures with key ids, hash chain
+     (`prev_digest`), tamper suite, `docs/threat-model.md`.
+   - Phase 4: decide JCS vs documented literal-preserving contract;
+     differential fuzzing Go <-> Python.
+   - Phase 5: concurrent upstream client (P-021), session resume
+     (P-020), server-to-client request forwarding (P-022).
+   - P-044: citation channel so agents can cite receipts.
 
 ## Open questions for the maintainer
 
-- Is committing Gemini outputs under `eval/runs/` acceptable? (Proposed:
-  yes; they are the evaluation's raw data and make it reproducible.)
+- Phase 2: when can a Gemini run happen, and is committing its outputs
+  under `eval/runs/` acceptable?
 - Phase 3: replace HMAC with Ed25519 outright, or support both?
 - Phase 4: implement real JCS, or document the literal-preserving
   contract and drop the RFC 8785 claim?
@@ -63,3 +65,6 @@ Snapshot of where work stands, for the next session. Overwrite
 - 2026-09-27: Phase 2 tooling: synthetic market server, provider-agnostic
   agent runner (Gemini smoke-tested), blind labeling tool (browser-tested;
   fixed a key-press race), real-eval scorer. Found P-044.
+- 2026-09-27: merged PRs #1-#7 (#2-#4 re-opened as #5-#7 after a stacked
+  merge closed them, P-006). Audit by three parallel agents; 35 issues
+  (32 from the audit, #8-#39; 3 found while fixing, #42, #43, #48) filed and fixed across 9 PRs.
