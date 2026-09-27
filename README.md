@@ -157,7 +157,7 @@ A Docker image carrying the whole pipeline is available via `docker compose run 
 
 vouch is an MVP. The most consequential gaps, each tracked with a reproduction in [`docs/pitfalls.md`](docs/pitfalls.md):
 
-- **Extraction is deterministic, English-only, and keyword-driven.** It handles dates, magnitudes, units, clause structure, and pronouns that open a sentence, measured by a 130-case adversarial corpus. It does not do general coreference, it reads a threshold (*"below the 70 overbought line"*) as a claim, and a ticker that no tool returned is left unjudged rather than flagged. The LLM fallback (Tier 3) is not built yet.
+- **Extraction is deterministic, English-only, and keyword-driven.** It handles dates, magnitudes, units, signs (including Unicode minus and accounting parentheses), clause structure, markdown tables and lists, and pronouns that open a sentence, measured by a 166-case adversarial corpus and property-based tests. It does not do general coreference, it reads a threshold (*"below the 70 overbought line"*) as a claim, and a ticker that no tool returned is left unjudged rather than flagged. The LLM fallback (Tier 3) is not built yet.
 - **The headline metrics are synthetic.** See the note under [Measured results](#measured-results); the real evaluation is Phase 2.
 - **Signatures are symmetric.** HMAC gives tamper evidence to key holders, not public verifiability, and the log has no hash chain yet, so deleted lines go undetected.
 - **Canonicalization is literal-preserving, not RFC 8785.** It is consistent across Go and Python, but `62.30` and `62.3` digest differently.

@@ -7,9 +7,37 @@ Format: **Symptom** / **Cause** / **Fix / workaround** / **Status**.
 "Reproduced" means observed by running code; "code reading" means
 inferred from source and not yet reproduced.
 
+Bugs are tracked as GitHub issues; this file keeps the traps worth
+remembering. The 2026-09-27 audit filed #8-#48; all are closed.
+
 ---
 
 ## Environment and build
+
+### P-006 Merging stacked PRs with --delete-branch closes the next PR
+- **Symptom:** after merging the bottom PR of a stack with
+  `gh pr merge --delete-branch`, the next PR is closed instead of
+  retargeted to `main`; merging it anyway lands it in the deleted base
+  branch, not in `main`.
+- **Cause:** the repository does not auto-delete head branches, so
+  GitHub does not retarget dependents; deleting a PR's base closes it.
+- **Fix / workaround:** merge a stack bottom-up without deleting
+  branches, or retarget each dependent PR to `main`
+  (`gh pr edit N --base main`) before deleting its base. Recovering
+  from it: push the original head commits to new branches and open
+  PRs against `main` (what #5-#7 did).
+- **Status:** by design (GitHub). Hit 2026-09-27.
+
+### P-007 PRs that pass CI separately can fail together
+- **Symptom:** two PRs are green; after one merges, the other fails CI
+  on the merge ref, or would break `main` if merged without a rerun.
+- **Cause:** a semantic conflict with no textual conflict: #40 pinned
+  "lone surrogates become U+FFFD" in the shared vectors while #46 made
+  Go reject them.
+- **Fix / workaround:** before merging a PR whose CI ran against an
+  older `main`, merge current `main` into it locally and run
+  `make build test lint readme-check` (AGENTS.md, Workflow).
+- **Status:** by design. Hit 2026-09-27 (#46).
 
 ### P-001 Stale Python venv after moving the repo
 - **Symptom:** `make test-py` or `vouch-eval` fails with
@@ -106,13 +134,15 @@ inferred from source and not yet reproduced.
   call in flight per upstream.
 - **Status:** open. Code reading. Roadmap Phase 5.
 
-### P-022 Server-to-client requests from an upstream break the call
-- **Symptom:** a `tools/call` fails with
-  `response id X does not match request id Y`.
-- **Cause:** an upstream request (sampling, roots, elicitation) has
-  both `method` and `id`, so `mcp.Client.Call` treats it as a
-  mismatched response.
-- **Status:** open. Code reading (`proxy/internal/mcp/mcp.go`).
+### P-022 Server-to-client requests from an upstream are dropped
+- **Symptom:** an upstream that needs sampling, roots, or elicitation
+  from the client never gets an answer.
+- **Cause:** the proxy does not forward server-to-client requests.
+  Before #22 such a request broke the pending call ("response id does
+  not match"); since then `mcp.Client.Call` skips it with a log line,
+  so calls survive but the request goes unanswered.
+- **Status:** partly fixed by #22 (calls no longer break); forwarding
+  is roadmap Phase 5.
 
 ### P-023 `--upstream` is split on whitespace
 - **Symptom:** upstream commands with quoted arguments or spaces in

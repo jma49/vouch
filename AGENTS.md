@@ -84,6 +84,17 @@ Breaking one of these is a bug even if every test passes.
   explaining *why* and what trade-off was made, not restating the diff.
   Reference the design or roadmap section when relevant. One logical
   change per commit; tests land in the same commit as the code.
+- **Bugs go through GitHub issues.** A bug found by an audit or while
+  working is filed first (English, with a reproduction and the
+  expected behavior), then fixed in a PR whose body says `Fixes #N`.
+  A fix that is out of scope for the current PR gets its own issue.
+- **Merging.** Use merge commits (`gh pr merge --merge`), never squash
+  or rebase: docs cite commit hashes, and rewriting them breaks the
+  citations. Before merging a PR whose CI ran against an older `main`,
+  merge current `main` into it locally and run
+  `make build test lint readme-check` (P-007). Merge a stack of PRs
+  bottom-up and retarget each dependent to `main` before deleting its
+  base branch (P-006).
 - **Before declaring done:** tests pass (including `-race` for Go),
   `gofmt -l` is empty, golden log is unchanged or intentionally
   regenerated, and the maintained docs below are updated.

@@ -119,6 +119,8 @@ Goal: the receipt log's security claims are true and tested.
 | Hash chain: each receipt carries `prev_digest`; deletion, truncation, reordering become detectable | todo |
 | Signed checkpoints (head digest + count) for sealing a session | todo |
 | Tamper test suite: delete, truncate, reorder, duplicate, edit fact, edit sig — each must be detected, in both Go and Python | todo |
+| Receipts bind the whole result the agent received, not only the extraction payload | done (#50, issue #20) |
+| Crash recovery: a partial final line is truncated on open; a failed append rolls back | done (#46, issue #25) |
 | `docs/threat-model.md`: attacker, assets, what is and is not protected | todo |
 
 Exit criteria: tamper suite green in both languages; design §3.1
@@ -137,6 +139,7 @@ proven by fuzzing rather than by a handful of vectors.
 | Pass the published JCS test vectors | todo |
 | Differential fuzzing: `go test -fuzz` corpus replayed through Python; Hypothesis-generated JSON replayed through Go; outputs byte-equal | todo |
 | Fuzz corpus committed; CI runs a short fuzz pass | todo |
+| Go and Python agree on strings JCS leaves to implementations: U+2028/U+2029 escaped; duplicate keys and lone surrogates rejected on both sides, pinned by shared vectors (including "rejected" vectors) | done (#40, #46; issues #9, #27) |
 
 Exit criteria: differential fuzz runs clean for a fixed budget in CI.
 
@@ -149,9 +152,10 @@ measured overhead.
 
 | Item | Status |
 |---|---|
+| Robustness from the 2026-09-27 audit: malformed frames answered not fatal, stray upstream output skipped, notifications never answered, tool errors carry no facts, bounded shutdown, unique upstream names | done (#46, issues #21-#28) |
 | Concurrent request handling: id-multiplexed upstream client, no head-of-line blocking | todo |
 | `notifications/cancelled` and progress forwarding | todo |
-| Server-to-client requests (sampling, roots, elicitation) forwarded, not treated as protocol errors | todo |
+| Server-to-client requests (sampling, roots, elicitation) forwarded, not treated as protocol errors | partial: no longer break calls (#46), not yet forwarded |
 | Protocol version negotiation with upstreams; `tools/list_changed` handling | todo |
 | Session resume: continue `turn_index` from the log when `--session` is reused | todo |
 | Streamable HTTP transport | todo |
