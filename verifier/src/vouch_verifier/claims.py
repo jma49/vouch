@@ -17,11 +17,12 @@ from __future__ import annotations
 
 import re
 from bisect import bisect_left, bisect_right
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 
 from vouch_verifier.tokens import MINUTE_TIMEFRAME, Kind, NumberToken, find_dates, tokenize
+from vouch_verifier.vocabulary import FINANCE, Vocabulary
 
 
 @dataclass(frozen=True)
@@ -78,58 +79,23 @@ _SENTENCE_SPLIT_RE = re.compile(r"[.!?](?:\s|$)|\n")
 _TABLE_ROW_RE = re.compile(r"^[ \t]*\|.*\|[ \t]*$")
 _TABLE_SEPARATOR_RE = re.compile(r"^[ \t]*\|(?:[ \t]*:?-{3,}:?[ \t]*\|)+[ \t]*$")
 
-# Deterministic keyword -> metric mapping, longest match first. This is
-# config in spirit; callers can pass their own table built from their
-# schemas' metric names.
-DEFAULT_METRIC_SYNONYMS: dict[str, str] = {
-    "macd histogram": "macd_hist",
-    "macd hist": "macd_hist",
-    "last price": "last_price",
-    "trading at": "last_price",
-    "rsi(14)": "rsi_14",
-    "closed at": "close_price",
-    "closing": "close_price",
-    "closed": "close_price",
-    "close": "close_price",
-    "opened at": "open_price",
-    "opened": "open_price",
-    "open": "open_price",
-    "volume": "volume",
-    "change": "change_pct",
-    "macd": "macd_hist",
-    "rsi": "rsi_14",
-    "last": "last_price",
-}
-
-# The unit each metric is reported in; metrics not listed have none. A
-# claim's unit must agree with its metric's: "1.35%" is never a price
-# and a bare "172.04" is never a day change. Like the synonym table,
-# callers can derive their own from their schemas.
-DEFAULT_METRIC_UNITS: dict[str, str | None] = {
-    "close_price": "USD",
-    "open_price": "USD",
-    "last_price": "USD",
-    "change_pct": "pct",
-}
-
-# Metrics that can be negative. Financial prose writes their negatives
-# in parentheses, "(1.35%)" (issue #10); for a metric that cannot be
-# negative (a price, RSI, volume), "(62.3)" is an aside and stays
-# positive.
-DEFAULT_SIGNED_METRICS: frozenset[str] = frozenset({"change_pct", "macd_hist"})
+# The finance vocabulary is the default; see vouch_verifier.vocabulary.
+# These names stay for callers that read the default tables.
+DEFAULT_METRIC_SYNONYMS: dict[str, str] = dict(FINANCE.synonyms)
+DEFAULT_METRIC_UNITS: dict[str, str | None] = dict(FINANCE.units)
+DEFAULT_SIGNED_METRICS: frozenset[str] = FINANCE.signed
 
 # "fell 1.35% to 172.04", "rose from 170 to 172.04": a bare number after
 # a move and "to" is the resulting price (issue #39). Only used when no
 # price keyword resolves it first, so "closed up 1.92% at 181.52" still
 # reads as the close.
 _MOVE_TARGET_RE = re.compile(r"(?:%|\d)\s+(?:to|at)\s+\$?$", re.IGNORECASE)
-_MOVE_TARGET_METRIC = "last_price"
 
-# A percentage with no percentage keyword is read as a day change when
-# the sentence talks about price or names no metric at all: "AMD is down
-# 1.35%", "NVDA closed up 1.92%". Next to a non-price metric ("volume
-# rose 12%") it is a change in that metric, which no receipt records.
-_PCT_FALLBACK_METRIC = "change_pct"
+# A percentage with no percentage keyword is read as the vocabulary's
+# pct_fallback (a day change, in finance) when the sentence talks about
+# a USD metric or names no metric at all: "AMD is down 1.35%", "NVDA
+# closed up 1.92%". Next to another metric ("volume rose 12%") it is a
+# change in that metric, which no receipt records.
 
 # "down 1.35%" claims -1.35, not 1.35 — without this, sign flips are
 # invisible to the matcher.
@@ -298,8 +264,7 @@ def _table_cell(
     answer: str,
     m: NumberToken,
     entities: set[str],
-    synonyms: dict[str, str],
-    units: dict[str, str | None],
+    vocab: Vocabulary,
 ) -> _Cell | None:
     """Resolve a number inside a markdown table body row, or None if it
     is not in one. Metric comes from the column header, entity from the
@@ -332,11 +297,11 @@ def _table_cell(
     heading = header[column] if column < len(header) else ""
 
     hits = [
-        synonyms[kw]
-        for kw in sorted(synonyms, key=len, reverse=True)
+        vocab.synonyms[kw]
+        for kw in sorted(vocab.synonyms, key=len, reverse=True)
         if re.search(r"(?<!\w)" + re.escape(kw) + r"(?!\w)", heading, re.IGNORECASE)
     ]
-    metric = _pick_metric(hits, m.unit, units) if hits else None
+    metric = _pick_metric(hits, m.unit, vocab) if hits else None
 
     def entity_in(text: str) -> str | None:
         found = _mentions(text, (0, len(text)), entities)
@@ -348,7 +313,7 @@ def _table_cell(
     return _Cell(entity, metric, dates[0][1] if dates else None)
 
 
-def _keyword_hits(answer: str, pos: int, scope: _Scope, table: dict[str, str]) -> list[str]:
+def _keyword_hits(answer: str, pos: int, scope: _Scope, table: Mapping[str, str]) -> list[str]:
     """Metrics named around the number, in the order they should be tried:
     the phrase by distance, then the rest of the clause before and after
     the number (nearest first), then earlier clauses of the sentence."""
@@ -374,16 +339,18 @@ def _unit_compatible(claim_unit: str | None, metric_unit: str | None) -> bool:
     return claim_unit == metric_unit
 
 
-def _pick_metric(hits: list[str], unit: str | None, units: dict[str, str | None]) -> str | None:
-    metric = next((h for h in hits if _unit_compatible(unit, units.get(h))), None)
-    if metric is None and unit == "pct" and (not hits or units.get(hits[0]) == "USD"):
-        metric = _PCT_FALLBACK_METRIC
+def _pick_metric(hits: list[str], unit: str | None, vocab: Vocabulary) -> str | None:
+    metric = next((h for h in hits if _unit_compatible(unit, vocab.units.get(h))), None)
+    if metric is None and unit == "pct" and (not hits or vocab.units.get(hits[0]) == "USD"):
+        metric = vocab.pct_fallback
     return metric
 
 
-def negated_by_parentheses(parenthesized: bool, value: float, metric: str | None) -> bool:
+def negated_by_parentheses(
+    parenthesized: bool, value: float, metric: str | None, vocab: Vocabulary = FINANCE
+) -> bool:
     """Whether "(1.35%)" is an accounting negative: only for a signed metric."""
-    return parenthesized and value > 0 and metric in DEFAULT_SIGNED_METRICS
+    return parenthesized and value > 0 and metric in vocab.signed
 
 
 def _negated_by_direction(answer: str, m: NumberToken, scope: _Scope) -> bool:
@@ -401,26 +368,25 @@ def _resolve(
     answer: str,
     m: NumberToken,
     known_entities: set[str] | frozenset[str],
-    synonyms: dict[str, str],
-    units: dict[str, str | None],
+    vocab: Vocabulary,
 ) -> Claim:
     """Attach entity and metric to one Tier 2 numeric token."""
     value, unit = m.value, m.unit
     scope = _scope(answer, m.start)
-    cell = _table_cell(answer, m, set(known_entities), synonyms, units)
+    cell = _table_cell(answer, m, set(known_entities), vocab)
     if cell is not None:
         entity, metric = cell.entity, cell.metric
     else:
         entity = _entity(answer, m.start, scope, set(known_entities))
-        metric = _pick_metric(_keyword_hits(answer, m.start, scope, synonyms), unit, units)
+        metric = _pick_metric(_keyword_hits(answer, m.start, scope, vocab.synonyms), unit, vocab)
     if (
         cell is None
         and metric is None
         and unit in (None, "USD")
         and _MOVE_TARGET_RE.search(answer, scope.phrase[0], m.start)
     ):
-        metric = _MOVE_TARGET_METRIC
-    if negated_by_parentheses(m.parenthesized and not m.signed, value, metric) or (
+        metric = vocab.move_target
+    if negated_by_parentheses(m.parenthesized and not m.signed, value, metric, vocab) or (
         _negated_by_direction(answer, m, scope)
     ):
         value = -value
@@ -453,12 +419,10 @@ def _citation_runs(answer: str, citations: list[re.Match[str]]) -> list[list[re.
 def extract_claims(
     answer: str,
     known_entities: set[str] | frozenset[str] = frozenset(),
-    metric_synonyms: dict[str, str] | None = None,
-    metric_units: dict[str, str | None] | None = None,
+    vocabulary: Vocabulary = FINANCE,
 ) -> Extraction:
-    """Extract numeric claims from an answer, Tier 1 then Tier 2."""
-    synonyms = DEFAULT_METRIC_SYNONYMS if metric_synonyms is None else metric_synonyms
-    units = DEFAULT_METRIC_UNITS if metric_units is None else metric_units
+    """Extract numeric claims from an answer, Tier 1 then Tier 2, reading
+    metric words with the given domain vocabulary."""
 
     citations = list(_CITATION_RE.finditer(answer))
     numbers = tokenize(answer, exclude=[c.span() for c in citations])
@@ -506,7 +470,7 @@ def extract_claims(
     for i, m in enumerate(numbers):
         if i in consumed:
             continue
-        claim = _resolve(answer, m, known_entities, synonyms, units)
+        claim = _resolve(answer, m, known_entities, vocabulary)
         if claim.kind != "point" or claim.entity is None or claim.metric is None:
             unresolved.append(claim)
         else:

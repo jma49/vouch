@@ -4,7 +4,7 @@
         --public-key vouch.pub.pem [--public-key ...] \
         [--require-sealed] [--expect-head sha256:...] \
         [--tolerances tolerance.yaml] [--format md|json|html] \
-        [--as-of 2026-07-20T15:00:00Z]
+        [--as-of 2026-07-20T15:00:00Z] [--vocabulary domain.yaml]
 
 Trusted Ed25519 public keys come from --public-key (repeatable, for key
 rotation) or, when none is given, from $VOUCH_PUBLIC_KEY (paths
@@ -20,6 +20,10 @@ act at that moment, so any receipt with later data is a look-ahead
 violation, and claims are judged only against data available then (a
 claim that matches only later data is STALE). A bare date means the end
 of that day.
+
+--vocabulary reads a domain's metric words, units, and signed metrics
+from YAML (vouch_verifier.vocabulary); the default is finance. See
+examples/analytics for a second domain.
 
 Exit codes: 0 when no claim fails; 1 when any claim is CONTRADICTED,
 UNSUPPORTED, or STALE, or, with --as-of, any receipt holds later data;
@@ -42,6 +46,7 @@ from vouch_verifier.receipts import ReceiptError, audit_log
 from vouch_verifier.report import build_report, to_html, to_json, to_markdown
 from vouch_verifier.signing import load_keyring
 from vouch_verifier.verdict import FAILURES
+from vouch_verifier.vocabulary import FINANCE, load_vocabulary
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -66,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         "--as-of",
         help="a backtest's simulated moment (ISO 8601): flag data from after it",
     )
+    p.add_argument("--vocabulary", help="domain vocabulary YAML (default: finance)")
     args = p.parse_args(argv)
 
     key_paths = args.public_key or [
@@ -93,13 +99,14 @@ def main(argv: list[str] | None = None) -> int:
         ).receipts
         tolerances = load_tolerances(args.tolerances) if args.tolerances else DEFAULT_TOLERANCES
         as_of = parse_moment(args.as_of) if args.as_of else None
+        vocabulary = load_vocabulary(args.vocabulary) if args.vocabulary else FINANCE
     except (OSError, UnicodeDecodeError, ReceiptError, ValueError) as e:
         print(f"vouch-verify: error: {e}", file=sys.stderr)
         return 2
 
     entities = {f.entity for r in receipts for f in r.facts if f.entity}
-    extraction = extract_claims(answer, known_entities=entities)
-    matched = match_claims(extraction, receipts, tolerances, as_of=as_of)
+    extraction = extract_claims(answer, known_entities=entities, vocabulary=vocabulary)
+    matched = match_claims(extraction, receipts, tolerances, as_of=as_of, vocabulary=vocabulary)
     lookahead = find_lookahead(receipts, as_of) if as_of is not None else []
     report = build_report(
         extraction,

@@ -29,8 +29,10 @@ from functools import cache
 from itertools import pairwise
 from typing import Any, TextIO
 
+from vouch_harness import stdio_server
+from vouch_harness.stdio_server import make_handler, tool_error, tool_result
+
 SERVER_NAME = "vouch-synthetic-market"
-PROTOCOL_VERSION = "2025-06-18"
 
 # Last trading day in the dataset; the data "as of" the evaluation.
 AS_OF_DAY = date(2026, 7, 24)
@@ -235,61 +237,23 @@ def call_tool(name: str, arguments: object) -> dict[str, Any]:
     read and recover from, not a protocol error."""
     handler = _HANDLERS.get(name)
     if handler is None:
-        return _tool_error(f"unknown tool {name!r}; available: {', '.join(sorted(_HANDLERS))}")
+        return tool_error(f"unknown tool {name!r}; available: {', '.join(sorted(_HANDLERS))}")
     tool = next(t for t in TOOLS if t["name"] == name)
     problem = _argument_error(tool, arguments)
     if problem is not None:
-        return _tool_error(problem)
+        return tool_error(problem)
     assert isinstance(arguments, dict)
     symbol = arguments["symbol"]
     if symbol not in _UNIVERSE:
-        return _tool_error(f"unknown symbol {symbol!r}; supported: {', '.join(sorted(_UNIVERSE))}")
-    payload = handler(**arguments)
-    return {
-        "content": [{"type": "text", "text": json.dumps(payload)}],
-        "structuredContent": payload,
-    }
+        return tool_error(f"unknown symbol {symbol!r}; supported: {', '.join(sorted(_UNIVERSE))}")
+    return tool_result(handler(**arguments))
 
 
-def _tool_error(message: str) -> dict[str, Any]:
-    return {"content": [{"type": "text", "text": message}], "isError": True}
-
-
-def handle(msg: dict[str, Any]) -> dict[str, Any] | None:
-    """Respond to one JSON-RPC message; None for notifications."""
-    method, msg_id = msg.get("method"), msg.get("id")
-    if msg_id is None:
-        return None
-    params = msg.get("params") or {}
-    if method == "initialize":
-        result: dict[str, Any] = {
-            "protocolVersion": params.get("protocolVersion", PROTOCOL_VERSION),
-            "capabilities": {"tools": {}},
-            "serverInfo": {"name": SERVER_NAME, "version": "0.1.0"},
-        }
-    elif method == "ping":
-        result = {}
-    elif method == "tools/list":
-        result = {"tools": TOOLS}
-    elif method == "tools/call":
-        result = call_tool(params.get("name", ""), params.get("arguments") or {})
-    else:
-        return {
-            "jsonrpc": "2.0",
-            "id": msg_id,
-            "error": {"code": -32601, "message": f"method {method!r} not found"},
-        }
-    return {"jsonrpc": "2.0", "id": msg_id, "result": result}
+handle = make_handler(SERVER_NAME, TOOLS, call_tool)
 
 
 def serve(stdin: TextIO, stdout: TextIO) -> None:
-    for line in stdin:
-        if not line.strip():
-            continue
-        reply = handle(json.loads(line))
-        if reply is not None:
-            stdout.write(json.dumps(reply) + "\n")
-            stdout.flush()
+    stdio_server.serve(handle, stdin, stdout)
 
 
 if __name__ == "__main__":

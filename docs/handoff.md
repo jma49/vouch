@@ -424,6 +424,24 @@ wrong in the stated way.
   leak nothing).
 - Cost: `title` tooltips are plain text and slow to appear.
 
+**A domain is two config files; finance stays the default** (#88)
+- Chosen: schemas gain a per-element `entity_ptr`; the verifier's
+  finance constants become a `Vocabulary` (synonyms, units, signed
+  metrics, percentage and move fallbacks) with finance as the default
+  and `--vocabulary` for others. The second domain is text-to-SQL over
+  a synthetic SQLite sales database, with the schema mapping known
+  column names.
+- Rejected: a pluggable extractor per domain (code where config
+  suffices); inferring the vocabulary from schemas' metric names (prose
+  says "sales" and "AOV", not `avg_order_value`).
+- Cost: a SQL result column under an unexpected alias is not receipted,
+  so the tool description tells the agent the canonical names. A
+  quarter named in prose ("in Q1") is not a date, so a correct claim
+  about an earlier quarter comes out STALE. One vocabulary per
+  verification run: an answer mixing domains needs a merged file.
+- Revisit when: a domain needs units beyond USD and percent (the
+  tokenizer would have to learn them).
+
 ### Evaluation
 
 - **Synthetic upstream with real tickers** (Phase 2). Chosen over

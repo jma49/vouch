@@ -33,7 +33,9 @@ type Schema struct {
 // FactMapping maps one JSON pointer to a Fact. When Each is set, Ptr
 // must address an array and the sub-mappings apply to every element
 // (one fact per bar in an OHLCV series, for example); sub-mapping
-// pointers are relative to the element.
+// pointers are relative to the element. EntityPtr, allowed only with
+// Each, names each element's entity (one region per row of a query
+// result, #88); without it every element takes the schema's entity.
 type FactMapping struct {
 	Ptr       string        `yaml:"ptr"`
 	Metric    string        `yaml:"metric"`
@@ -41,6 +43,7 @@ type FactMapping struct {
 	Timeframe string        `yaml:"timeframe"`
 	TolClass  string        `yaml:"tol_class"`
 	AsOfPtr   string        `yaml:"asof_ptr"` // per-element as_of, relative to the element
+	EntityPtr string        `yaml:"entity_ptr"`
 	Each      []FactMapping `yaml:"each"`
 }
 
@@ -102,6 +105,9 @@ func validateMappings(ms []FactMapping, nested bool) error {
 	for _, m := range ms {
 		if m.Ptr == "" {
 			return fmt.Errorf("fact mapping missing ptr")
+		}
+		if m.EntityPtr != "" && len(m.Each) == 0 {
+			return fmt.Errorf("ptr %s: entity_ptr applies only to an each mapping", m.Ptr)
 		}
 		switch {
 		case len(m.Each) > 0:
@@ -166,6 +172,13 @@ func (s *Schema) Extract(resultCanonical []byte) ([]receipt.Fact, error) {
 			return nil, fmt.Errorf("extract: ptr %s: each requires an array, got %T", m.Ptr, node)
 		}
 		for i, elem := range arr {
+			elemEntity := entity
+			if m.EntityPtr != "" {
+				// An element without its entity gets none rather than the
+				// schema's: attributing a row to the wrong entity would
+				// let a claim about one match another's value.
+				elemEntity = stringAt(elem, m.EntityPtr)
+			}
 			for _, sub := range m.Each {
 				elemAsOf := asOf
 				if sub.AsOfPtr != "" {
@@ -174,7 +187,7 @@ func (s *Schema) Extract(resultCanonical []byte) ([]receipt.Fact, error) {
 					}
 				}
 				absPtr := fmt.Sprintf("%s/%d%s", m.Ptr, i, sub.Ptr)
-				f, ok, err := factAt(elem, sub, absPtr, entity, elemAsOf)
+				f, ok, err := factAt(elem, sub, absPtr, elemEntity, elemAsOf)
 				if err != nil {
 					return nil, err
 				}

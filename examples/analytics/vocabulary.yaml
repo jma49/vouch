@@ -1,0 +1,19 @@
+# How analytics prose names the metrics of examples/analytics/schemas
+# (vouch-verify --vocabulary). Longer keywords win over shorter ones.
+synonyms:
+  revenue: revenue
+  sales: revenue
+  booked: revenue
+  orders: orders
+  order count: orders
+  average order value: avg_order_value
+  aov: avg_order_value
+  return rate: return_rate_pct
+  returns rate: return_rate_pct
+units:
+  revenue: USD
+  avg_order_value: USD
+  return_rate_pct: pct
+# No metric here can be negative, and a bare percentage names no metric:
+# "grew 4%" is a change nobody receipted, so it stays unresolved.
+signed: []
