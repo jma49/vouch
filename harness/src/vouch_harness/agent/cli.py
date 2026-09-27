@@ -5,9 +5,9 @@
 Each (model, task, sample) gets its own proxy session and run directory
 under --out. Completed runs are skipped and every model response is
 cached, so an interrupted or repeated invocation only pays for what it
-has not done yet. The receipt signing key defaults to a fixed, public
-evaluation key: these receipts prove integrity of the published eval
-data, not secrecy.
+has not done yet. Receipts are signed with $VOUCH_HMAC_KEY when set,
+else the public evaluation key (vouch_harness.signing), and each run's
+meta.json records the key id.
 """
 
 from __future__ import annotations
@@ -27,8 +27,8 @@ from vouch_harness.agent.llm import (
     load_models,
 )
 from vouch_harness.agent.runner import RunSpec, execute, load_tasks, run_dir
+from vouch_harness.signing import resolve_key
 
-EVAL_HMAC_KEY = "vouch-eval-key"
 _TURNS_ESTIMATE = 3  # typical requests per run: tool calls, then the answer
 
 
@@ -103,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"vouch-agent: {e}", file=sys.stderr)
         return 2
     client = CachedClient(inner, args.cache, identity=cache_identity(config))
-    env = {**os.environ, "VOUCH_HMAC_KEY": os.environ.get("VOUCH_HMAC_KEY", EVAL_HMAC_KEY)}
+    env = {**os.environ, "VOUCH_HMAC_KEY": resolve_key()}
 
     failed = run_batch(
         pending,

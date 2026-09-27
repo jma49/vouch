@@ -21,6 +21,7 @@ import yaml
 
 from vouch_harness.agent.llm import ChatClient, Message
 from vouch_harness.agent.mcp_client import RPCError, StdioMCPClient, ToolHost
+from vouch_harness.signing import key_id
 
 # The date the synthetic data ends on (vouch_harness.market.AS_OF_DAY).
 # Stating it lets the model read "latest" the same way the verifier does.
@@ -245,6 +246,9 @@ def execute(
         "prompt": spec.task.prompt,
         "sample": spec.sample,
         "session": spec.session,
+        # Which key signed receipts.jsonl, so scoring can tell a wrong
+        # key from a tampered log (vouch_harness.signing).
+        "key_id": key_id(env["VOUCH_HMAC_KEY"]) if "VOUCH_HMAC_KEY" in env else None,
         **asdict(result),
     }
     (d / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")

@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from vouch_harness import market
+from vouch_harness import market, signing
 from vouch_harness.agent import cli as agent_cli
 from vouch_harness.agent import llm, runner
 from vouch_harness.agent.llm import (
@@ -431,8 +431,18 @@ def test_execute_writes_a_run_directory_and_resumes(tmp_path: Path) -> None:
     meta = json.loads((d / "meta.json").read_text())
     assert meta["session"] == "fake.t01.s0" and meta["tool_calls"] == 1
     assert meta["finish_reason"] == "stop"
+    assert meta["key_id"] is None  # no signing key in this environment
     # A completed run is not repeated: the client has no replies left.
     assert runner.execute(spec, client, tmp_path, PROXY, ROOT / "schemas", {}, _in_process) == d
+
+
+def test_execute_records_the_signing_key_id(tmp_path: Path) -> None:
+    spec = runner.RunSpec("fake", runner.Task("t01", "q"), sample=0)
+    env = {"VOUCH_HMAC_KEY": "some-key"}
+    d = runner.execute(
+        spec, ScriptedClient([answer("ok")]), tmp_path, PROXY, ROOT, env, _in_process
+    )
+    assert json.loads((d / "meta.json").read_text())["key_id"] == signing.key_id("some-key")
 
 
 @pytest.mark.skipif(not PROXY.exists(), reason="proxy binary not built (make build)")
