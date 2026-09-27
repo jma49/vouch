@@ -414,6 +414,16 @@ wrong in the stated way.
   data with times.
 - Revisit when: a data source dates bars by their open.
 
+**HTML report: static, escaped, no scripts** (#86)
+- Chosen: one self-contained page; details on hover (`title`) and via a
+  link to each claim's table row; a letter per verdict beside each span
+  so color is not the only signal; light and dark themes.
+- Rejected: JavaScript tooltips or filtering (the page renders answers
+  and receipt strings, which are untrusted; no script means nothing to
+  inject into); external CSS or fonts (the report must open offline and
+  leak nothing).
+- Cost: `title` tooltips are plain text and slow to appear.
+
 ### Evaluation
 
 - **Synthetic upstream with real tickers** (Phase 2). Chosen over
