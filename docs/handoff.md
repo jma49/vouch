@@ -155,6 +155,29 @@ entry whenever a choice closes off an alternative (AGENTS.md).
 - `tools/list_changed` refreshes routes before the agent is told; a
   refresh that finds a name collision keeps the old routes and logs.
 
+**Streamable HTTP: one session per process, simple stream routing** (#79)
+- Chosen: `--listen` serves exactly one session; DELETE or a signal
+  ends it and seals the log, as EOF does on stdio. Every POSTed request
+  is answered on an event stream. Outgoing messages route by id
+  (responses), by progressToken (progress), else to the GET stream,
+  else to the newest open POST stream. Browser origins must be
+  loopback; there is no authentication. Upstreams at a URL get
+  per-upstream headers, `env:VAR` values read from the environment.
+- Rejected: many sessions per process (a session is one log, one turn
+  sequence, one seal; several would need per-session logs and a
+  different CLI); stream resumability via Last-Event-ID (buffering and
+  replay for a case the proxy's clients rarely hit); relating
+  server-to-client requests to the POST that caused them (upstreams do
+  not say which request a sampling call belongs to).
+- Cost: a second agent needs a second proxy. A dropped stream loses
+  its response (the call is still receipted: it happened). With no
+  stream open, an unprompted notification is dropped and a forwarded
+  request fails. Anyone who can reach a non-loopback `--listen` can
+  make receipted calls.
+- Revisit when: an agent framework needs several sessions or
+  resumption, or the proxy is exposed beyond one machine (then add
+  authentication first).
+
 **Durability over latency: one fsync per receipt** (#77)
 - Measured: on an M1 Pro, the proxy adds about 4.9 ms p50 and 8 ms p99
   per call, of which the signed, fsynced append is about 4.1 ms p50.

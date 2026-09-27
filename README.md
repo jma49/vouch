@@ -166,6 +166,17 @@ vouch-eval --receipts ./receipts/receipts.jsonl --n 10 --public-key ~/.vouch/vou
 echo '{"b": 1.50, "a": [1e2]}' | ./proxy/bin/vouch canon    # {"a":[1e2],"b":1.50}
 ```
 
+Upstreams can be remote, and the agent can reach the proxy over HTTP instead of stdio (MCP's Streamable HTTP transport):
+
+```bash
+export MARKET_TOKEN=...   # read by name, so it never appears in the process list
+./proxy/bin/vouch proxy --signing-key ~/.vouch/vouch.pem --listen 127.0.0.1:8765 \
+    --upstream "market=https://mcp.example.com/mcp" \
+    --upstream-header "market=Authorization: env:MARKET_TOKEN" \
+    --receipts ./receipts --schemas ./schemas
+# point the agent at http://127.0.0.1:8765/mcp; ending the session (DELETE) or Ctrl-C seals the log
+```
+
 Record once, then replay deterministically with no network access:
 
 ```bash
@@ -183,7 +194,7 @@ vouch is an MVP. The most consequential gaps, each tracked with a reproduction i
 - **The headline metrics are synthetic.** See the note under [Measured results](#measured-results); the real evaluation is Phase 2.
 - **Cutting a log's tail needs an outside witness to detect.** Receipts are signed with Ed25519 and hash-chained, so edits, deletions, and reordering are detected, and a cleanly ended session is sealed with a signed checkpoint. But a log cut back to an earlier checkpoint is still a valid chain; only a head digest kept elsewhere (`--expect-head`) reveals it. What the receipts do and do not protect, and against whom, is in the [threat model](docs/threat-model.md).
 - **Canonicalization is vouch's own, not RFC 8785**, on purpose: number literals are kept exactly as a tool wrote them, so `62.30` and `62.3` digest differently. The rules are specified in [`docs/canonical-json.md`](docs/canonical-json.md), pinned across Go and Python by shared vectors, and differentially fuzzed between the two.
-- **The proxy federates tools, over stdio.** Calls run concurrently, and cancellation, progress, `tools/list_changed`, and sampling/roots/elicitation requests pass through, but resources and prompts are not federated, and there is no HTTP transport yet.
+- **The proxy federates tools only.** Calls run concurrently over stdio or Streamable HTTP, and cancellation, progress, `tools/list_changed`, and sampling/roots/elicitation requests pass through, but resources and prompts are not federated. Over HTTP, one proxy process serves one session, and streams are not resumable.
 
 ## Roadmap
 
@@ -196,7 +207,7 @@ Measurement before features. Full plan with exit criteria in [`docs/roadmap.md`]
 | 2 | Real evaluation: human-labeled claims from multiple models | tooling done, collecting data |
 | 3 | Integrity: Ed25519, hash-chained log, tamper suite, [threat model](docs/threat-model.md) | done |
 | 4 | Canonical JSON: specified contract, cross-language differential fuzzing, number-normalized fixture keys | done |
-| 5 | Proxy protocol completeness, reference-server integration tests, latency benchmarks | in progress: HTTP transport left |
+| 5 | Proxy protocol completeness, Streamable HTTP, reference-server integration tests, latency benchmarks | done |
 
 ## Repository layout
 

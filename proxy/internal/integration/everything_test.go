@@ -5,15 +5,20 @@
 //
 // The reference server is @modelcontextprotocol/server-everything,
 // installed at a pinned version by `make integration`, which points
-// $VOUCH_MCP_EVERYTHING at it. Without that variable the tests skip.
+// $VOUCH_MCP_EVERYTHING at its entry script (run with node). Without
+// that variable the tests skip.
 package integration
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -90,20 +95,29 @@ type session struct {
 	stop    func() error
 }
 
-// start spawns the reference server behind a proxy, exactly as `vouch
+// start puts the reference server behind a proxy, exactly as `vouch
 // proxy --upstream` does, and initializes it as an agent offering
-// sampling, roots, and elicitation.
-func start(t *testing.T) *session {
+// sampling, roots, and elicitation. Over stdio the proxy spawns the
+// server and the agent talks to the proxy through pipes; over HTTP the
+// server runs in its Streamable HTTP mode and the agent reaches the
+// proxy through vouch's own HTTP server transport, so both of vouch's
+// HTTP sides meet a real SDK or each other.
+func start(t *testing.T, overHTTP bool) *session {
 	t.Helper()
-	command := os.Getenv("VOUCH_MCP_EVERYTHING")
-	if command == "" {
+	script := os.Getenv("VOUCH_MCP_EVERYTHING")
+	if script == "" {
 		t.Skip("VOUCH_MCP_EVERYTHING is not set; run `make integration`")
 	}
-	specs, err := proxy.ParseUpstreams([]string{"everything=" + command})
+	// Quoted as --upstream would be: the path may contain spaces.
+	upstream := "node '" + strings.ReplaceAll(script, "'", `'\''`) + "' stdio"
+	if overHTTP {
+		upstream = serveEverythingHTTP(t, script)
+	}
+	specs, err := proxy.ParseUpstreams([]string{"everything=" + upstream})
 	if err != nil {
 		t.Fatal(err)
 	}
-	up, err := proxy.Spawn(specs[0])
+	up, err := proxy.Connect(specs[0], nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,17 +129,29 @@ func start(t *testing.T) *session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	downIn, agentOut := io.Pipe()
-	downOut, proxyOut := io.Pipe()
+	var down mcp.Transport
+	var agentSide mcp.Transport
+	var hangUp func()
+	if overHTTP {
+		hs := mcp.NewHTTPServer(t.Logf)
+		web := httptest.NewServer(hs)
+		t.Cleanup(web.Close)
+		hc := mcp.NewHTTPClient(web.URL, nil, t.Logf)
+		down, agentSide, hangUp = hs, hc, func() { hc.Close() }
+	} else {
+		downIn, agentOut := io.Pipe()
+		downOut, proxyOut := io.Pipe()
+		down, agentSide, hangUp = mcp.NewConn(downIn, proxyOut), mcp.NewConn(downOut, agentOut), func() { agentOut.Close() }
+	}
 	srv := &proxy.Server{
-		Down: mcp.NewConn(downIn, proxyOut), Upstreams: []*proxy.Upstream{up},
+		Down: down, Upstreams: []*proxy.Upstream{up},
 		Log: rlog, SessionID: "s-everything", Clock: &clock.Wall{}, Logf: t.Logf,
 	}
 	done := make(chan error, 1)
 	go func() { done <- srv.Run() }()
 
 	a := &agent{}
-	client := mcp.NewClient(mcp.NewConn(downOut, agentOut))
+	client := mcp.NewClient(agentSide)
 	client.Logf = t.Logf
 	client.Handle(a)
 	res, err := client.Call("initialize", map[string]any{
@@ -152,7 +178,7 @@ func start(t *testing.T) *session {
 	var stopErr error
 	s := &session{client: client, agent: a, logPath: logPath, log: rlog, stop: func() error {
 		once.Do(func() {
-			agentOut.Close()
+			hangUp()
 			stopErr = <-done
 			if err := up.Close(); err != nil {
 				t.Logf("closing the reference server: %v", err)
@@ -193,7 +219,15 @@ func eventually(t *testing.T, what string, cond func() bool) {
 // call beside a fast one, a cancelled call, and finally the receipt
 // log's integrity.
 func TestEverythingServer(t *testing.T) {
-	s := start(t)
+	for _, tc := range []struct {
+		name     string
+		overHTTP bool
+	}{{"stdio", false}, {"streamable HTTP", true}} {
+		t.Run(tc.name, func(t *testing.T) { everything(t, start(t, tc.overHTTP)) })
+	}
+}
+
+func everything(t *testing.T, s *session) {
 	ctx := context.Background()
 
 	// The server registers client-dependent tools after initialized
@@ -309,4 +343,32 @@ func TestEverythingServer(t *testing.T) {
 			t.Fatalf("structured result receipted from %s", r.PayloadSource)
 		}
 	}
+}
+
+// serveEverythingHTTP runs the reference server in its Streamable HTTP
+// mode on a free loopback port and returns its endpoint URL.
+func serveEverythingHTTP(t *testing.T, script string) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	cmd := exec.Command("node", script, "streamableHttp")
+	cmd.Env = append(os.Environ(), fmt.Sprintf("PORT=%d", port))
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	eventually(t, "the reference server to listen", func() bool {
+		c, err := net.Dial("tcp", addr)
+		if err == nil {
+			c.Close()
+		}
+		return err == nil
+	})
+	return "http://" + addr + "/mcp"
 }

@@ -1,9 +1,8 @@
-// Package mcp implements the minimal slice of MCP the proxy needs:
-// JSON-RPC 2.0 messages over a newline-delimited stdio transport, plus
-// a multiplexing client for talking to upstream servers. Stdlib only — the
-// federation surface (initialize, tools/list, tools/call) is small
-// enough that an SDK would cost more than it saves (docs/design.md
-// section 12).
+// Package mcp implements the slice of MCP the proxy needs: JSON-RPC 2.0
+// messages over MCP's two transports, newline-delimited stdio and
+// Streamable HTTP, plus a multiplexing client for talking to upstream
+// servers. Stdlib only: the federation surface is small enough that an
+// SDK would cost more than it saves (docs/design.md section 12).
 package mcp
 
 import (
@@ -67,6 +66,15 @@ type FrameError struct {
 
 func (e *FrameError) Error() string { return "mcp: bad frame: " + e.Err.Error() }
 func (e *FrameError) Unwrap() error { return e.Err }
+
+// Transport carries JSON-RPC messages to and from one peer. *Conn is
+// the stdio transport; HTTPClient and HTTPServer carry MCP's Streamable
+// HTTP transport. Read returns io.EOF when the peer is gone for good; a
+// *FrameError is one unusable message, after which reading continues.
+type Transport interface {
+	Read() (*Message, error)
+	Write(m *Message) error
+}
 
 // IsNotification reports whether m is a notification (no id).
 func (m *Message) IsNotification() bool {
@@ -213,7 +221,7 @@ type Client struct {
 	// Logf reports frames the client skips; nil means log.Printf.
 	Logf func(format string, args ...any)
 
-	conn      *Conn
+	conn      Transport
 	startOnce sync.Once
 
 	mu       sync.Mutex
@@ -225,7 +233,7 @@ type Client struct {
 }
 
 // NewClient wraps an established connection.
-func NewClient(conn *Conn) *Client {
+func NewClient(conn Transport) *Client {
 	return &Client{
 		conn:    conn,
 		pending: make(map[string]chan reply),
