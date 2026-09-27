@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jma49/vouch/proxy/internal/mcp"
+	"github.com/jma49/vouch/proxy/internal/store"
 )
 
 // TestBadFramesAreAnsweredAndServingContinues pins JSON-RPC 2.0
@@ -38,6 +39,53 @@ func TestBadFramesAreAnsweredAndServingContinues(t *testing.T) {
 			}
 			if _, err := s.agent.Call("ping", nil); err != nil {
 				t.Fatalf("ping after bad frame: %v", err)
+			}
+		})
+	}
+}
+
+// TestNoReplyWithoutRequest pins JSON-RPC 2.0 section 4.1: a
+// notification is never answered, and a tools/call notification is not
+// executed (the agent could never see its result, so a receipt for it
+// would attest to data nobody received). A message without a method is
+// not a request and gets no reply either.
+func TestNoReplyWithoutRequest(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+	}{
+		{"tools/call notification", `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_indicators","arguments":{"symbol":"NVDA"}}}`},
+		{"ping notification", `{"jsonrpc":"2.0","method":"ping"}`},
+		{"initialize notification", `{"jsonrpc":"2.0","method":"initialize","params":{}}`},
+		{"tools/list notification", `{"jsonrpc":"2.0","method":"tools/list"}`},
+		{"unknown notification", `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{}}`},
+		{"response from agent", `{"jsonrpc":"2.0","id":5,"result":{}}`},
+		{"error response from agent", `{"jsonrpc":"2.0","id":6,"error":{"code":-1,"message":"no"}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := startSession(t)
+			if _, err := s.agent.Call("initialize", map[string]any{"protocolVersion": "2025-06-18"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.WriteString(s.send, tc.line+"\n"+`{"jsonrpc":"2.0","id":"after","method":"ping"}`+"\n"); err != nil {
+				t.Fatal(err)
+			}
+			m, err := s.raw.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(m.ID) != `"after"` {
+				t.Fatalf("first reply is %+v (id %s), want the ping reply", m, m.ID)
+			}
+			s.shutdown()
+
+			receipts, err := store.Scan(s.logPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(receipts) != 0 {
+				t.Fatalf("got %d receipts, want none", len(receipts))
 			}
 		})
 	}
