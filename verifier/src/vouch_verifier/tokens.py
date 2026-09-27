@@ -63,6 +63,9 @@ _PERIOD_UNIT = (
     r"(?:days?|weeks?|months?|years?|sessions?|hours?|minutes?|mins?|quarters?|periods?|bars?)"
 )
 
+# A minute chart timeframe: "15m chart", "5 min candles" (issue #11).
+MINUTE_TIMEFRAME = r"\b\d+\s?(?:m|min)\b(?=[\s-]+(?:charts?|candles?|bars?|timeframe|interval))"
+
 # Spans that are structure, not claims. A pattern with a group named
 # "m" masks only that group. Order does not matter; overlaps are merged.
 _MASKS = [
@@ -85,8 +88,17 @@ _MASKS = [
     re.compile(r"\b\d+(?:st|nd|rd|th)\b", re.IGNORECASE),
     # Period lengths: 50-day, 52-week, 5 sessions, 14 days
     re.compile(rf"\b\d+(?:\.\d+)?[-\s]{_PERIOD_UNIT}\b", re.IGNORECASE),
-    # Chart timeframes: 1d, 4h, 1w
+    # Chart timeframes: 1d, 4h, 1w; and minute charts, "15m chart", only
+    # when a chart word follows, since "52.4m shares" is 52.4 million
     re.compile(r"\b\d+[hdw]\b"),
+    re.compile(MINUTE_TIMEFRAME, re.IGNORECASE),
+    # Indicator parameters: "RSI (14)", "MACD(12, 26, 9)"; the unspaced
+    # single-argument form is also caught by _is_parameter
+    re.compile(
+        r"\b(?:rsi|ema|sma|wma|ma|atr|adx|cci|roc|mfi|macd|stoch(?:astic)?|bollinger|bb)"
+        r"\s*\(\s*\d+(?:\s*,\s*\d+)*\s*\)",
+        re.IGNORECASE,
+    ),
 ]
 
 # Ranges: "60-65", "between 60 and 65". "from 55 to 62" is deliberately

@@ -197,6 +197,18 @@ cases:
   - text: NVDA closed at (181.52).
     expect: ["181.52 -> SUPPORTED (NVDA close_price)"]
 
+  # --- indicator parameters and minute timeframes (#11) ---
+  - text: NVDA RSI (14) is 62.3.
+    expect: ["62.3 -> SUPPORTED (NVDA rsi_14)"]
+  - text: NVDA MACD (12, 26, 9) histogram is -0.42.
+    expect: ["-0.42 -> SUPPORTED (NVDA macd_hist)"]
+  - text: On the 15m chart, NVDA RSI is 62.3.
+    expect: ["62.3 -> UNSUPPORTED (NVDA rsi_14)"]
+  - text: NVDA RSI on 5 min candles is 62.3.
+    expect: ["62.3 -> UNSUPPORTED (NVDA rsi_14)"]
+  - text: AMD volume was 52.4m shares.
+    expect: ["52.4m -> SUPPORTED (AMD volume)"]
+
   # --- dates, times, quarters, ordinals, periods are not claims ---
   - text: As of 2026-07-24, NVDA closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]

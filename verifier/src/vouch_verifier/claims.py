@@ -19,7 +19,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from vouch_verifier.tokens import Kind, NumberToken, find_dates, tokenize
+from vouch_verifier.tokens import MINUTE_TIMEFRAME, Kind, NumberToken, find_dates, tokenize
 
 
 @dataclass(frozen=True)
@@ -129,7 +129,10 @@ _PHRASE_SPLIT_RE = re.compile(
 )
 
 # Chart timeframe named in the clause: "on the hourly chart", "1d RSI".
-_TIMEFRAME_RE = re.compile(r"\b(?:(?P<word>hourly|daily|weekly)|(?P<n>\d+)(?P<u>[hdw]))\b", re.I)
+_TIMEFRAME_RE = re.compile(
+    rf"\b(?:(?P<word>hourly|daily|weekly)|(?P<n>\d+)(?P<u>[hdw]))\b|(?P<min>{MINUTE_TIMEFRAME})",
+    re.I,
+)
 _TIMEFRAME_WORDS = {"hourly": "1h", "daily": "1d", "weekly": "1w"}
 
 # A sentence that opens with one of these, and names no entity itself,
@@ -235,6 +238,10 @@ def _timeframe(answer: str, scope: _Scope) -> str | None:
         return None
     if m["word"]:
         return _TIMEFRAME_WORDS[m["word"].lower()]
+    if m["min"]:
+        digits = re.match(r"\d+", m["min"])
+        assert digits is not None  # MINUTE_TIMEFRAME starts with digits
+        return f"{int(digits[0])}m"
     return f"{m['n']}{m['u'].lower()}"
 
 
