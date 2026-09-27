@@ -258,14 +258,11 @@ func (c *Client) Call(method string, params any) (json.RawMessage, error) {
 // late response is discarded, and ctx's error is returned.
 func (c *Client) CallContext(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	c.Start()
-	req := &Message{Method: method}
-	if params != nil {
-		raw, err := json.Marshal(params)
-		if err != nil {
-			return nil, fmt.Errorf("mcp: marshal params: %w", err)
-		}
-		req.Params = raw
+	raw, err := marshalParams(params)
+	if err != nil {
+		return nil, err
 	}
+	req := &Message{Method: method, Params: raw}
 	done := make(chan reply, 1)
 	c.mu.Lock()
 	if c.closeErr != nil {
@@ -469,13 +466,28 @@ func (c *Client) logf(format string, args ...any) {
 
 // Notify sends a notification (no response expected).
 func (c *Client) Notify(method string, params any) error {
-	m := &Message{Method: method}
-	if params != nil {
-		raw, err := json.Marshal(params)
-		if err != nil {
-			return fmt.Errorf("mcp: marshal params: %w", err)
-		}
-		m.Params = raw
+	raw, err := marshalParams(params)
+	if err != nil {
+		return err
 	}
-	return c.conn.Write(m)
+	return c.conn.Write(&Message{Method: method, Params: raw})
+}
+
+// marshalParams encodes params, or returns nil to omit them. JSON-RPC
+// params are a structured value or absent, never null, and the official
+// SDK drops a message with "params":null. A proxy forwarding a message
+// that had none holds a nil json.RawMessage, which as an `any` is not
+// nil and marshals to null (#74), so null is omitted whatever its source.
+func marshalParams(params any) (json.RawMessage, error) {
+	if params == nil {
+		return nil, nil
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: marshal params: %w", err)
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), nullID) {
+		return nil, nil
+	}
+	return raw, nil
 }
