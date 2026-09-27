@@ -4,7 +4,7 @@ Implementation mirrors the Go side: parse with number-literal
 preservation, then walk the tree with an explicit recursive writer.
 (A json.JSONEncoder subclass is not used deliberately: CPython's
 C-accelerated encoder bypasses __repr__ overrides on float subclasses,
-which silently reformats numbers.) The rules are vouch canonical JSON v1
+which silently reformats numbers.) The rules are vouch canonical JSON v2
 (docs/canonical-json.md), deliberately not RFC 8785: JCS rewrites
 numbers as doubles, and a receipt must record the numbers a tool
 actually returned. Cross-language behavior is pinned by
@@ -35,7 +35,7 @@ def parse_preserving(raw: str | bytes) -> object:
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8")
     try:
-        return json.loads(
+        tree = json.loads(
             raw,
             parse_float=_NumberLiteral,
             parse_int=_NumberLiteral,
@@ -43,6 +43,31 @@ def parse_preserving(raw: str | bytes) -> object:
         )
     except json.JSONDecodeError as e:
         raise ValueError(f"canonicalize: parse: {e}") from e
+    except RecursionError as e:
+        # json recurses per level; past the interpreter's limit this is
+        # just a document deeper than MAX_DEPTH (#62).
+        raise ValueError(f"canonicalize: nested deeper than {MAX_DEPTH} levels") from e
+    _check_depth(tree)
+    return tree
+
+
+# The deepest nesting of arrays and objects accepted, as in Go
+# (receipt.MaxDepth, docs/canonical-json.md rule 1). Without a shared
+# limit Go accepted 10000 levels while CPython raised RecursionError
+# near 1000, which is not a ValueError and crashed the verifier (#62).
+MAX_DEPTH = 256
+
+
+def _check_depth(tree: object) -> None:
+    # Iterative, so checking cannot itself hit the recursion limit.
+    stack: list[tuple[object, int]] = [(tree, 0)]
+    while stack:
+        value, depth = stack.pop()
+        if isinstance(value, dict | list):
+            if depth == MAX_DEPTH:
+                raise ValueError(f"canonicalize: nested deeper than {MAX_DEPTH} levels")
+            children = value.values() if isinstance(value, dict) else value
+            stack.extend((child, depth + 1) for child in children)
 
 
 def serialize(value: object) -> str:

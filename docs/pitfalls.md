@@ -92,7 +92,7 @@ remembering. The 2026-09-27 audit filed #8-#48; all are closed.
 - **Symptom:** `62.30` and `62.3` in an upstream result produce
   different digests and signatures; an off-the-shelf JCS library does
   not reproduce vouch digests.
-- **Cause:** vouch canonical JSON v1 copies number literals exactly
+- **Cause:** vouch canonical JSON copies number literals exactly
   (docs/canonical-json.md), because a receipt must record what the tool
   returned. JCS would rewrite them as doubles.
 - **Fix / workaround:** do not assume numerically equal payloads share
@@ -118,6 +118,28 @@ remembering. The 2026-09-27 audit filed #8-#48; all are closed.
 - **Status:** fixed: hash chain and signed checkpoints (#54). Tail truncation to an earlier checkpoint remains detectable only against an external head digest (`--expect-head`); see docs/threat-model.md, "Not protected".
 
 ---
+
+### P-013 `json.Decoder.More()` is not a trailing-data check (Go)
+- **Symptom:** `Canonicalize("0}")` returned `0`; Python refused it.
+- **Cause:** `More` reports whether another element follows *inside
+  the current array or object*; before `}` or `]` it returns false, so
+  a stray closing bracket after the top-level value passed as "nothing
+  more".
+- **Fix / workaround:** check that only whitespace remains after
+  `dec.InputOffset()`.
+- **Status:** fixed (#61). Reproduced; found by the differential test.
+
+### P-014 CPython's `json` raises `RecursionError`, not `ValueError`
+- **Symptom:** `canonicalize(b"[" * 1500 + b"]" * 1500)` crashed the
+  verifier with a traceback; Go accepted the same document.
+- **Cause:** `json.loads` recurses per nesting level, and past the
+  interpreter's limit raises `RecursionError`, which `except
+  ValueError` does not catch. Go's decoder stops at 10000 levels, so
+  the two disagreed on every depth in between.
+- **Fix / workaround:** canonical JSON v2 sets a 256-level limit that
+  both sides enforce; Python also maps `RecursionError` to `ValueError`.
+- **Status:** fixed (#62). Reproduced; found by probing edge cases while
+  building the differential test.
 
 ## Proxy
 

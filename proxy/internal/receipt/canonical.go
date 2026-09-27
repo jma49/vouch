@@ -1,12 +1,12 @@
 // Package receipt implements vouch's receipt model: canonical JSON
 // serialization and fact-carrying receipts. Signing is package sign.
 //
-// Canonicalize implements vouch canonical JSON v1, specified in
+// Canonicalize implements vouch canonical JSON v2, specified in
 // docs/canonical-json.md and pinned, byte for byte against the Python
 // verifier, by testdata/canonical_vectors.json. In short: keys sorted by
 // code point, compact output, number literals copied exactly as written,
-// and input with duplicate keys, invalid UTF-8, or lone-surrogate escapes
-// rejected rather than repaired. It is deliberately not RFC 8785 (JCS):
+// and input with duplicate keys, invalid UTF-8, lone-surrogate escapes,
+// or nesting past MaxDepth rejected rather than repaired. It is deliberately not RFC 8785 (JCS):
 // JCS rewrites numbers as doubles, and a receipt must record the numbers
 // a tool actually returned.
 package receipt
@@ -36,7 +36,7 @@ func Canonicalize(raw []byte) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 
-	v, err := decodeValue(dec)
+	v, err := decodeValue(dec, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -53,17 +53,27 @@ func Canonicalize(raw []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// MaxDepth is the deepest nesting of arrays and objects vouch canonical
+// JSON accepts (docs/canonical-json.md rule 1). Without a shared limit
+// the implementations disagree: encoding/json stops at 10000 levels and
+// CPython's json recurses into a RecursionError near 1000 (#62).
+const MaxDepth = 256
+
 // decodeValue decodes one JSON value token by token, which, unlike
 // Decode into map[string]any, sees every key of an object and so can
 // reject duplicates. Keys are compared after unescaping: "a" and
-// "a" are the same key to any JSON consumer.
-func decodeValue(dec *json.Decoder) (any, error) {
+// "\u0061" are the same key to any JSON consumer. depth is the number
+// of containers enclosing the value.
+func decodeValue(dec *json.Decoder, depth int) (any, error) {
 	tok, err := dec.Token()
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize: parse: %w", err)
 	}
 	switch t := tok.(type) {
 	case json.Delim:
+		if depth == MaxDepth {
+			return nil, fmt.Errorf("canonicalize: nested deeper than %d levels", MaxDepth)
+		}
 		switch t {
 		case '{':
 			obj := make(map[string]any)
@@ -79,7 +89,7 @@ func decodeValue(dec *json.Decoder) (any, error) {
 				if _, dup := obj[k]; dup {
 					return nil, fmt.Errorf("canonicalize: duplicate key %q", k)
 				}
-				v, err := decodeValue(dec)
+				v, err := decodeValue(dec, depth+1)
 				if err != nil {
 					return nil, err
 				}
@@ -92,7 +102,7 @@ func decodeValue(dec *json.Decoder) (any, error) {
 		case '[':
 			arr := []any{}
 			for dec.More() {
-				v, err := decodeValue(dec)
+				v, err := decodeValue(dec, depth+1)
 				if err != nil {
 					return nil, err
 				}

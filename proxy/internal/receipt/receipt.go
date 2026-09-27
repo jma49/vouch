@@ -59,13 +59,13 @@ type Receipt struct {
 // PayloadType identifies a receipt body inside a DSSE envelope. The
 // version changes whenever the body's fields or the canonical JSON
 // rules change (docs/canonical-json.md, "Versioning"). Version 3 added
-// the chain link.
-const PayloadType = "application/vnd.vouch.receipt+json; version=3"
+// the chain link; version 4 is canonical JSON v2 (nesting limit, #62).
+const PayloadType = "application/vnd.vouch.receipt+json; version=4"
 
 // CheckpointType identifies a checkpoint body. A distinct type means a
 // signature over a receipt can never be replayed as a checkpoint, since
 // DSSE's pre-authentication encoding binds the type.
-const CheckpointType = "application/vnd.vouch.checkpoint+json; version=1"
+const CheckpointType = "application/vnd.vouch.checkpoint+json; version=2"
 
 // Genesis is the prev_digest of the first entry in a log.
 const Genesis = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
