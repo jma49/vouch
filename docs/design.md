@@ -246,6 +246,15 @@ LLMs are not deterministic even at temperature 0. Every eval runs N times (defau
 
 *Current limitation:* the MVP eval has no LLM in the loop. The verifier is deterministic and the synthetic gold set varies only in entity-swap targets, so the reported variance is zero by construction, not by measurement (pitfalls P-041). The machinery becomes meaningful once real agent runs feed it (roadmap Phase 2).
 
+### 8.3a Real-agent evaluation
+
+The mutation gold set (§9) measures detection of known error shapes on synthetic prose. The real evaluation measures what matters: real models, real answers, human ground truth.
+
+- **Upstream:** a deterministic synthetic market-data MCP server (`vouch_harness.market`). Real tickers, generated values, every payload marked synthetic. Recalled real-world figures therefore show up as `UNSUPPORTED`.
+- **Runner:** `vouch-agent` drives any OpenAI-compatible model through a fresh proxy session per (model, task, sample). It writes the answer, the signed receipt log, and the transcript. Responses are cached by request hash, so reruns are free and runs resume.
+- **Labels:** `vouch-label` is a blind labeling UI (no verifier output shown), defined by `docs/labeling.md`. Agreement is reported as Cohen's kappa.
+- **Report:** `vouch-eval-real` aligns verifier verdicts with labels by span (a span the verifier never extracted counts as a miss) and reports precision/recall with run-resampled CIs. It also reports each model's misreport rate across samples, where §8.3's variance machinery finally measures real nondeterminism.
+
 ### 8.4 Look-ahead detection (backtest integration)
 
 Because every receipt carries `data_asof` and replay carries a logical clock, look-ahead bias detection is free: if a receipt's `data_asof` is later than the simulated current time, flag a look-ahead violation. **Backtest correctness becomes a receipt-verification problem** — an angle we have not seen elsewhere.

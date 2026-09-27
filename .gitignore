@@ -31,3 +31,6 @@ build/
 .coverage
 coverage.out
 .hypothesis/
+
+# Model response cache for the real-agent eval (regenerable; runs are the artifact)
+/eval/.cache/

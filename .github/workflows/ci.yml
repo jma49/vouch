@@ -81,6 +81,14 @@ jobs:
       - name: Verify golden log from python
         run: python -m pytest -q tests/test_receipts.py
         working-directory: verifier
+      # The agent runner drives the real Go proxy in front of the
+      # synthetic market server; this is the only job with both toolchains.
+      - name: Build proxy
+        run: go build -o bin/vouch ./cmd/vouch
+        working-directory: proxy
+      - name: Agent end to end through the proxy
+        run: python -m pytest -q tests/test_agent.py -k end_to_end -rs
+        working-directory: harness
       - name: Run eval
         run: |
           VOUCH_HMAC_KEY=vouch-golden-key vouch-eval \

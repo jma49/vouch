@@ -130,6 +130,16 @@ inferred from source and not yet reproduced.
   test schemas against recorded fixtures.
 - **Status:** by design.
 
+### P-044 Agents cannot use the citation protocol
+- **Symptom:** real agent answers never contain Tier 1 citations, so
+  Tier 1 share is 0 and every claim goes through Tier 2.
+- **Cause:** the proxy returns tool results unchanged (by design), so
+  the agent never sees a receipt id it could cite. The citation
+  protocol in design section 5 has no channel to the model.
+- **Fix / workaround:** none yet. Needs an opt-in proxy mode that
+  exposes the receipt id to the model (roadmap Phase 2).
+- **Status:** open. Found while building the agent runner.
+
 ---
 
 ## Verifier
