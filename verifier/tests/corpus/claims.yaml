@@ -264,6 +264,34 @@ cases:
       AMD RSI is 48.1
     expect: ["62.3 -> SUPPORTED (NVDA)", "48.1 -> SUPPORTED (AMD)"]
 
+  # --- stacked citations bind left to right (#12) ---
+  - text: NVDA RSI is 62.3 and MACD is -0.42 [[r:r-nvda-ind#/rsi_14]][[r:r-nvda-ind#/macd_hist]].
+    expect: ["62.3 -> SUPPORTED", "-0.42 -> SUPPORTED"]
+  - text: NVDA RSI is 62.3 and MACD is -0.42 [[r:r-nvda-ind#/rsi_14]] [[r:r-nvda-ind#/macd_hist]].
+    expect: ["62.3 -> SUPPORTED", "-0.42 -> SUPPORTED"]
+  - text: NVDA MACD histogram is -0.42 [[r:r-nvda-ind#/rsi_14]][[r:r-nvda-ind#/macd_hist]].
+    expect: ["-0.42 -> SUPPORTED (NVDA macd_hist)"]
+
+  # --- cited claims follow the same sign rules (#43) ---
+  - text: AMD fell 1.35% [[r:r-amd-quote#/change_pct]].
+    expect: ["1.35% -> SUPPORTED"]
+  - text: AMD change was (1.35%) [[r:r-amd-quote#/change_pct]].
+    expect: ["1.35% -> SUPPORTED"]
+  - text: AMD rose 1.35% [[r:r-amd-quote#/change_pct]].
+    expect: ["1.35% -> CONTRADICTED"]
+  - text: NVDA RSI (62.3) [[r:r-nvda-ind#/rsi_14]] is elevated.
+    expect: ["62.3 -> SUPPORTED"]
+
+  # --- a citation does not change what kind of quantity a claim is (#13) ---
+  - text: NVDA closed at $1.92 [[r:r-nvda-quote#/change_pct]].
+    expect: ["1.92 -> CONTRADICTED"]
+  - text: NVDA change was 181.52% [[r:r-nvda-quote#/close_price]].
+    expect: ["181.52% -> CONTRADICTED"]
+  - text: NVDA closed at $181.52 [[r:r-nvda-quote#/close_price]].
+    expect: ["181.52 -> SUPPORTED"]
+  - text: NVDA change is 1.92 [[r:r-nvda-quote#/change_pct]].
+    expect: ["1.92 -> SUPPORTED"]
+
   # --- dates, times, quarters, ordinals, periods are not claims ---
   - text: As of 2026-07-24, NVDA closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]

@@ -11,7 +11,8 @@ from __future__ import annotations
 import math
 from itertools import pairwise
 
-from hypothesis import given, settings
+import pytest
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from vouch_verifier.claims import extract_claims
@@ -110,4 +111,14 @@ def test_an_error_of_a_whole_displayed_unit_is_contradicted(
     # leaves the rounding interval, so it cannot hide behind precision.
     resolution = 10.0**-decimals
     shown = round(actual, decimals) + units_off * resolution
+    # At an exact .5 tie both neighbors are legitimate roundings (Python's
+    # round() goes to even, people round half up), so the shown value is
+    # only an error when it is more than half a unit away (issue #42).
+    assume(abs(abs(shown - actual) - resolution / 2) > 1e-9 * max(1.0, abs(actual)))
     assert compare(shown, actual, ROUNDING, resolution) is Verdict.CONTRADICTED
+
+
+@pytest.mark.parametrize(("actual", "resolution"), [(0.5, 1.0), (2.5, 1.0), (62.25, 0.1)])
+def test_both_neighbors_of_a_tie_are_supported(actual: float, resolution: float) -> None:
+    for shown in (actual - resolution / 2, actual + resolution / 2):
+        assert compare(shown, actual, ROUNDING, resolution) is Verdict.SUPPORTED
