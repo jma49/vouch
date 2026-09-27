@@ -45,6 +45,10 @@ class Claim:
     citation: Citation | None = None
     as_of: str | None = None  # "YYYY-MM-DD", or "--MM-DD" when the text gives no year
     kind: Kind = "point"  # "multiple" and "range" are never judged as points
+    # "(1.35%)" with no explicit sign: negative if the metric is signed.
+    # Tier 2 applies this at extraction; Tier 1 only learns the metric
+    # from the cited fact, so the matcher applies it there.
+    parenthesized: bool = False
     resolution: float = 0.0  # unit of the last displayed digit (see tokens)
 
 
@@ -364,6 +368,22 @@ def _pick_metric(hits: list[str], unit: str | None, units: dict[str, str | None]
     return metric
 
 
+def negated_by_parentheses(parenthesized: bool, value: float, metric: str | None) -> bool:
+    """Whether "(1.35%)" is an accounting negative: only for a signed metric."""
+    return parenthesized and value > 0 and metric in DEFAULT_SIGNED_METRICS
+
+
+def _negated_by_direction(answer: str, m: NumberToken, scope: _Scope) -> bool:
+    # A direction word only signs the number it governs: in "Unlike AMD,
+    # which fell 1.35%, NVDA rose 1.92%" the "fell" stays in its phrase.
+    return (
+        m.unit == "pct"
+        and m.value > 0
+        and not m.signed
+        and _NEGATION_RE.search(answer, scope.phrase[0], m.start) is not None
+    )
+
+
 def _resolve(
     answer: str,
     m: NumberToken,
@@ -387,11 +407,8 @@ def _resolve(
         and _MOVE_TARGET_RE.search(answer, scope.phrase[0], m.start)
     ):
         metric = _MOVE_TARGET_METRIC
-    if (m.parenthesized and not m.signed and value > 0 and metric in DEFAULT_SIGNED_METRICS) or (
-        unit == "pct"
-        and value > 0
-        and not m.signed
-        and _NEGATION_RE.search(answer, scope.phrase[0], m.start)
+    if negated_by_parentheses(m.parenthesized and not m.signed, value, metric) or (
+        _negated_by_direction(answer, m, scope)
     ):
         value = -value
     return Claim(
@@ -456,15 +473,19 @@ def extract_claims(
         for i, cit in zip(candidates[-len(group) :], group, strict=True):
             m = numbers[i]
             consumed.add(i)
+            # The same sign rules as Tier 2 (issue #43): a citation pins
+            # which fact is meant, not how the sign was written.
+            negated = _negated_by_direction(answer, m, _scope(answer, m.start))
             claims.append(
                 Claim(
-                    value=m.value,
+                    value=-m.value if negated else m.value,
                     span=(m.start, m.end),
                     text=m.text,
                     tier=1,
                     unit=m.unit,
                     resolution=m.resolution,
                     citation=Citation(receipt_id=cit.group(1), json_ptr=cit.group(2) or "/"),
+                    parenthesized=m.parenthesized and not m.signed and not negated,
                 )
             )
 

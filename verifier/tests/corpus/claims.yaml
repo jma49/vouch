@@ -272,6 +272,16 @@ cases:
   - text: NVDA MACD histogram is -0.42 [[r:r-nvda-ind#/rsi_14]][[r:r-nvda-ind#/macd_hist]].
     expect: ["-0.42 -> SUPPORTED (NVDA macd_hist)"]
 
+  # --- cited claims follow the same sign rules (#43) ---
+  - text: AMD fell 1.35% [[r:r-amd-quote#/change_pct]].
+    expect: ["1.35% -> SUPPORTED"]
+  - text: AMD change was (1.35%) [[r:r-amd-quote#/change_pct]].
+    expect: ["1.35% -> SUPPORTED"]
+  - text: AMD rose 1.35% [[r:r-amd-quote#/change_pct]].
+    expect: ["1.35% -> CONTRADICTED"]
+  - text: NVDA RSI (62.3) [[r:r-nvda-ind#/rsi_14]] is elevated.
+    expect: ["62.3 -> SUPPORTED"]
+
   # --- dates, times, quarters, ordinals, periods are not claims ---
   - text: As of 2026-07-24, NVDA closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]

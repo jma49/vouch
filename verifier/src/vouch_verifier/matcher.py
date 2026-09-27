@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import yaml
 
-from vouch_verifier.claims import Claim, Extraction
+from vouch_verifier.claims import Claim, Extraction, negated_by_parentheses
 from vouch_verifier.index import build_index, facts_for
 from vouch_verifier.receipts import Fact, Receipt
 from vouch_verifier.verdict import Tolerance, Verdict, compare
@@ -68,8 +68,9 @@ def _judge(claim: Claim, fact: Fact, tolerances: dict[str, Tolerance]) -> Verdic
 def _match_cited(
     claim: Claim, receipts: list[Receipt], tolerances: dict[str, Tolerance]
 ) -> MatchedClaim:
-    assert claim.citation is not None
-    cited = claim.citation.receipt_id
+    citation = claim.citation
+    assert citation is not None
+    cited = citation.receipt_id
     # An exact id wins; a prefix is a convenience for long ids (issue #17).
     matching = [r for r in receipts if r.receipt_id == cited] or [
         r for r in receipts if r.receipt_id.startswith(cited)
@@ -78,24 +79,26 @@ def _match_cited(
         return MatchedClaim(
             claim,
             Verdict.UNSUPPORTED,
-            note=f"cited receipt {claim.citation.receipt_id!r} does not exist",
+            note=f"cited receipt {citation.receipt_id!r} does not exist",
         )
     if len(matching) > 1:
         return MatchedClaim(
             claim,
             Verdict.UNSUPPORTED,
-            note=f"citation {claim.citation.receipt_id!r} is ambiguous ({len(matching)} receipts)",
+            note=f"citation {citation.receipt_id!r} is ambiguous ({len(matching)} receipts)",
         )
     receipt = matching[0]
     for fact in receipt.facts:
-        if fact.json_ptr == claim.citation.json_ptr:
+        if fact.json_ptr == citation.json_ptr:
+            if negated_by_parentheses(claim.parenthesized, claim.value, fact.metric):
+                claim = replace(claim, value=-claim.value)
             verdict = _judge(claim, fact, tolerances)
             return MatchedClaim(claim, verdict, fact=fact, receipt_id=receipt.receipt_id)
     return MatchedClaim(
         claim,
         Verdict.UNSUPPORTED,
         receipt_id=receipt.receipt_id,
-        note=f"receipt has no fact at {claim.citation.json_ptr}",
+        note=f"receipt has no fact at {citation.json_ptr}",
     )
 
 
