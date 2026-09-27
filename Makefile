@@ -8,12 +8,12 @@ STAMP := $(VENV)/.installed
 VENV_OK := $(PY) -c 'import sys, vouch_verifier, vouch_harness; \
 	sys.exit(not vouch_verifier.__file__.startswith("$(CURDIR)/"))'
 
-.PHONY: test test-go test-py test-harness lint build install-py eval golden clean
+.PHONY: test test-go test-py test-harness lint lint-go lint-py fmt cover build install-py eval golden clean
 
 test: test-go test-py test-harness
 
 test-go:
-	cd proxy && go vet ./... && go test ./...
+	cd proxy && go vet ./... && go test -race ./...
 
 test-py: install-py
 	cd verifier && ../$(PY) -m pytest -q
@@ -21,8 +21,29 @@ test-py: install-py
 test-harness: install-py
 	cd harness && ../$(PY) -m pytest -q
 
-lint:
-	cd proxy && gofmt -l . && go vet ./...
+lint: lint-go lint-py
+
+# gofmt -l exits 0 even when it lists files; fail on any output.
+lint-go:
+	cd proxy && test -z "$$(gofmt -l .)" || { gofmt -l .; exit 1; }
+	cd proxy && go vet ./...
+
+lint-py: install-py
+	$(VENV)/bin/ruff check verifier harness
+	$(VENV)/bin/ruff format --check verifier harness
+	cd verifier && ../$(VENV)/bin/mypy
+	cd harness && ../$(VENV)/bin/mypy
+
+fmt: install-py
+	cd proxy && gofmt -w .
+	$(VENV)/bin/ruff check --fix verifier harness
+	$(VENV)/bin/ruff format verifier harness
+
+# Coverage is reported, not gated (docs/roadmap.md Phase 0).
+cover: install-py
+	cd proxy && go test -coverprofile=coverage.out ./... >/dev/null && go tool cover -func=coverage.out | tail -1
+	cd verifier && ../$(PY) -m pytest -q --cov=vouch_verifier --cov-report=term-missing:skip-covered
+	cd harness && ../$(PY) -m pytest -q --cov=vouch_harness --cov-report=term-missing:skip-covered
 
 build:
 	cd proxy && go build -o bin/vouch ./cmd/vouch
@@ -46,4 +67,4 @@ eval: install-py
 		--receipts testdata/receipts_golden.jsonl --n 10 --tolerances tolerance.yaml
 
 clean:
-	rm -rf $(VENV) proxy/bin
+	rm -rf $(VENV) proxy/bin proxy/coverage.out
