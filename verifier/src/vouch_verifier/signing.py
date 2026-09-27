@@ -23,7 +23,8 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_public_key,
 )
 
-RECEIPT_PAYLOAD_TYPE = "application/vnd.vouch.receipt+json; version=2"
+RECEIPT_PAYLOAD_TYPE = "application/vnd.vouch.receipt+json; version=3"
+CHECKPOINT_PAYLOAD_TYPE = "application/vnd.vouch.checkpoint+json; version=1"
 
 Keyring = dict[str, Ed25519PublicKey]
 

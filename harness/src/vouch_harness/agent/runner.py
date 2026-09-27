@@ -22,6 +22,7 @@ import yaml
 from vouch_harness.agent.llm import ChatClient, Message, check_path_segment
 from vouch_harness.agent.mcp_client import RPCError, StdioMCPClient, ToolHost
 from vouch_harness.signing import signing_key_id
+from vouch_verifier.receipts import audit_log
 
 # The date the synthetic data ends on (vouch_harness.market.AS_OF_DAY).
 # Stating it lets the model read "latest" the same way the verifier does.
@@ -258,6 +259,10 @@ def execute(
         "key_id": signing_key_id(Path(env["VOUCH_SIGNING_KEY"]))
         if "VOUCH_SIGNING_KEY" in env
         else None,
+        # The log's chain head once the proxy has sealed it. Committed with
+        # the run, it is the digest kept outside the log that shows later
+        # truncation (#54, docs/threat-model.md).
+        "head": audit_log(d / "receipts.jsonl").head if (d / "receipts.jsonl").exists() else None,
         **asdict(result),
     }
     (d / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")

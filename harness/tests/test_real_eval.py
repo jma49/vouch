@@ -201,3 +201,17 @@ def test_cli_names_the_run_signed_with_another_key(
     err = capsys.readouterr().err
     assert "m/t01/s0" in err
     assert GOLDEN_KEY_ID in err and EVAL_KEY_ID in err
+
+
+def test_a_run_whose_log_no_longer_matches_its_head_is_refused(
+    workspace: tuple[Path, dict[store.SpanKey, store.LabelRecord]],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Each run records its log's head when it finishes; a log that was
+    # cut or rewritten afterwards no longer ends there.
+    runs, _ = workspace
+    meta = runs / "m" / "t01" / "s0" / "meta.json"
+    meta.write_text(json.dumps({"prompt": "q", "head": "sha256:" + "ab" * 32}))
+    assert main([*_cli_args(runs), "--public-key", str(GOLDEN_PUB)]) == 2
+    err = capsys.readouterr().err
+    assert "m/t01/s0" in err and "expected sha256:abab" in err
