@@ -183,4 +183,4 @@ numbers reproducible via `make bench`.
 | `DERIVED` recomputation over whitelisted ops (design §6.2) | todo |
 | Tier 3 LLM extraction with strict schema; its nondeterminism measured by the harness | todo |
 | HTML report with span highlighting | done (#86): `vouch-verify --format html` |
-| Second domain schema pack (e.g. text-to-SQL analytics) to prove domain independence | todo |
+| Second domain schema pack (e.g. text-to-SQL analytics) to prove domain independence | done (#88): `examples/analytics`, per-row entities, `--vocabulary` |

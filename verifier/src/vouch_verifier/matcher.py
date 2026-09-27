@@ -21,6 +21,7 @@ from vouch_verifier.index import build_index, facts_for
 from vouch_verifier.lookahead import after
 from vouch_verifier.receipts import Fact, Receipt
 from vouch_verifier.verdict import Tolerance, Verdict, compare
+from vouch_verifier.vocabulary import FINANCE, Vocabulary
 
 DEFAULT_TOLERANCES: dict[str, Tolerance] = {
     "price": Tolerance(abs=0.01, display_round=True),
@@ -73,6 +74,7 @@ def _match_cited(
     receipts: list[Receipt],
     tolerances: dict[str, Tolerance],
     as_of: datetime | None = None,
+    vocab: Vocabulary = FINANCE,
 ) -> MatchedClaim:
     citation = claim.citation
     assert citation is not None
@@ -96,7 +98,7 @@ def _match_cited(
     receipt = matching[0]
     for fact in receipt.facts:
         if fact.json_ptr == citation.json_ptr:
-            if negated_by_parentheses(claim.parenthesized, claim.value, fact.metric):
+            if negated_by_parentheses(claim.parenthesized, claim.value, fact.metric, vocab):
                 claim = replace(claim, value=-claim.value)
             # A citation says which fact is meant, not that any number the
             # fact happens to equal is the same kind of quantity: "$1.92"
@@ -254,6 +256,7 @@ def match_claims(
     receipts: list[Receipt],
     tolerances: dict[str, Tolerance] | None = None,
     as_of: datetime | None = None,
+    vocabulary: Vocabulary = FINANCE,
 ) -> list[MatchedClaim]:
     """Assign a verdict to every numeric span the extractor found.
 
@@ -272,7 +275,7 @@ def match_claims(
     with closing(build_index(receipts)) as conn:
         for claim in extraction.claims:
             if claim.citation is not None:
-                out.append(_match_cited(claim, receipts, tol, as_of))
+                out.append(_match_cited(claim, receipts, tol, as_of, vocabulary))
                 continue
 
             out.append(_match_uncited(claim, conn, tol, as_of))

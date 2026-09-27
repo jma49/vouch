@@ -113,6 +113,10 @@ make eval-real                                  # verifier vs. labels, misreport
 - **Blind labels.** The labeling tool never shows the verifier's verdict. [`docs/labeling.md`](docs/labeling.md) defines every label, and agreement between labelers is reported as Cohen's kappa.
 - **Citation as a measured condition.** With `ARGS=--cite`, the proxy (`vouch proxy --cite`) appends each result's receipted values with a ready-made citation, such as `rsi_14 = 62.3  -> [[r:3f9a1c2e7b40#/rsi_14]]`, and the model is asked to use them. Those runs are kept under `<model>+cite`, and the report states how often each model actually cites (Tier 1 adherence).
 
+## Beyond finance
+
+Nothing in the proxy or the verifier knows what a stock is. A domain supplies two files: a schema that says which fields of a tool's result are facts, and whose and when they are, and a vocabulary that says how prose names those metrics. [`examples/analytics`](examples/analytics) points vouch at an agent that answers business questions by writing SQL against a sales database. It uses the same proxy and the same verifier with `--vocabulary examples/analytics/vocabulary.yaml`, and an end-to-end test shows every verdict class working there.
+
 ## Overhead
 
 <!-- BEGIN GENERATED latency: do not edit; run `make bench` -->
@@ -221,7 +225,7 @@ Measurement before features. Full plan with exit criteria in [`docs/roadmap.md`]
 | [`harness/`](harness) | Python | Mutation injection, gold set, repeated-run eval, `vouch-eval` |
 | [`schemas/`](schemas) | YAML | Per-tool fact-extraction configs |
 | [`testdata/`](testdata) | JSON | Cross-language canonicalization vectors, Go-written golden receipt log |
-| [`examples/`](examples) | text | The answer audited above |
+| [`examples/`](examples) | text, YAML | The answer audited above; [`analytics/`](examples/analytics), a second domain (text-to-SQL) as pure configuration |
 | [`eval/`](eval) | YAML, JSONL | Real-agent task set, model configs, runs, and human labels |
 | [`docs/`](docs) | Markdown | [Design](docs/design.md), [roadmap](docs/roadmap.md), [threat model](docs/threat-model.md), [pitfalls](docs/pitfalls.md), [labeling guide](docs/labeling.md) |
 

@@ -1,0 +1,29 @@
+# Fact extraction for run_sql (vouch_harness.analytics): one fact per
+# known column per row, attributed to the row's region and dated by its
+# period_end. Columns the query did not return are simply absent, so any
+# query works; a metric column under another alias is not receipted.
+tool: run_sql
+asof_ptr: /as_of
+facts:
+  - ptr: /rows
+    entity_ptr: /region
+    each:
+      - ptr: /revenue
+        metric: revenue
+        unit: USD
+        tol_class: price
+        asof_ptr: /period_end
+      - ptr: /orders
+        metric: orders
+        tol_class: count
+        asof_ptr: /period_end
+      - ptr: /avg_order_value
+        metric: avg_order_value
+        unit: USD
+        tol_class: price
+        asof_ptr: /period_end
+      - ptr: /return_rate_pct
+        metric: return_rate_pct
+        unit: pct
+        tol_class: percentage
+        asof_ptr: /period_end

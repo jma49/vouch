@@ -1,6 +1,7 @@
 package extract
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -218,5 +219,54 @@ func TestLoadRepoSchemas(t *testing.T) {
 		if schemas[tool] == nil {
 			t.Fatalf("repo schema for %s missing or failed to load", tool)
 		}
+	}
+}
+
+// TestExtractEachEntity pins per-element entities (#88): each row of a
+// query result names its own entity, and a row without one gets none
+// rather than borrowing another's.
+func TestExtractEachEntity(t *testing.T) {
+	s, err := LoadSchema(writeSchema(t, "run_sql.yaml", `
+tool: run_sql
+asof_ptr: /as_of
+facts:
+  - ptr: /rows
+    entity_ptr: /region
+    each:
+      - ptr: /revenue
+        metric: revenue
+        unit: USD
+        tol_class: price
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := s.Extract([]byte(`{"as_of":"2026-06-30","rows":[
+		{"region":"EMEA","revenue":1200.5},{"region":"APAC","revenue":900},{"revenue":10}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []string{}
+	for _, f := range facts {
+		got = append(got, fmt.Sprintf("%s=%g@%s", f.Entity, f.Value, f.AsOf))
+	}
+	if strings.Join(got, " ") != "EMEA=1200.5@2026-06-30 APAC=900@2026-06-30 =10@2026-06-30" {
+		t.Fatalf("got %v", got)
+	}
+	if _, err := LoadSchema(writeSchema(t, "bad.yaml", "tool: x\nfacts:\n  - ptr: /a\n    entity_ptr: /e\n    metric: m\n    tol_class: price\n")); err == nil ||
+		!strings.Contains(err.Error(), "only to an each") {
+		t.Fatalf("entity_ptr without each: %v", err)
+	}
+}
+
+// TestLoadExamplePacks keeps the second domain's schemas loadable
+// (examples/analytics, #88).
+func TestLoadExamplePacks(t *testing.T) {
+	schemas, err := LoadDir(filepath.Join("..", "..", "..", "examples", "analytics", "schemas"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := schemas["run_sql"]; s == nil || s.Facts[0].EntityPtr != "/region" {
+		t.Fatalf("run_sql schema: %+v", schemas)
 	}
 }

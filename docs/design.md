@@ -211,6 +211,10 @@ Behavior on hand-written prose is pinned by an adversarial corpus (`verifier/tes
 
 Allowed operations: percentage change, difference, ratio, and min/max/count over a receipted series. Example: the agent says "up 3.2% on the day" — the verifier recomputes from the two receipted prices and compares. **Anything outside the whitelist is `UNSUPPORTED`. The verifier never guesses.**
 
+### 6.2.1 Domain independence
+
+A domain contributes configuration only: per-tool schemas (section 4), including a per-row `entity_ptr` for results where each row is a different entity, and a vocabulary for Tier 2 (metric keywords, units, which metrics can be negative, and the fallback metrics for a bare percentage and for a "to <number>" move). Finance is the built-in default. `examples/analytics` is the second domain, text-to-SQL over a sales database (#88); its end-to-end test runs the unchanged proxy and verifier and gets SUPPORTED, CONTRADICTED, and STALE verdicts from configuration alone.
+
 ### 6.3 Tolerance classes: rounding is not hallucination
 
 ```yaml
