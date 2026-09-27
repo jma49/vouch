@@ -17,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-from vouch_verifier.claims import Claim, Extraction, negated_by_parentheses
+from vouch_verifier.claims import Claim, Derivation, Extraction, negated_by_parentheses
 from vouch_verifier.index import build_index, facts_for
 from vouch_verifier.lookahead import after
 from vouch_verifier.receipts import Fact, Receipt
@@ -70,6 +70,21 @@ def _judge(claim: Claim, fact: Fact, tolerances: dict[str, Tolerance]) -> Verdic
     return compare(claim.value, fact.value, _tolerance_for(fact, tolerances), claim.resolution)
 
 
+MIN_CITE_PREFIX = 8
+
+
+def _prose_disagrees(claim: Claim, fact: Fact) -> str | None:
+    """Why the prose around a cited number is about something other than
+    the cited fact, if it is: another entity, or another date (#95). A
+    citation says which fact backs the number; it does not make "AMD's
+    RSI" true because NVDA's matches."""
+    if claim.entity is not None and fact.entity and claim.entity != fact.entity:
+        return f"the claim is about {claim.entity}; the cited fact is {fact.entity}'s"
+    if claim.as_of is not None and not _on_date(fact, claim.as_of):
+        return f"the claim is dated {claim.as_of}; the cited fact is as of {fact.as_of}"
+    return None
+
+
 def _match_cited(
     claim: Claim,
     receipts: list[Receipt],
@@ -80,9 +95,11 @@ def _match_cited(
     citation = claim.citation
     assert citation is not None
     cited = citation.receipt_id
-    # An exact id wins; a prefix is a convenience for long ids (issue #17).
+    # An exact id wins; a prefix is a convenience for long ids (issue
+    # #17), but a prefix shorter than 8 characters is too easy to hit by
+    # accident to count as citing anything (#95).
     matching = [r for r in receipts if r.receipt_id == cited] or [
-        r for r in receipts if r.receipt_id.startswith(cited)
+        r for r in receipts if len(cited) >= MIN_CITE_PREFIX and r.receipt_id.startswith(cited)
     ]
     if not matching:
         return MatchedClaim(
@@ -99,6 +116,10 @@ def _match_cited(
     receipt = matching[0]
     for fact in receipt.facts:
         if fact.json_ptr == citation.json_ptr:
+            if (why := _prose_disagrees(claim, fact)) is not None:
+                return MatchedClaim(
+                    claim, Verdict.UNSUPPORTED, fact=fact, receipt_id=receipt.receipt_id, note=why
+                )
             if negated_by_parentheses(claim.parenthesized, claim.value, fact.metric, vocab):
                 claim = replace(claim, value=-claim.value)
             # A citation says which fact is meant, not that any number the
@@ -196,6 +217,20 @@ def _match_uncited(
         window = [rf for rf in candidates if (_day(rf[1].as_of) or "") == latest]
         outside = [rf for rf in candidates if rf not in window] + future
 
+    # A claim that names no timeframe matches facts of any; when the window
+    # holds several timeframes that disagree (RSI 62.3 daily, 48.0
+    # hourly), which one the claim means is a guess (#95).
+    if claim.timeframe is None:
+        by_timeframe: dict[str, set[Verdict]] = {}
+        for _, fact in window:
+            if fact.timeframe:
+                by_timeframe.setdefault(fact.timeframe, set()).add(_judge(claim, fact, tol))
+        if len(by_timeframe) > 1 and len({frozenset(v) for v in by_timeframe.values()}) > 1:
+            return MatchedClaim(
+                claim,
+                Verdict.UNVERIFIABLE,
+                note=f"timeframe ambiguous: receipted {', '.join(sorted(by_timeframe))} disagree",
+            )
     for receipt_id, fact in window:
         if _judge(claim, fact, tol) is Verdict.SUPPORTED:
             return MatchedClaim(claim, Verdict.SUPPORTED, fact=fact, receipt_id=receipt_id)
@@ -227,94 +262,132 @@ def _match_uncited(
     )
 
 
-def _series(
-    conn: sqlite3.Connection, entity: str, metric: str, as_of: datetime | None
-) -> dict[str, tuple[str, Fact]] | str:
-    """The receipted daily series of one metric: day -> (receipt, fact),
-    without data from after a backtest's as-of moment. Two different
-    values on one day make the series unusable (a string saying why):
-    the verifier will not pick one."""
-    series: dict[str, tuple[str, Fact]] = {}
-    for receipt_id, fact in facts_for(conn, entity, metric):
-        day = _day(fact.as_of)
-        if day is None or (as_of is not None and after(fact, as_of)):
+def _series_in(
+    receipt: Receipt, entity: str, metric: str, as_of: datetime | None
+) -> dict[str, Fact] | None:
+    """One receipt's daily series of a metric: day -> fact, from facts
+    that carry their own date, without data after a backtest's as-of
+    moment. None when the receipt gives two values for one day."""
+    series: dict[str, Fact] = {}
+    for fact in receipt.facts:
+        if fact.entity != entity or fact.metric != metric or not fact.as_of:
             continue
-        if day in series and series[day][1].value != fact.value:
-            return f"receipts disagree on {entity} {metric} for {day}"
-        series.setdefault(day, (receipt_id, fact))
+        if as_of is not None and after(fact, as_of):
+            continue
+        day = _day(fact.as_of)
+        assert day is not None
+        if day in series and series[day].value != fact.value:
+            return None
+        series[day] = fact
     return series
+
+
+def _recompute(
+    d: Derivation, series: dict[str, Fact], end: str
+) -> tuple[float, Fact, str, list[str]] | None:
+    """The derived value over one series ending on `end`, with the fact
+    it ends on (or, for a high/low, the extreme), a description of the
+    points used, and their days; None when the series lacks a point."""
+    days = sorted(series)
+    if end not in series:
+        return None
+    last = days.index(end)
+    if d.op == "pct_change":
+        if d.start is not None:
+            matching = [x for x in days[:last] if _same_day(x, d.start)]
+            if not matching:
+                return None
+            first = matching[-1]
+        else:
+            assert d.lookback is not None
+            if last < d.lookback:
+                return None
+            first = days[last - d.lookback]
+        base, now = series[first].value, series[end].value
+        if base == 0:
+            return None
+        basis = f"{first} ({base:g}) to {end} ({now:g})"
+        return (now / base - 1) * 100, series[end], basis, [first, end]
+    assert d.lookback is not None
+    if last + 1 < d.lookback:
+        return None
+    used = days[last + 1 - d.lookback : last + 1]
+    fact = (max if d.op == "max" else min)((series[x] for x in used), key=lambda f: f.value)
+    return fact.value, fact, f"{used[0]} to {end}, {_day(fact.as_of)}", used
+
+
+def _same_day(day: str, date: str) -> bool:
+    # "--MM-DD" (no year in the text) is that day in any year.
+    return day[4:] == date[1:] if date.startswith("--") else day == date
 
 
 def _match_derived(
     claim: Claim,
-    conn: sqlite3.Connection,
+    receipts: list[Receipt],
     tol: dict[str, Tolerance],
     as_of: datetime | None,
 ) -> MatchedClaim:
-    """Recompute a derived claim from its receipted series (design
-    section 6.2) and judge the stated value against the result: DERIVED
-    when within tolerance, CONTRADICTED when not, UNSUPPORTED when the
-    points it needs were never receipted."""
+    """Recompute a derived claim from a receipted series (design section
+    6.2) and judge the stated value against the result: DERIVED when
+    within tolerance, CONTRADICTED when not, UNSUPPORTED when no receipt
+    holds the points it needs.
+
+    The points come from one receipt's series, never stitched across
+    receipts: one OHLCV call returns consecutive sessions, while days
+    gathered from several calls can have gaps, so "the past 2 sessions"
+    could silently span weeks (#94). Facts without their own date are not
+    part of any series.
+    """
     d = claim.derivation
     assert d is not None and claim.entity is not None
     what = f"{claim.entity} {d.describe()}"
-    series = _series(conn, claim.entity, d.metric, as_of)
-    if isinstance(series, str):
-        return MatchedClaim(claim, Verdict.UNSUPPORTED, note=series)
-    days = sorted(series)
-    if not days:
+    per_receipt = [(r, _series_in(r, claim.entity, d.metric, as_of)) for r in receipts]
+    if any(s is None for _, s in per_receipt):
+        return MatchedClaim(
+            claim, Verdict.UNSUPPORTED, note=f"a receipt gives two values for one day of {what}"
+        )
+    available = [day for _, s in per_receipt if s for day in s]
+    if not available:
         return MatchedClaim(claim, Verdict.UNSUPPORTED, note=f"no receipted series for {what}")
-
-    def day_of(date: str) -> str | None:
-        # "--MM-DD" (no year in the text) is that day in the latest year.
-        matching = [x for x in days if (x[4:] == date[1:] if date.startswith("--") else x == date)]
-        return matching[-1] if matching else None
-
-    if d.op == "pct_change":
-        if d.start is not None:
-            first, last = day_of(d.start), day_of(d.end) if d.end else days[-1]
-        else:
-            assert d.lookback is not None
-            first = days[-1 - d.lookback] if len(days) > d.lookback else None
-            last = days[-1]
-        if first is None or last is None or first >= last:
-            return MatchedClaim(
-                claim, Verdict.UNSUPPORTED, note=f"receipts lack the points to recompute {what}"
-            )
-        base, now = series[first][1].value, series[last][1].value
-        if base == 0:
-            return MatchedClaim(claim, Verdict.UNSUPPORTED, note=f"{what}: base value is zero")
-        computed = (now / base - 1) * 100
-        tolerance = tol.get("percentage", Tolerance())
-        basis = f"{first} ({base:g}) to {last} ({now:g})"
-        receipt_id = series[last][0]
+    if d.end is None:
+        end = max(available)
     else:
-        assert d.lookback is not None
-        if len(days) < d.lookback:
+        matching = sorted(day for day in set(available) if _same_day(day, d.end))
+        if not matching:
             return MatchedClaim(
-                claim,
-                Verdict.UNSUPPORTED,
-                note=f"{what} needs {d.lookback} receipted sessions, found {len(days)}",
+                claim, Verdict.UNSUPPORTED, note=f"no receipted {d.metric} on {d.end} for {what}"
             )
-        window = [series[x] for x in days[-d.lookback :]]
-        receipt_id, fact = (max if d.op == "max" else min)(window, key=lambda rf: rf[1].value)
-        computed = fact.value
-        tolerance = _tolerance_for(fact, tol)
-        basis = f"{days[-d.lookback]} to {days[-1]}, {_day(fact.as_of)}"
-    verdict = compare(claim.value, computed, tolerance, claim.resolution)
-    if verdict is Verdict.SUPPORTED:
+        end = matching[-1]
+    results = []
+    for receipt, series in per_receipt:
+        if series and (got := _recompute(d, series, end)) is not None:
+            results.append((receipt.receipt_id, *got))
+    if not results:
         return MatchedClaim(
             claim,
-            Verdict.DERIVED,
-            receipt_id=receipt_id,
-            note=f"recomputed {what} = {computed:.4g} from {basis}",
+            Verdict.UNSUPPORTED,
+            note=f"no single receipt holds the points to recompute {what}",
         )
-    return MatchedClaim(
-        claim,
-        Verdict.CONTRADICTED,
-        receipt_id=receipt_id,
-        note=f"recomputed {what} = {computed:.4g} from {basis}",
+    # Any receipt saying something else about a day the computation uses
+    # makes the result unusable; the verifier does not pick a source.
+    used = {day for *_, days in results for day in days}
+    values: dict[str, set[float]] = {}
+    for _, series in per_receipt:
+        for day, fact in (series or {}).items():
+            if day in used:
+                values.setdefault(day, set()).add(fact.value)
+    if any(len(v) > 1 for v in values.values()):
+        return MatchedClaim(
+            claim, Verdict.UNSUPPORTED, note=f"receipts disagree on the points of {what}"
+        )
+    receipt_id, computed, fact, basis, _ = results[0]
+    tolerance = (
+        tol.get("percentage", Tolerance()) if d.op == "pct_change" else _tolerance_for(fact, tol)
     )
+    note = f"recomputed {what} = {computed:.4g} from {basis}"
+    if compare(claim.value, computed, tolerance, claim.resolution) is Verdict.SUPPORTED:
+        return MatchedClaim(claim, Verdict.DERIVED, receipt_id=receipt_id, note=note)
+    return MatchedClaim(claim, Verdict.CONTRADICTED, receipt_id=receipt_id, note=note)
 
 
 def _lookahead_only(
@@ -369,7 +442,7 @@ def match_claims(
                 out.append(_match_cited(claim, receipts, tol, as_of, vocabulary))
                 continue
             if claim.derivation is not None:
-                out.append(_match_derived(claim, conn, tol, as_of))
+                out.append(_match_derived(claim, receipts, tol, as_of))
                 continue
 
             out.append(_match_uncited(claim, conn, tol, as_of))

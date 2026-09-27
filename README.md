@@ -75,14 +75,14 @@ Fabrication and contradiction are different failures with different fixes, so vo
 > These numbers measure **detection of known mutation shapes** (digit swaps, sign flips, entity swaps, ...) on a **synthetic gold set** whose clean answers come from templates aligned with the verifier's own extractor. They are a regression signal, not a claim about accuracy on real agent output, and the variance is zero by construction because no LLM is in the loop. A human-labeled evaluation over real agent runs is [roadmap Phase 2](docs/roadmap.md#phase-2--a-real-evaluation-the-headline).
 
 <!-- BEGIN GENERATED eval-metrics: do not edit; run `make readme` -->
-Gold set: 11 cases per run (2 clean, 9 mutants), derived from 5 facts in 3 receipts. N = 10 runs.
+Gold set: 12 cases per run (2 clean, 10 mutants), derived from 5 facts in 3 receipts. N = 10 runs.
 
 | Metric | Mean ± std | 95% bootstrap CI |
 |---|---|---|
-| Mutation detection rate | 0.89 ± 0.00 | [0.89, 0.89] |
+| Mutation detection rate | 0.90 ± 0.00 | [0.90, 0.90] |
 | False-positive rate on clean answers | 0.00 ± 0.00 | [0.00, 0.00] |
 | Claim coverage (non-`UNVERIFIABLE`) | 1.00 ± 0.00 | [1.00, 1.00] |
-| Tier 1 (cited) share of claims | 0.46 ± 0.00 | [0.46, 0.46] |
+| Tier 1 (cited) share of claims | 0.51 ± 0.00 | [0.51, 0.51] |
 
 | Mutation | Recall | 95% bootstrap CI |
 |---|---|---|

@@ -177,8 +177,15 @@ def test_exact_receipt_id_beats_a_longer_id_with_the_same_prefix() -> None:
     receipts = [_receipt("golden-1", (fact,)), _receipt("golden-10", (fact,))]
     _, matched = run("NVDA RSI is 62.3 [[r:golden-1#/rsi_14]].", receipts)
     assert (matched[0].verdict, matched[0].receipt_id) == (Verdict.SUPPORTED, "golden-1")
-    _, matched = run("NVDA RSI is 62.3 [[r:golden#/rsi_14]].", receipts)
+    longer = [_receipt("golden-100", (fact,)), _receipt("golden-101", (fact,))]
+    _, matched = run("NVDA RSI is 62.3 [[r:golden-10#/rsi_14]].", longer)
     assert "ambiguous" in matched[0].note
+    # #95: a prefix under 8 characters cites nothing.
+    _, matched = run("NVDA RSI is 62.3 [[r:golden#/rsi_14]].", receipts)
+    assert (matched[0].verdict, matched[0].note) == (
+        Verdict.UNSUPPORTED,
+        "cited receipt 'golden' does not exist",
+    )
 
 
 def test_markdown_report_escapes_cells(receipts: list[Receipt]) -> None:

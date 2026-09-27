@@ -43,14 +43,17 @@ class Derivation:
     op: Literal["pct_change", "max", "min"]
     metric: str  # the series it is computed over
     start: str | None = None  # pct_change from this date ("YYYY-MM-DD" or "--MM-DD")
-    end: str | None = None  # ... to this date; None means the latest receipted day
-    lookback: int | None = None  # sessions back from the latest receipted day
+    end: str | None = None  # the last day; None means the latest receipted day
+    lookback: int | None = None  # sessions back from the last day
 
     def describe(self) -> str:
+        to = f" to {self.end}" if self.end else ""
         if self.op == "pct_change":
             span = f"since {self.start}" if self.start else f"over {self.lookback} sessions"
-            return f"{self.metric} change {span}" + (f" to {self.end}" if self.end else "")
-        return f"{self.lookback}-session {'high' if self.op == 'max' else 'low'} of {self.metric}"
+            return f"{self.metric} change {span}{to}"
+        return (
+            f"{self.lookback}-session {'high' if self.op == 'max' else 'low'} of {self.metric}{to}"
+        )
 
 
 @dataclass(frozen=True)
@@ -218,6 +221,17 @@ def _entity(answer: str, pos: int, scope: _Scope, entities: set[str]) -> str | N
     mentions = _mentions(answer, scope.sentence, entities)
     before = [(p, e) for p, e in mentions if p < pos]
     after = [(p, e) for p, e in mentions if p > pos]
+    # A sentence opening with a pronoun is about the previous sentence's
+    # subject until it names someone before the number: in "AMD has been
+    # weak. It closed at 181.52 while NVDA rallied." the close is AMD's,
+    # not NVDA's (#95). With no subject to inherit, it stays unresolved.
+    head = answer[scope.sentence[0] : scope.sentence[1]]
+    if not before and _PRONOUN_START_RE.match(head):
+        if scope.sentence[0] == 0:
+            return None
+        previous = _sentence_bounds(answer, max(0, scope.sentence[0] - 2))
+        earlier = _mentions(answer, previous, entities)
+        return earlier[0][1] if earlier else None
     # Nearest preceding in the phrase, then following in the phrase, then
     # preceding in the clause and sentence, then following in the clause.
     for pool, pick_last in (
@@ -229,24 +243,37 @@ def _entity(answer: str, pos: int, scope: _Scope, entities: set[str]) -> str | N
     ):
         if pool:
             return (pool[-1] if pick_last else pool[0])[1]
-    if not mentions and scope.sentence[0] > 0:
-        head = answer[scope.sentence[0] : scope.sentence[1]]
-        if _PRONOUN_START_RE.match(head):
-            previous = _sentence_bounds(answer, max(0, scope.sentence[0] - 2))
-            earlier = _mentions(answer, previous, entities)
-            if earlier:
-                return earlier[0][1]  # the previous sentence's subject
     return None
 
 
 def _date(answer: str, pos: int, scope: _Scope) -> str | None:
-    """The date a claim is about: the nearest one in its own clause.
-
-    Dates never cross a semicolon: in "NVDA reports Q2 earnings on
-    August 27; it closed at 181.52" the date belongs to the earnings.
+    """The date a claim is about: the nearest one in its own phrase, else
+    the nearest one before it in its clause ("On July 23, NVDA closed at
+    176.10"). A date later in the clause belongs to another phrase: in
+    "NVDA closed at 181.52, up from 176.10 on July 23" it dates the 176.10
+    only (#95). Dates never cross a semicolon: in "NVDA reports Q2
+    earnings on August 27; it closed at 181.52" the date is the
+    earnings'.
     """
-    dates = find_dates(answer, *scope.clause)
-    return min(dates, key=lambda d: abs(d[0] - pos))[1] if dates else None
+    dates = find_dates(answer, *scope.phrase)
+    if dates:
+        return min(dates, key=lambda d: abs(d[0] - pos))[1]
+    # Only a phrase that is nothing but a time ("On July 23,") dates what
+    # follows; "down 5% since July 20" makes its own claim and keeps its
+    # date (#95).
+    before = [
+        d
+        for d in find_dates(answer, *scope.clause)
+        if d[0] < pos and _only_a_time(answer, d, scope)
+    ]
+    return before[-1][1] if before else None
+
+
+def _only_a_time(answer: str, date: tuple[int, str], scope: _Scope) -> bool:
+    """Whether the phrase holding a date makes no numeric claim of its
+    own (tokenize masks the date itself)."""
+    lo, hi = _segment(answer, scope.clause, date[0], _PHRASE_SPLIT_RE)
+    return not tokenize(answer[lo:hi])
 
 
 def _timeframe(answer: str, scope: _Scope) -> str | None:
@@ -400,54 +427,79 @@ _AMBIGUOUS_PERIOD = "ambiguous period"
 
 
 def _derivation(
-    answer: str, m: NumberToken, scope: _Scope, metric: str | None, vocab: Vocabulary
+    answer: str, m: NumberToken, scope: _Scope, vocab: Vocabulary
 ) -> Derivation | str | None:
     """The computation a claim states, if any: a Derivation, the string
-    _AMBIGUOUS_PERIOD when the period cannot be pinned down, or None for
-    an ordinary point claim."""
+    _AMBIGUOUS_PERIOD when it names a period or series that cannot be
+    pinned down, or None for an ordinary point claim.
+
+    Every cue must be in the number's own phrase (#94): in "NVDA rose
+    3.08% on the day, its biggest gain since July 20" the "since" belongs
+    to another phrase and the 3.08% is a day change.
+    """
     if vocab.series is None:
         return None
-    lo, hi = scope.clause
-    clause = answer[lo:hi]
-    series = metric if metric is not None and vocab.units.get(metric) == "USD" else vocab.series
-    lookback = _LOOKBACK_RE.search(clause)
+    lo, hi = scope.phrase
+    lookback = _LOOKBACK_RE.search(answer, lo, hi)
+    since = _SINCE_RE.search(answer, lo, hi) if m.unit == "pct" else None
+    nday = _NDAY_EXTREMUM_RE.search(answer, lo, m.start) if m.unit != "pct" else None
+    extremum = _EXTREMUM_RE.search(answer, lo, m.start) if m.unit != "pct" else None
+    cued = lookback or nday or (extremum and lookback)
+    start: tuple[int, str] | None = None
+    if since and not cued:
+        dates = find_dates(answer, since.end(), hi)
+        # "since July 17", "from its July 20 close": the date follows closely.
+        if dates and len(answer[since.end() : dates[0][0]].split()) <= 2:
+            start = dates[0]
+    if not (cued or start):
+        return None
+    if m.unit not in (None, "USD", "pct"):
+        return None
+
+    # The series: the metric the phrase names, if it is a USD metric, else
+    # the vocabulary's. A phrase naming another metric ("RSI rose 6.8%
+    # since July 20", "volume hit a 5-day high") is about that metric,
+    # whose change nobody receipted: unresolved, never recomputed from
+    # the close (#94).
+    keywords = sorted(vocab.synonyms, key=len, reverse=True)
+    period = lookback.span() if lookback else (0, 0)  # "over the last 3 sessions" names no metric
+    named = [
+        vocab.synonyms[kw]
+        for pos, kw in _mentions(answer, scope.phrase, keywords, re.IGNORECASE)
+        if not period[0] <= pos < period[1]
+    ]
+    if any(vocab.units.get(n) != "USD" and n != vocab.series for n in named):
+        return _AMBIGUOUS_PERIOD
+    series = next((n for n in named if vocab.units.get(n) == "USD"), vocab.series)
+
+    # The day the computation ends: a "to <date>", else a date the claim
+    # states ("On July 23, NVDA hit a 3-day high of 176.10"), else the
+    # latest receipted day.
+    end: str | None = None
+    if start is not None:
+        later = find_dates(answer, start[0] + 1, hi)
+        end = next((d[1] for d in later if re.search(r"\bto\b", answer[start[0] : d[0]])), None)
+    if end is None:
+        excluded = start[0] if start is not None else hi
+        stated = [d for d in find_dates(answer, lo, hi) if d[0] < excluded and d[0] != m.start]
+        clause_before = [d for d in find_dates(answer, *scope.clause) if d[0] < lo]
+        pool = stated or clause_before
+        end = pool[-1][1] if pool else None
+
     if lookback and not re.match(r"sessions?|trading", lookback[2], re.IGNORECASE):
-        lookback_n: int | None = None
-        ambiguous = True
-    else:
-        lookback_n = int(lookback[1]) if lookback else None
-        ambiguous = False
+        return _AMBIGUOUS_PERIOD  # plain "days": trading or calendar?
     if m.unit == "pct":
-        if ambiguous:
-            return _AMBIGUOUS_PERIOD
-        if lookback_n:
-            return Derivation("pct_change", series, lookback=lookback_n)
-        since = _SINCE_RE.search(answer, lo, hi)
-        if since:
-            dates = [d for d in find_dates(answer, since.end(), hi)]
-            if dates:
-                start = dates[0]
-                between = answer[since.end() : start[0]]
-                if len(between.split()) <= 2:  # "since July 17", "from its July 20 close"
-                    end = next(
-                        (d[1] for d in dates[1:] if re.search(r"\bto\b", answer[start[0] : d[0]])),
-                        None,
-                    )
-                    return Derivation("pct_change", series, start=start[1], end=end)
-        return None
-    if m.unit not in (None, "USD"):
-        return None
-    nday = _NDAY_EXTREMUM_RE.search(answer, lo, m.start)
+        if lookback:
+            return Derivation("pct_change", series, end=end, lookback=int(lookback[1]))
+        assert start is not None
+        return Derivation("pct_change", series, start=start[1], end=end)
     if nday:
         op: Literal["max", "min"] = "max" if nday[2].lower() == "high" else "min"
-        return Derivation(op, series, lookback=int(nday[1]))
-    extremum = _EXTREMUM_RE.search(answer, lo, m.start)
-    if extremum and (lookback_n or ambiguous):
-        if ambiguous:
-            return _AMBIGUOUS_PERIOD
+        return Derivation(op, series, end=end, lookback=int(nday[1]))
+    if extremum and lookback:
         word = extremum[1].lower()
         op = "max" if word in ("highest", "peak", "high") else "min"
-        return Derivation(op, series, lookback=lookback_n)
+        return Derivation(op, series, end=end, lookback=int(lookback[1]))
     return None
 
 
@@ -477,7 +529,7 @@ def _resolve(
         _negated_by_direction(answer, m, scope)
     ):
         value = -value
-    derivation = None if cell is not None else _derivation(answer, m, scope, metric, vocab)
+    derivation = None if cell is not None else _derivation(answer, m, scope, vocab)
     if derivation == _AMBIGUOUS_PERIOD:
         # Unresolved rather than guessed: the claim becomes UNVERIFIABLE.
         metric, derivation = None, None
@@ -556,13 +608,18 @@ def extract_claims(
             consumed.add(i)
             # The same sign rules as Tier 2 (issue #43): a citation pins
             # which fact is meant, not how the sign was written.
-            negated = _negated_by_direction(answer, m, _scope(answer, m.start))
+            scope = _scope(answer, m.start)
+            negated = _negated_by_direction(answer, m, scope)
             claims.append(
                 Claim(
                     value=-m.value if negated else m.value,
                     span=(m.start, m.end),
                     text=m.text,
                     tier=1,
+                    # What the prose says the number is about; the matcher
+                    # checks the cited fact agrees (#95).
+                    entity=_entity(answer, m.start, scope, set(known_entities)),
+                    as_of=_date(answer, m.start, scope),
                     unit=m.unit,
                     resolution=m.resolution,
                     citation=Citation(receipt_id=cit.group(1), json_ptr=cit.group(2) or "/"),
