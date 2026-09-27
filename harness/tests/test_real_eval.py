@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from vouch_harness import signing
 from vouch_harness.label import store
 from vouch_harness.real_eval import MISSED, detection, main, score_runs, to_markdown
 from vouch_verifier.matcher import DEFAULT_TOLERANCES
@@ -133,3 +134,64 @@ def test_cli(
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["labeled_runs"] == 3 and out["detection"]["tp"] == 3
+
+
+def test_a_bad_signature_names_its_run(
+    workspace: tuple[Path, dict[store.SpanKey, store.LabelRecord]],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs, _ = workspace  # no key ids recorded: runs from before they were
+    assert main([*_cli_args(runs), "--key", "wrong"]) == 2
+    assert "m/t01/s0: line 1: signature verification failed" in capsys.readouterr().err
+
+
+def _cli_args(runs: Path) -> list[str]:
+    return [
+        "--labeler",
+        "alice",
+        "--runs",
+        str(runs),
+        "--labels",
+        str(runs.parent / "labels"),
+        "--tolerances",
+        str(ROOT / "tolerance.yaml"),
+        "--format",
+        "json",
+    ]
+
+
+def test_key_resolution_is_shared(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VOUCH_HMAC_KEY", raising=False)
+    assert signing.resolve_key() == signing.EVAL_HMAC_KEY
+    assert signing.resolve_key("explicit") == "explicit"
+    monkeypatch.setenv("VOUCH_HMAC_KEY", "from-env")
+    assert signing.resolve_key() == "from-env"
+    assert signing.resolve_key("explicit") == "explicit"
+    assert signing.key_id("from-env") == signing.key_id(b"from-env")
+    assert len(signing.key_id("from-env")) == 8
+
+
+def test_cli_takes_the_key_from_the_environment(
+    workspace: tuple[Path, dict[store.SpanKey, store.LabelRecord]],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runs, _ = workspace
+    monkeypatch.setenv("VOUCH_HMAC_KEY", KEY.decode())  # what signed the golden log
+    assert main(_cli_args(runs)) == 0
+    assert json.loads(capsys.readouterr().out)["runs"] == 4
+
+
+def test_cli_names_the_run_signed_with_another_key(
+    workspace: tuple[Path, dict[store.SpanKey, store.LabelRecord]],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runs, _ = workspace
+    for meta in runs.glob("*/*/*/meta.json"):
+        meta.write_text(json.dumps({"prompt": "q", "key_id": signing.key_id(KEY)}))
+    monkeypatch.delenv("VOUCH_HMAC_KEY", raising=False)  # falls back to the eval key
+    assert main(_cli_args(runs)) == 2
+    err = capsys.readouterr().err
+    assert "m/t01/s0" in err
+    assert signing.key_id(KEY) in err and signing.key_id(signing.EVAL_HMAC_KEY) in err

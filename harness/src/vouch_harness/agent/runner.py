@@ -19,8 +19,9 @@ from typing import Any
 
 import yaml
 
-from vouch_harness.agent.llm import ChatClient, Message
-from vouch_harness.agent.mcp_client import StdioMCPClient, ToolHost
+from vouch_harness.agent.llm import ChatClient, Message, check_path_segment
+from vouch_harness.agent.mcp_client import RPCError, StdioMCPClient, ToolHost
+from vouch_harness.signing import key_id
 
 # The date the synthetic data ends on (vouch_harness.market.AS_OF_DAY).
 # Stating it lets the model read "latest" the same way the verifier does.
@@ -54,7 +55,14 @@ class Task:
 
 def load_tasks(path: str | Path) -> list[Task]:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    tasks = [Task(id=t["id"], prompt=t["prompt"], tags=tuple(t.get("tags", ()))) for t in raw]
+    tasks = [
+        Task(
+            id=check_path_segment("task id", t["id"]),
+            prompt=t["prompt"],
+            tags=tuple(t.get("tags", ())),
+        )
+        for t in raw
+    ]
     ids = [t.id for t in tasks]
     if len(ids) != len(set(ids)):
         raise ValueError("duplicate task ids")
@@ -92,12 +100,33 @@ def _tool_text(result: dict[str, Any]) -> str:
     return f"ERROR: {text}" if result.get("isError") else text
 
 
+def _content_text(content: Any) -> str:
+    """The answer text of an assistant message. Some OpenAI-compatible
+    providers send content as a list of parts; only the text parts are
+    the answer, and str() of the list would be labeled and scored."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(p.get("text", ""))
+            for p in content
+            if isinstance(p, dict) and p.get("type") == "text"
+        )
+    return ""
+
+
+# Finish reasons that mean the answer was cut off, not completed.
+_TRUNCATED = frozenset({"length", "content_filter"})
+
+
 @dataclass(frozen=True)
 class RunResult:
     answer: str
     turns: int
     tool_calls: int
-    finished: bool  # False when MAX_TURNS ran out before a final answer
+    # False when MAX_TURNS ran out, or the provider cut the answer off.
+    finished: bool
+    finish_reason: str | None = None  # the provider's, for the last turn
 
 
 def run_agent(
@@ -115,20 +144,46 @@ def run_agent(
     calls = 0
     for turn in range(1, MAX_TURNS + 1):
         reply = client.complete(messages, tools, sample)
-        messages.append(reply)
-        tool_calls = reply.get("tool_calls") or []
+        message = reply.message
+        messages.append(message)
+        tool_calls = message.get("tool_calls") or []
         if not tool_calls:
-            return RunResult(str(reply.get("content") or ""), turn, calls, True), messages
+            reason = reply.finish_reason
+            result = RunResult(
+                _content_text(message.get("content")), turn, calls, reason not in _TRUNCATED, reason
+            )
+            return result, messages
         for tc in tool_calls:
             calls += 1
             fn = tc.get("function", {})
-            try:
-                args = json.loads(fn.get("arguments") or "{}")
-                text = _tool_text(host.call_tool(fn.get("name", ""), args))
-            except json.JSONDecodeError as e:
-                text = f"ERROR: arguments are not valid JSON: {e}"
-            messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": text})
+            messages.append(
+                {"role": "tool", "tool_call_id": tc.get("id", ""), "content": _call(host, fn)}
+            )
     return RunResult("", MAX_TURNS, calls, False), messages
+
+
+def _call(host: ToolHost, fn: dict[str, Any]) -> str:
+    """One tool call's result text. Everything the model can get wrong
+    (bad JSON, a non-object, an unknown tool) becomes an ERROR message
+    it reads and can recover from; real models do all of these, and
+    none of them should end the run. A broken session (MCPError other
+    than RPCError) still raises: the run cannot continue meaningfully."""
+    raw = fn.get("arguments")
+    if isinstance(raw, dict):
+        args: Any = raw  # some providers send the object instead of a JSON string
+    elif raw is None or isinstance(raw, str):
+        try:
+            args = json.loads(raw or "{}")
+        except json.JSONDecodeError as e:
+            return f"ERROR: arguments are not valid JSON: {e}"
+    else:
+        args = raw
+    if not isinstance(args, dict):
+        return f"ERROR: arguments must be a JSON object, got {type(args).__name__}"
+    try:
+        return _tool_text(host.call_tool(str(fn.get("name", "")), args))
+    except RPCError as e:
+        return f"ERROR: {e}"
 
 
 @dataclass(frozen=True)
@@ -180,6 +235,7 @@ def execute(
         return d
     d.mkdir(parents=True, exist_ok=True)
     (d / "receipts.jsonl").unlink(missing_ok=True)  # a partial previous attempt
+    (d / "error.txt").unlink(missing_ok=True)  # its recorded failure
     argv = proxy_argv(proxy, schemas, d, spec.session)
     if host_factory is not None:
         host = host_factory(argv, env, d)
@@ -197,6 +253,9 @@ def execute(
         "prompt": spec.task.prompt,
         "sample": spec.sample,
         "session": spec.session,
+        # Which key signed receipts.jsonl, so scoring can tell a wrong
+        # key from a tampered log (vouch_harness.signing).
+        "key_id": key_id(env["VOUCH_HMAC_KEY"]) if "VOUCH_HMAC_KEY" in env else None,
         **asdict(result),
     }
     (d / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import http.client
 import json
+import shutil
+import subprocess
 import threading
 import urllib.error
 import urllib.request
@@ -13,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from vouch_harness.label import server as label_server
 from vouch_harness.label import store
 from vouch_harness.label.agreement import agreement, cohen_kappa
 from vouch_harness.label.runs import discover, load_run
@@ -125,7 +129,7 @@ def server(tmp_path: Path) -> Iterator[str]:
     make_run(tmp_path / "runs")
     app = LabelApp(tmp_path / "runs", tmp_path / "labels", "alice")
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), _handler(app))
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread = threading.Thread(target=httpd.serve_forever, args=(0.05,), daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{httpd.server_port}"
     httpd.shutdown()
@@ -156,9 +160,180 @@ def test_http_api_round_trip(server: str) -> None:
         assert json.loads(resp.read())["labels"][0]["text"] == "1.15%"
 
 
+def _raw(
+    server: str, method: str, path: str, headers: dict[str, str], body: bytes | None = None
+) -> tuple[int, bytes]:
+    """A request with exactly these headers (urllib would fill in Host)."""
+    port = int(server.rsplit(":", 1)[1])
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+        for k, v in headers.items():
+            conn.putheader(k, v)
+        if body is not None:
+            conn.putheader("Content-Length", str(len(body)))
+        conn.endheaders(body)
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
+
+
+def _label_body() -> bytes:
+    start = ANSWER.index("1.15%")
+    return json.dumps(
+        {"run": "m/t01/s0", "start": start, "end": start + 5, "text": "1.15%", "label": "SUPPORTED"}
+    ).encode()
+
+
+@pytest.mark.parametrize(
+    ("headers", "status"),
+    [
+        ({"Content-Type": "text/plain"}, 415),  # a CORS simple request: no preflight
+        ({"Content-Type": "application/json", "Origin": "https://evil.example"}, 403),
+        ({"Content-Type": "application/json", "Origin": "null"}, 403),
+        ({"Content-Type": "application/json", "Host": "attacker.example"}, 403),
+    ],
+)
+def test_http_api_rejects_forged_label_writes(
+    server: str, tmp_path: Path, headers: dict[str, str], status: int
+) -> None:
+    port = server.rsplit(":", 1)[1]
+    sent = {"Host": f"127.0.0.1:{port}", **headers}
+    assert _raw(server, "POST", "/api/label", sent, _label_body())[0] == status
+    assert not (tmp_path / "labels" / "alice.jsonl").exists()
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost"])
+def test_http_api_accepts_same_origin_writes(server: str, host: str) -> None:
+    port = server.rsplit(":", 1)[1]
+    headers = {
+        "Host": f"{host}:{port}",
+        "Origin": f"http://{host}:{port}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    status, body = _raw(server, "POST", "/api/label", headers, _label_body())
+    assert status == 200, body
+    assert json.loads(body)["labels"][0]["label"] == "SUPPORTED"
+
+
+@pytest.mark.parametrize(
+    ("host", "status"),
+    [("attacker.example", 403), ("127.0.0.1:1", 403), (None, 403), ("localhost:{port}", 200)],
+)
+def test_http_api_checks_the_host_header(server: str, host: str | None, status: int) -> None:
+    port = server.rsplit(":", 1)[1]
+    headers = {} if host is None else {"Host": host.format(port=port)}
+    assert _raw(server, "GET", "/api/runs", headers)[0] == status
+
+
 def test_http_api_rejects_bad_requests(server: str) -> None:
     for path in ("/api/run?id=../../x", "/api/run", "/nope"):
         with pytest.raises(urllib.error.HTTPError) as err:
             _get(server + path)
         assert err.value.code in (400, 404)
         err.value.close()
+
+
+# Outside the BMP: one code point in Python, two UTF-16 units in the page.
+EMOJI_ANSWER = "\U0001f4c8 NVDA closed at 181.52, and volume was about 190 million."
+
+
+def test_server_spans_are_code_point_offsets(tmp_path: Path) -> None:
+    make_run(tmp_path / "runs", answer=EMOJI_ANSWER)
+    view = load_run(tmp_path / "runs", "m/t01/s0")
+    spans = [(s["start"], s["end"], s["text"]) for s in view.spans]
+    assert spans == [(17, 23, "181.52"), (46, 57, "190 million")]
+    app = LabelApp(tmp_path / "runs", tmp_path / "labels", "alice")
+    start = EMOJI_ANSWER.index("about 190 million")
+    body = {"run": "m/t01/s0", "start": start, "end": start + 17, "text": "about 190 million"}
+    app.label({**body, "label": "SUPPORTED", "source": "manual"})
+
+
+NODE = shutil.which("node")
+
+
+def page_script(block: str) -> str:
+    """One marked block of the page's script, for testing it in node."""
+    html = Path(label_server.__file__).with_name("static").joinpath("index.html").read_text()
+    begin, end = f"// BEGIN {block}\n", f"// END {block}\n"
+    return html[html.index(begin) + len(begin) : html.index(end)]
+
+
+def run_node(tmp_path: Path, script: str) -> None:
+    assert NODE is not None
+    path = tmp_path / "test.js"
+    path.write_text('"use strict";\n' + script)
+    proc = subprocess.run([NODE, str(path)], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_page_script_parses(tmp_path: Path) -> None:
+    html = Path(label_server.__file__).with_name("static").joinpath("index.html").read_text()
+    script = html[html.index("<script>") + len("<script>") : html.index("</script>")]
+    path = tmp_path / "page.js"
+    path.write_text(script)
+    assert NODE is not None
+    proc = subprocess.run([NODE, "--check", str(path)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_page_converts_offsets_between_code_points_and_utf16(tmp_path: Path) -> None:
+    make_run(tmp_path / "runs", answer=EMOJI_ANSWER)
+    spans = load_run(tmp_path / "runs", "m/t01/s0").spans
+    selected = "about 190 million"
+    start_cp = EMOJI_ANSWER.index(selected)
+    checks = f"""
+const assert = require("node:assert/strict");
+const answer = {json.dumps(EMOJI_ANSWER)};
+const off = offsetMap(answer);
+// Drawing: a server span, mapped to UTF-16, slices exactly its text.
+for (const s of {json.dumps(spans)}) {{
+  assert.equal(answer.slice(off.toU16(s.start), off.toU16(s.end)), s.text);
+}}
+// Selecting: DOM (UTF-16) offsets map back to the server's code points.
+const u16 = answer.indexOf({json.dumps(selected)});
+assert.equal(off.toCp(u16), {start_cp});
+assert.equal(off.toCp(u16 + {len(selected)}), {start_cp + len(selected)});
+assert.equal(off.toCp(0), 0);
+assert.equal(off.toU16(0), 0);
+assert.equal(off.toCp(answer.length), {len(EMOJI_ANSWER)});
+assert.equal(off.toU16({len(EMOJI_ANSWER)}), answer.length);
+"""
+    run_node(tmp_path, page_script("offsets") + checks)
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_page_keeps_unsaved_manual_spans_across_refreshes(tmp_path: Path) -> None:
+    checks = """
+const assert = require("node:assert/strict");
+const token = (start, end, text) => ({ start, end, text });
+const label = (start, end, text, lbl, source) =>
+  ({ start, end, text, label: lbl, source, note: "" });
+const spans = [token(19, 25, "160.36"), token(30, 35, "1.15%")];
+const unsaved = new Map();
+const keys = (list) => list.map((s) => `${s.start}:${s.end}:${s.label || "-"}:${s.source}`);
+// Two missed numbers added by hand, not yet labeled.
+unsaved.set("r", [
+  { start: 0, end: 4, text: "NVDA", source: "manual" },
+  { start: 40, end: 42, text: "24", source: "manual" },
+]);
+// Labeling a different span: the server reply carries only labeled spans.
+let run = { id: "r", spans, labels: [label(19, 25, "160.36", "SUPPORTED", "token")] };
+assert.deepEqual(keys(mergeSpans(run, unsaved)),
+  ["0:4:-:manual", "19:25:SUPPORTED:token", "30:35:-:token", "40:42:-:manual"]);
+// Labeling a manual span saves it; it is no longer pending.
+run.labels.push(label(0, 4, "NVDA", "UNSUPPORTED", "manual"));
+assert.deepEqual(keys(mergeSpans(run, unsaved)),
+  ["0:4:UNSUPPORTED:manual", "19:25:SUPPORTED:token", "30:35:-:token", "40:42:-:manual"]);
+assert.deepEqual(unsaved.get("r").map((s) => s.start), [40]);
+// Clearing that label removes the span instead of resurrecting it.
+run.labels.pop();
+assert.deepEqual(keys(mergeSpans(run, unsaved)),
+  ["19:25:SUPPORTED:token", "30:35:-:token", "40:42:-:manual"]);
+// Another run's unsaved spans stay out.
+assert.equal(mergeSpans({ id: "other", spans: [], labels: [] }, unsaved).length, 0);
+"""
+    run_node(tmp_path, page_script("spans") + checks)

@@ -15,6 +15,10 @@ vouch-label stats                               # progress per labeler
 vouch-label agreement <name-a> <name-b>         # Cohen's kappa on shared spans
 ```
 
+Open the tool at `http://127.0.0.1:<port>/` or `http://localhost:<port>/`.
+It refuses any other Host name and any write from another origin, so
+no other web page you have open can read runs or forge labels.
+
 Labels go to `eval/labels/<your-name>.jsonl`. The file is append-only:
 relabeling a span adds a record, and the latest record wins. Commit it
 like any other data.
@@ -36,7 +40,9 @@ pre-marks the numbers the tokenizer found. Two kinds of correction:
   then label it. Include magnitude words and percent signs in the
   selection (*"41.2 million"*, *"1.35%"*), but not currency symbols.
   Missed spans are how the evaluation measures the verifier's recall,
-  so do not skip them.
+  so do not skip them. An added span is saved when you label it; until
+  then it stays in the open page (labeling other spans or switching
+  runs keeps it) but a page reload drops it.
 
 ## Labels
 

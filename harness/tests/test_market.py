@@ -72,3 +72,43 @@ def test_serve_speaks_newline_delimited_jsonrpc() -> None:
     assert replies[0]["result"]["protocolVersion"] == "x"
     assert {t["name"] for t in replies[1]["result"]["tools"]} == set(market._HANDLERS)
     assert replies[2]["error"]["code"] == -32601
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "message"),
+    [
+        ("get_quote", {"symbol": "NVDA", "timeframe": "1d"}, "unexpected argument"),
+        ("get_ohlcv", {"symbol": "NVDA", "limit": "five"}, "must be an integer"),
+        ("get_ohlcv", {"symbol": "NVDA", "limit": True}, "must be an integer"),
+        ("get_quote", {"symbol": ["NVDA"]}, "must be a string"),
+        ("get_quote", {}, "missing required argument"),
+        ("get_quote", ["NVDA"], "must be an object"),
+        ("get_quote", None, "must be an object"),
+    ],
+)
+def test_malformed_arguments_are_tool_errors(name: str, arguments: object, message: str) -> None:
+    result = market.call_tool(name, arguments)
+    assert result["isError"] is True
+    assert message in result["content"][0]["text"]
+
+
+def test_serve_survives_malformed_arguments() -> None:
+    requests = [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "get_quote", "arguments": {"symbol": ["NVDA"]}},
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "get_quote", "arguments": {"symbol": "NVDA"}},
+        },
+    ]
+    out = io.StringIO()
+    market.serve(io.StringIO("".join(json.dumps(r) + "\n" for r in requests)), out)
+    replies = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert replies[0]["result"]["isError"] is True
+    assert "isError" not in replies[1]["result"]

@@ -5,9 +5,9 @@
 Each (model, task, sample) gets its own proxy session and run directory
 under --out. Completed runs are skipped and every model response is
 cached, so an interrupted or repeated invocation only pays for what it
-has not done yet. The receipt signing key defaults to a fixed, public
-evaluation key: these receipts prove integrity of the published eval
-data, not secrecy.
+has not done yet. Receipts are signed with $VOUCH_HMAC_KEY when set,
+else the public evaluation key (vouch_harness.signing), and each run's
+meta.json records the key id.
 """
 
 from __future__ import annotations
@@ -15,13 +15,44 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import traceback
+from collections.abc import Callable
 from pathlib import Path
 
-from vouch_harness.agent.llm import CachedClient, LLMError, OpenAICompatClient, load_models
+from vouch_harness.agent.llm import (
+    CachedClient,
+    LLMError,
+    OpenAICompatClient,
+    cache_identity,
+    load_models,
+)
 from vouch_harness.agent.runner import RunSpec, execute, load_tasks, run_dir
+from vouch_harness.signing import resolve_key
 
-EVAL_HMAC_KEY = "vouch-eval-key"
 _TURNS_ESTIMATE = 3  # typical requests per run: tool calls, then the answer
+
+
+def run_batch(pending: list[RunSpec], run_one: Callable[[RunSpec], Path], out: Path) -> int:
+    """Run each spec; return how many failed. A failure of any kind is
+    recorded in that run's error.txt and the batch moves on: one bad run
+    must not cost the rest of a paid batch. The failed run has no
+    meta.json, so a rerun retries it."""
+    failed = 0
+    for i, spec in enumerate(pending, start=1):
+        try:
+            d = run_one(spec)
+        except Exception as e:
+            failed += 1
+            err = run_dir(out, spec)
+            err.mkdir(parents=True, exist_ok=True)
+            (err / "error.txt").write_text(traceback.format_exc(), encoding="utf-8")
+            print(
+                f"[{i}/{len(pending)}] {spec.session}: FAILED: {type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
+            continue
+        print(f"[{i}/{len(pending)}] {spec.session} -> {d}", file=sys.stderr)
+    return failed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -71,19 +102,14 @@ def main(argv: list[str] | None = None) -> int:
     except LLMError as e:
         print(f"vouch-agent: {e}", file=sys.stderr)
         return 2
-    client = CachedClient(inner, args.cache, identity=f"{config.endpoint}|{config.model}")
-    env = {**os.environ, "VOUCH_HMAC_KEY": os.environ.get("VOUCH_HMAC_KEY", EVAL_HMAC_KEY)}
+    client = CachedClient(inner, args.cache, identity=cache_identity(config))
+    env = {**os.environ, "VOUCH_HMAC_KEY": resolve_key()}
 
-    failed = 0
-    for i, spec in enumerate(pending, start=1):
-        try:
-            d = execute(spec, client, args.out, args.proxy, args.schemas, env)
-        except LLMError as e:
-            # Keep going: the completed runs are saved, and a rerun resumes.
-            failed += 1
-            print(f"[{i}/{len(pending)}] {spec.session}: FAILED: {e}", file=sys.stderr)
-            continue
-        print(f"[{i}/{len(pending)}] {spec.session} -> {d}", file=sys.stderr)
+    failed = run_batch(
+        pending,
+        lambda spec: execute(spec, client, args.out, args.proxy, args.schemas, env),
+        args.out,
+    )
     print(
         f"vouch-agent: done; {failed} failed; cache {client.hits} hits, {client.misses} requests",
         file=sys.stderr,
