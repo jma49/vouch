@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/jma49/vouch/proxy/internal/clock"
 	"github.com/jma49/vouch/proxy/internal/extract"
@@ -116,12 +117,12 @@ func runProxy(args []string) error {
 			})
 		}
 	default: // live, record
+		defer func() { closeAll(ups) }()
 		for _, cmd := range upstreams {
 			u, err := proxy.Spawn(cmd)
 			if err != nil {
 				return err
 			}
-			defer u.Close()
 			if *mode == "record" {
 				u.Client = fixture.NewRecorder(u.Name, u.Client, fixStore, clk.Now)
 			}
@@ -141,6 +142,25 @@ func runProxy(args []string) error {
 	fmt.Fprintf(os.Stderr, "vouch proxy: mode %s, session %s, %d upstream(s), receipts in %s\n",
 		*mode, *session, len(ups), *receiptsDir)
 	return srv.Run()
+}
+
+// closeAll shuts upstreams down in parallel, so shutdown takes at most
+// one close timeout rather than one per upstream.
+func closeAll(ups []*proxy.Upstream) {
+	var wg sync.WaitGroup
+	for _, u := range ups {
+		if u.Close == nil {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := u.Close(); err != nil {
+				fmt.Fprintln(os.Stderr, "vouch:", err)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func randomHex(n int) string {
