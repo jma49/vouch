@@ -1,7 +1,10 @@
 // Command vouch is the entry point for the vouch proxy.
 //
-//	vouch proxy --upstream "cmd args" [--upstream ...] \
+//	vouch proxy --upstream "[name=]cmd args" [--upstream ...] \
 //	    --receipts <dir> --schemas <dir> [--session <id>]
+//
+// An upstream's name defaults to its whole command; name= sets a short,
+// stable one. Names key record/replay fixtures and must be unique.
 //
 // The HMAC signing key is read from $VOUCH_HMAC_KEY. Verification of
 // answers against the receipt log is the Python side's job (vouch-verify).
@@ -52,14 +55,14 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  vouch proxy --upstream "cmd args" [--upstream ...] --receipts <dir> --schemas <dir>
+  vouch proxy --upstream "[name=]cmd args" [--upstream ...] --receipts <dir> --schemas <dir>
   vouch version`)
 }
 
 func runProxy(args []string) error {
 	fs := flag.NewFlagSet("proxy", flag.ExitOnError)
 	var upstreams stringSlice
-	fs.Var(&upstreams, "upstream", "upstream MCP server command (repeatable)")
+	fs.Var(&upstreams, "upstream", "upstream MCP server as \"[name=]command\" (repeatable)")
 	receiptsDir := fs.String("receipts", "receipts", "directory for the receipt log")
 	schemasDir := fs.String("schemas", "schemas", "directory of fact-extraction sidecar configs")
 	session := fs.String("session", "", "session id (default: random)")
@@ -110,16 +113,20 @@ func runProxy(args []string) error {
 			return err
 		}
 		clk = &clock.Logical{Epoch: epoch}
-		for name, toolsResult := range tools {
+		for _, rec := range tools {
 			ups = append(ups, &proxy.Upstream{
-				Name:   name,
-				Client: &fixture.Replayer{Upstream: name, Store: fixStore, Tools: toolsResult},
+				Name:   rec.Name,
+				Client: &fixture.Replayer{Upstream: rec.Name, Store: fixStore, Tools: rec.Tools},
 			})
 		}
 	default: // live, record
+		specs, err := proxy.ParseUpstreams(upstreams)
+		if err != nil {
+			return err
+		}
 		defer func() { closeAll(ups) }()
-		for _, cmd := range upstreams {
-			u, err := proxy.Spawn(cmd)
+		for _, spec := range specs {
+			u, err := proxy.Spawn(spec)
 			if err != nil {
 				return err
 			}

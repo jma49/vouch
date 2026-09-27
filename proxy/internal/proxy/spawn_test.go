@@ -58,11 +58,86 @@ func TestHelperProcess(t *testing.T) {
 func spawnHelper(t *testing.T, mode string) *Upstream {
 	t.Helper()
 	t.Setenv(helperEnv, mode)
-	u, err := Spawn(os.Args[0] + " -test.run=^TestHelperProcess$")
+	u, err := Spawn(UpstreamSpec{Name: mode, Command: os.Args[0] + " -test.run=^TestHelperProcess$"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return u
+}
+
+// TestParseUpstreams pins upstream identity: the name keys fixtures
+// and routes errors, so two upstreams must never share one. Deriving it
+// from the executable alone collapsed "python3 a.py" and "python3 b.py".
+func TestParseUpstreams(t *testing.T) {
+	cases := []struct {
+		name    string
+		specs   []string
+		want    []UpstreamSpec
+		wantErr string
+	}{
+		{"shared executable", []string{"python3 fake.py tool_a", "python3 fake.py tool_b"}, []UpstreamSpec{
+			{Name: "python3 fake.py tool_a", Command: "python3 fake.py tool_a"},
+			{Name: "python3 fake.py tool_b", Command: "python3 fake.py tool_b"},
+		}, ""},
+		{"whitespace normalized", []string{"  python3   -m  market "}, []UpstreamSpec{
+			{Name: "python3 -m market", Command: "python3 -m market"},
+		}, ""},
+		{"explicit name", []string{"market=python3 -m market", "quotes=python3 -m market --quotes"}, []UpstreamSpec{
+			{Name: "market", Command: "python3 -m market"},
+			{Name: "quotes", Command: "python3 -m market --quotes"},
+		}, ""},
+		{"equals inside a path is not a name", []string{"/opt/a=b/bin/srv --x=1"}, []UpstreamSpec{
+			{Name: "/opt/a=b/bin/srv --x=1", Command: "/opt/a=b/bin/srv --x=1"},
+		}, ""},
+		{"empty", []string{"  "}, nil, "empty upstream command"},
+		{"name without command", []string{"market="}, nil, "empty upstream command"},
+		{"duplicate command", []string{"python3 a.py", "python3  a.py"}, nil, "duplicate upstream name"},
+		{"duplicate explicit name", []string{"m=python3 a.py", "m=python3 b.py"}, nil, "duplicate upstream name"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseUpstreams(tc.specs)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("got %v, %v; want error mentioning %q", got, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %+v, want %+v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("spec %d: got %+v, want %+v", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestSpawnUsesSpecName guards the original bug at its source: Spawn
+// named every upstream after its executable.
+func TestSpawnUsesSpecName(t *testing.T) {
+	cmd := os.Args[0] + " -test.run=^TestHelperProcess$"
+	specs, err := ParseUpstreams([]string{cmd + " a", cmd + " b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, spec := range specs {
+		u, err := Spawn(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer u.Close()
+		names = append(names, u.Name)
+	}
+	if names[0] == names[1] {
+		t.Fatalf("both upstreams named %q", names[0])
+	}
 }
 
 // TestCloseKillsUpstreamThatIgnoresEOF pins that shutdown is bounded:
