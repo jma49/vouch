@@ -508,15 +508,19 @@ func (s *Server) handleToolsCall(ctx context.Context, m *mcp.Message) error {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
+		Meta      json.RawMessage `json:"_meta"` // read only so "_META" is refused
 	}
 	// Params the proxy and the upstream could read differently are
-	// refused before the upstream runs: with a duplicate "name", Go would
-	// route and receipt the last value while the upstream may execute
-	// the first. Canonicalize is the strict reader (receipt package).
-	if _, err := receipt.Canonicalize(m.Params); len(m.Params) > 0 && err != nil {
-		return s.replyError(m, mcp.CodeInvalidParams, fmt.Sprintf("tools/call: params: %v", err))
+	// refused before the upstream runs: with a duplicate "name", or both
+	// "arguments" and "Arguments", Go would route and receipt one value
+	// while the upstream executes another (#98). DecodeStrict is the
+	// reader every party agrees with.
+	if len(m.Params) > 0 {
+		if err := receipt.DecodeStrict(m.Params, &params); err != nil {
+			return s.replyError(m, mcp.CodeInvalidParams, fmt.Sprintf("tools/call: params: %v", err))
+		}
 	}
-	if err := json.Unmarshal(m.Params, &params); err != nil || params.Name == "" {
+	if params.Name == "" {
 		return s.replyError(m, mcp.CodeInvalidParams, "tools/call: missing tool name")
 	}
 	s.mu.RLock()
@@ -612,7 +616,11 @@ func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize response: %w", err)
 	}
-	payload, source := resultPayload(result)
+	var res toolResult
+	if err := receipt.DecodeStrict(result, &res); err != nil {
+		return nil, fmt.Errorf("result: %w", err)
+	}
+	payload, source := res.payload(result)
 	resultCanon, err := receipt.Canonicalize(payload)
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize result: %w", err)
@@ -623,7 +631,7 @@ func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int
 	// data the tool returned, so it carries no facts.
 	var facts []receipt.Fact
 	var dataAsOf string
-	if schema, ok := s.Schemas[tool]; ok && !isToolError(result) {
+	if schema, ok := s.Schemas[tool]; ok && !res.IsError {
 		facts, err = schema.Extract(resultCanon)
 		if err != nil {
 			return nil, err
@@ -656,38 +664,34 @@ func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int
 	return r, nil
 }
 
-// isToolError reports whether an MCP tools/call result is flagged as a
-// tool-level error (isError: true).
-func isToolError(result json.RawMessage) bool {
-	var res struct {
-		IsError bool `json:"isError"`
-	}
-	return json.Unmarshal(result, &res) == nil && res.IsError
+// toolResult is what the proxy reads of an MCP tools/call result, read
+// strictly: an upstream sending both "isError" and "IsError", or
+// "structuredContent" and "StructuredContent", would otherwise decide
+// which payload is receipted differently for the proxy and the agent's
+// SDK (#98). isError flags a tool-level error.
+type toolResult struct {
+	IsError           bool            `json:"isError"`
+	StructuredContent json.RawMessage `json:"structuredContent"`
+	Content           []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
 }
 
-// resultPayload picks the JSON document facts are extracted from:
+// payload picks the JSON document facts are extracted from:
 // structuredContent when the upstream provides it, else the first text
 // content block when it parses as JSON, else the whole MCP result.
-func resultPayload(result json.RawMessage) (json.RawMessage, string) {
-	var res struct {
-		StructuredContent json.RawMessage `json:"structuredContent"`
-		Content           []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
+func (res toolResult) payload(result json.RawMessage) (json.RawMessage, string) {
+	if sc := bytes.TrimSpace(res.StructuredContent); len(sc) > 0 && !bytes.Equal(sc, []byte("null")) {
+		return res.StructuredContent, "structuredContent"
 	}
-	if err := json.Unmarshal(result, &res); err == nil {
-		if sc := bytes.TrimSpace(res.StructuredContent); len(sc) > 0 && !bytes.Equal(sc, []byte("null")) {
-			return res.StructuredContent, "structuredContent"
-		}
-		for i, c := range res.Content {
-			// Only a JSON object or array is a document facts can come
-			// from; a scalar such as "1" is valid JSON but would shadow
-			// the real payload in a later block (#20).
-			text := bytes.TrimSpace([]byte(c.Text))
-			if c.Type == "text" && len(text) > 0 && (text[0] == '{' || text[0] == '[') && json.Valid(text) {
-				return json.RawMessage(c.Text), fmt.Sprintf("content/%d/text", i)
-			}
+	for i, c := range res.Content {
+		// Only a JSON object or array is a document facts can come
+		// from; a scalar such as "1" is valid JSON but would shadow the
+		// real payload in a later block (#20).
+		text := bytes.TrimSpace([]byte(c.Text))
+		if c.Type == "text" && len(text) > 0 && (text[0] == '{' || text[0] == '[') && json.Valid(text) {
+			return json.RawMessage(c.Text), fmt.Sprintf("content/%d/text", i)
 		}
 	}
 	return result, "result"

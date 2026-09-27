@@ -56,11 +56,27 @@ def load_keyring(paths: list[str | Path]) -> Keyring:
     return {key_id(k): k for k in (load_public_key(p) for p in paths)}
 
 
+# Exactly these keys, as in Go (store.decodeEntry): a line carrying both
+# "payload" and "Payload" must not be one log to Go and another here
+# (#98).
+ENVELOPE_KEYS = frozenset({"payload", "payloadType", "signatures"})
+SIGNATURE_KEYS = frozenset({"keyid", "sig"})
+
+
 def decode(envelope: dict[str, Any], payload_type: str) -> bytes:
     """Check an envelope's shape and type and return its payload,
     without verifying any signature."""
     if not isinstance(envelope, dict):
         raise SignatureError("line is not a DSSE envelope object")
+    if set(envelope) != ENVELOPE_KEYS:
+        raise SignatureError(
+            f"envelope keys {sorted(envelope)}, want exactly {sorted(ENVELOPE_KEYS)}"
+        )
+    signatures = envelope["signatures"]
+    if not isinstance(signatures, list) or any(
+        not isinstance(s, dict) or set(s) != SIGNATURE_KEYS for s in signatures
+    ):
+        raise SignatureError(f"signatures must be objects with exactly {sorted(SIGNATURE_KEYS)}")
     if envelope.get("payloadType") != payload_type:
         raise SignatureError(f"payload type {envelope.get('payloadType')!r}, want {payload_type!r}")
     payload = envelope.get("payload")

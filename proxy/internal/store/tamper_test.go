@@ -108,6 +108,17 @@ func TestVerifyDetectsTampering(t *testing.T) {
 		{"miscount a checkpoint", [][]byte{r0, r1, r2, resign(t, cp, signer, func(b string) string {
 			return strings.Replace(b, `"receipts":3`, `"receipts":2`, 1)
 		})}, "checkpoint 3 counts 2 receipts"},
+		// #98: a line one reader would parse differently from another.
+		{"merge two envelopes by key case", [][]byte{func() []byte {
+			upper := strings.NewReplacer(`"payload"`, `"Payload"`, `"payloadType"`, `"PayloadType"`,
+				`"signatures"`, `"Signatures"`).Replace(string(r1))
+			return []byte(strings.TrimSuffix(string(r0), "}") + "," + strings.TrimPrefix(upper, "{"))
+		}(), r1, r2, cp}, "not an envelope"},
+		{"duplicate an envelope key", [][]byte{[]byte(strings.Replace(string(r0), `{`, `{"payloadType":"x",`, 1)), r1, r2, cp}, "not an envelope"},
+		{"add a key to a signature", [][]byte{[]byte(strings.Replace(string(r0), `"keyid"`, `"KeyID":"x","keyid"`, 1)), r1, r2, cp}, "not an envelope"},
+		{"re-sign a body with a case-variant key", [][]byte{r0, resign(t, r1, signer, func(b string) string {
+			return strings.Replace(b, `"facts":`, `"Facts":[],"facts":`, 1)
+		}), r2, cp}, "only in case"},
 		{"swap in a checkpoint's signature", [][]byte{r0, r1, r2, func() []byte {
 			var a, b sign.Envelope
 			_ = json.Unmarshal(cp, &a)

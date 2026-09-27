@@ -121,7 +121,8 @@ func (r *Receipt) Body() ([]byte, error) {
 // ParseBody decodes an envelope payload into a receipt.
 func ParseBody(body []byte) (*Receipt, error) {
 	var r Receipt
-	if err := json.Unmarshal(body, &r); err != nil {
+	// Strict, so Go reads a body the way the Python verifier does (#98).
+	if err := DecodeStrict(body, &r); err != nil {
 		return nil, fmt.Errorf("receipt: parse body: %w", err)
 	}
 	return &r, nil

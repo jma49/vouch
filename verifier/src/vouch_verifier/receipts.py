@@ -10,11 +10,10 @@ its signature has been checked.
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 from vouch_verifier.canonical import number_value, parse_preserving, serialize
 from vouch_verifier.signing import (
@@ -90,10 +89,38 @@ def _sha256_digest(canonical: str) -> str:
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+# The keys the Go proxy writes (proxy/internal/receipt). A key that
+# differs from one of these only in case is refused, as Go's reader
+# refuses it: otherwise Go and this module could read different values
+# out of one signed body (#98).
+RECEIPT_KEYS = frozenset(
+    {
+        "receipt_id", "session_id", "turn_index", "tool_name", "args_canonical",
+        "result_canonical", "result_digest", "payload_source", "response_canonical",
+        "response_digest", "facts", "data_asof", "wall_time", "logical_time",
+        "upstream_latency_ms", "seq", "prev_digest",
+    }
+)  # fmt: skip
+CHECKPOINT_KEYS = frozenset({"seq", "prev_digest", "receipts", "session_id", "sealed_at"})
+FACT_KEYS = frozenset(
+    {"entity", "metric", "value", "unit", "as_of", "timeframe", "json_ptr", "tol_class"}
+)
+
+
+def _check_case(obj: dict[str, object], known: frozenset[str], where: str) -> None:
+    folded = {k.lower(): k for k in known}
+    for key in obj:
+        if key not in known and key.lower() in folded:
+            raise ReceiptError(
+                f"{where}: key {key!r} differs from {folded[key.lower()]!r} only in case"
+            )
+
+
 def _parse_receipt(line: str, lineno: int) -> Receipt:
     tree = parse_preserving(line)
     if not isinstance(tree, dict):
         raise ReceiptError(f"line {lineno}: receipt is not an object")
+    _check_case(tree, RECEIPT_KEYS, f"line {lineno}")
 
     def optional_text(key: str) -> str | None:
         v = tree.get(key)
@@ -121,6 +148,7 @@ def _parse_receipt(line: str, lineno: int) -> Receipt:
         for f in raw_facts:
             if not isinstance(f, dict):
                 raise ReceiptError(f"line {lineno}: fact is not an object: {f!r:.60}")
+            _check_case(f, FACT_KEYS, f"line {lineno}: fact")
             facts.append(
                 Fact(
                     entity=f.get("entity", ""),
@@ -215,8 +243,12 @@ def audit_log(
             if not line:
                 continue
             try:
-                envelope = json.loads(line)
-                kind = envelope.get("payloadType") if isinstance(envelope, dict) else None
+                # Duplicate keys are refused here as in Go (Canonicalize).
+                parsed = parse_preserving(line)
+                if not isinstance(parsed, dict):
+                    raise ReceiptError(f"line {lineno}: not a DSSE envelope object")
+                envelope: dict[str, Any] = parsed
+                kind = envelope.get("payloadType")
                 if kind not in (RECEIPT_PAYLOAD_TYPE, CHECKPOINT_PAYLOAD_TYPE):
                     raise ReceiptError(f"line {lineno}: unknown payload type {kind!r}")
                 if keys is not None:
@@ -245,6 +277,7 @@ def audit_log(
 
             if kind == CHECKPOINT_PAYLOAD_TYPE:
                 assert isinstance(tree, dict)
+                _check_case(tree, CHECKPOINT_KEYS, f"line {lineno}")
                 try:
                     counted = int(number_value(tree.get("receipts")))
                 except (ValueError, OverflowError) as e:
