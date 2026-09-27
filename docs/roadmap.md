@@ -109,7 +109,7 @@ labels and fixtures; README headline numbers come from it.
 
 ---
 
-## Phase 3 — Cryptographic integrity that matches the threat model
+## Phase 3 — Cryptographic integrity that matches the threat model — done
 
 Goal: the receipt log's security claims are true and tested.
 
@@ -121,7 +121,7 @@ Goal: the receipt log's security claims are true and tested.
 | Tamper test suite: delete, truncate, reorder, duplicate, edit fact, edit sig — each must be detected, in both Go and Python | done (#55) |
 | Receipts bind the whole result the agent received, not only the extraction payload | done (#50, issue #20) |
 | Crash recovery: a partial final line is truncated on open; a failed append rolls back | done (#46, issue #25) |
-| `docs/threat-model.md`: attacker, assets, what is and is not protected | todo |
+| `docs/threat-model.md`: attacker, assets, what is and is not protected | done (#56) |
 
 Exit criteria: tamper suite green in both languages; design §3.1
 rewritten to match.
