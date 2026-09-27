@@ -70,7 +70,7 @@ func goldenReceipts(t *testing.T) []*receipt.Receipt {
 		// No schema for this tool: nil facts, no data_asof, unicode result.
 		mk("golden-2", 2, "get_news",
 			`{}`,
-			`{"headline":"英伟达发布新品","score":0.87}`,
+			`{"headline":"英伟达发布新品\u2028update","score":0.87}`,
 			nil, ""),
 	}
 }
