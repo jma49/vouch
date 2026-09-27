@@ -113,7 +113,7 @@ The signature covers DSSE's pre-authentication encoding of the exact payload byt
 
 **On the signature: what it is for and what it is not for.** In a single-process setup the LLM cannot write to our storage anyway; the signature is *not* protecting against the model. Its actual value: (a) tamper-evidence when receipts cross process or machine boundaries or rest on disk; (b) third-party verification: anyone holding the public key can re-verify that a verdict report was computed against unmodified receipts, and cannot forge one; (c) replay protection via `(session_id, turn_index)` uniqueness. Ed25519 replaced the original HMAC scheme because HMAC could not give (b): whoever can verify an HMAC can also forge it (#53).
 
-**The chain.** Every entry's signed body carries `seq` (its position in the log) and `prev_digest` (the sha256 of the previous entry's payload bytes, or a genesis value of zeros), so deleting, inserting, or reordering entries breaks the chain for everything after them, whether or not signatures are checked (#54). When a session ends cleanly the proxy appends a **checkpoint**, a signed entry of its own payload type (`application/vnd.vouch.checkpoint+json; version=1`) that records the receipt count, and prints the resulting head digest. `--require-sealed` fails a log that does not end in a checkpoint.
+**The chain.** Every entry's signed body carries `seq` (its position in the log) and `prev_digest` (the sha256 of the previous entry's payload bytes, or a genesis value of zeros), so deleting, inserting, or reordering entries breaks the chain for everything after them, whether or not signatures are checked (#54). When a session ends cleanly the proxy appends a **checkpoint**, a signed entry of its own payload type (`application/vnd.vouch.checkpoint+json; version=2`) that records the receipt count, and prints the resulting head digest. `--require-sealed` fails a log that does not end in a checkpoint.
 
 **What the chain cannot do.** A log cut back to an earlier checkpoint is still a valid, sealed chain. Detecting that needs the head digest from a copy kept outside the log: `--expect-head`, or, for evaluation runs, the head recorded in each run's committed `meta.json`. The threat model (docs/threat-model.md) lists every property with the test that pins it, and every limit, including a dishonest key holder.
 
@@ -230,7 +230,7 @@ Tolerance policy is config, versioned with the eval, and printed in every report
 
 ## 7. Canonicalization
 
-Arguments, results, the full response, and the receipt body are digested in **vouch canonical JSON v1**, specified in [canonical-json.md](canonical-json.md): keys sorted by code point, compact output, number literals copied exactly as written, and input with duplicate keys, invalid UTF-8, or lone-surrogate escapes rejected instead of repaired. The Go writer and the Python reader are pinned byte for byte by `testdata/canonical_vectors.json`, and a CI job regenerates the Go-written golden log and fails on drift.
+Arguments, results, the full response, and the receipt body are digested in **vouch canonical JSON v2**, specified in [canonical-json.md](canonical-json.md): keys sorted by code point, compact output, number literals copied exactly as written, and input with duplicate keys, invalid UTF-8, lone-surrogate escapes, or nesting past 256 levels rejected instead of repaired. The Go writer and the Python reader are pinned byte for byte by `testdata/canonical_vectors.json`, differentially fuzzed against each other on generated documents and the committed Go fuzz corpus, and a CI job regenerates the Go-written golden log and fails on drift.
 
 It is deliberately not RFC 8785 (JCS). JCS rewrites every number as a double, which would make a receipt record numbers the agent never saw, such as integers above 2^53, long decimals, or the trailing zero in `181.50`. vouch notarizes data other parties wrote, so fidelity wins over a standard format. Third-party verification does not depend on canonicalization, because signatures cover exact payload bytes (section 3.1). The trade-off is recorded in handoff.md ("Decisions and trade-offs").
 
@@ -334,7 +334,7 @@ Status: all six items are implemented. The SQLite index is built in memory by th
 | Verifier language | Python | Numeric tooling and eval ecosystem |
 | Receipt store | JSONL, SQLite index derived by the verifier | Append-only survives crashes mid-write; the index is disposable and rebuilt from the log; no server dependency |
 | Signing | Ed25519 in DSSE envelopes | Third-party verification needs a public key (HMAC verifiers can forge); DSSE signs exact bytes, so verification does not depend on canonicalization; Python needs the `cryptography` package for it |
-| Canonical JSON | vouch canonical JSON v1, not RFC 8785 | Number literals kept exactly (fidelity over a standard format); shared cross-language vectors; see section 7 |
+| Canonical JSON | vouch canonical JSON v2, not RFC 8785 | Number literals kept exactly (fidelity over a standard format); shared cross-language vectors and differential fuzzing; see section 7 |
 | Upstream servers | Existing open-source market-data MCP servers | We deliberately do not rebuild market data; the README says so |
 
 **Open questions:**

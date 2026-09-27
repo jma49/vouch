@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("מρמρ\u00ad\u00ad\u00ad\u00ad")

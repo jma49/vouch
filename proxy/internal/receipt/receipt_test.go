@@ -1,6 +1,7 @@
 package receipt
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -66,5 +67,24 @@ func TestDigestStableAcrossKeyOrder(t *testing.T) {
 	b, _ := Canonicalize([]byte(`{"a":2,"b":1}`))
 	if Digest(a) != Digest(b) {
 		t.Fatal("digest differs for semantically identical documents")
+	}
+}
+
+// TestBodyNestingLimit pins what MaxDepth means for a tool response:
+// it sits one level down in the body, so a response nested MaxDepth-1
+// levels deep can be receipted and one nested MaxDepth levels cannot,
+// and that call fails rather than going unreceipted (invariant 2, #62).
+func TestBodyNestingLimit(t *testing.T) {
+	nested := func(n int) []byte {
+		return []byte(strings.Repeat("[", n) + strings.Repeat("]", n))
+	}
+	r := sampleReceipt()
+	r.ResponseCanonical = nested(MaxDepth - 1)
+	if _, err := r.Body(); err != nil {
+		t.Fatalf("depth %d: %v", MaxDepth-1, err)
+	}
+	r.ResponseCanonical = nested(MaxDepth)
+	if _, err := r.Body(); err == nil {
+		t.Fatalf("depth %d: body accepted; want the nesting limit", MaxDepth)
 	}
 }

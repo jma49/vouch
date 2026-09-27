@@ -4,6 +4,7 @@
 //	vouch proxy --signing-key <key.pem> --upstream "[name=]cmd args" \
 //	    [--upstream ...] --receipts <dir> --schemas <dir> [--session <id>]
 //	vouch receipts cat <log>
+//	vouch canon [--lines] < input
 //	vouch receipts verify --public-key <key.pub.pem> [--public-key ...] \
 //	    [--require-sealed] [--expect-head <digest>] <log>
 //
@@ -50,9 +51,9 @@ func main() {
 	switch os.Args[1] {
 	case "version":
 		fmt.Println("vouch", version)
-	case "proxy", "keygen", "receipts":
+	case "proxy", "keygen", "receipts", "canon":
 		run := map[string]func([]string) error{
-			"proxy": runProxy, "keygen": runKeygen, "receipts": runReceipts,
+			"proxy": runProxy, "keygen": runKeygen, "receipts": runReceipts, "canon": runCanon,
 		}[os.Args[1]]
 		if err := run(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "vouch:", err)
@@ -72,6 +73,7 @@ func usage() {
   vouch receipts cat <log>
   vouch receipts verify --public-key <key.pub.pem> [--public-key ...] \
       [--require-sealed] [--expect-head <digest>] <log>
+  vouch canon [--lines] < input
   vouch version`)
 }
 
