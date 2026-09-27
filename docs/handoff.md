@@ -451,6 +451,19 @@ wrong in the stated way.
 - Revisit when: a domain needs units beyond USD and percent (the
   tokenizer would have to learn them).
 
+**DERIVED from one receipt's series; citations answer to the prose** (#94, #95)
+- Chosen: a derived value is recomputed only from one receipt's dated
+  series (plus a check that no other receipt disagrees on the days
+  used); a cited number whose sentence names another entity or date is
+  UNSUPPORTED; prefixes under 8 characters cite nothing; disagreeing
+  timeframes make an untimed claim UNVERIFIABLE.
+- Rejected: stitching series across receipts (cannot tell sessions from
+  gaps); trusting a citation over the prose around it.
+- Cost: a correct multi-day claim whose points came from separate calls
+  stays UNSUPPORTED; an answer citing the right fact under a pronoun it
+  cannot resolve keeps its citation's entity only when the prose names
+  none.
+
 **DERIVED: explicit periods only, sessions not days** (#90)
 - Chosen: recompute a change over an explicit period and an N-session
   high/low from the receipted daily series; tolerance from the policy
