@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TextIO
 
 from vouch_verifier.canonical import number_value, parse_preserving, serialize
 
@@ -79,7 +81,7 @@ def _parse_receipt(line: str, lineno: int) -> Receipt:
     def integer(key: str) -> int:
         try:
             return int(number_value(tree.get(key)))
-        except ValueError as e:
+        except (ValueError, OverflowError) as e:
             raise ReceiptError(f"line {lineno}: {key}: {e}") from e
 
     facts = []
@@ -88,6 +90,8 @@ def _parse_receipt(line: str, lineno: int) -> Receipt:
         if not isinstance(raw_facts, list):
             raise ReceiptError(f"line {lineno}: facts is not an array")
         for f in raw_facts:
+            if not isinstance(f, dict):
+                raise ReceiptError(f"line {lineno}: fact is not an object: {f!r:.60}")
             facts.append(
                 Fact(
                     entity=f.get("entity", ""),
@@ -129,6 +133,15 @@ def verify_receipt(r: Receipt, key: bytes) -> bool:
     return hmac.compare_digest("hmac-sha256:" + mac, r.sig)
 
 
+def _numbered_lines(f: TextIO) -> Iterator[tuple[int, str]]:
+    lineno = 0
+    try:
+        for lineno, line in enumerate(f, start=1):
+            yield lineno, line
+    except UnicodeDecodeError as e:
+        raise ReceiptError(f"line {lineno + 1}: not valid UTF-8: {e.reason}") from e
+
+
 def load_log(path: str | Path, key: bytes | None = None) -> list[Receipt]:
     """Read a receipt log, enforcing the invariants the proxy promises.
 
@@ -139,12 +152,23 @@ def load_log(path: str | Path, key: bytes | None = None) -> list[Receipt]:
     """
     receipts: list[Receipt] = []
     seen: dict[tuple[str, int], str] = {}
-    with open(path, encoding="utf-8") as f:
-        for lineno, line in enumerate(f, start=1):
+    ids: set[str] = set()
+    # utf-8-sig: a byte-order mark from an editor is not a reason to reject
+    # a log; a decoding error anywhere else is a ReceiptError (issue #16).
+    with open(path, encoding="utf-8-sig") as f:
+        for lineno, line in _numbered_lines(f):
             line = line.strip()
             if not line:
                 continue
-            r = _parse_receipt(line, lineno)
+            try:
+                r = _parse_receipt(line, lineno)
+            except ReceiptError:
+                raise
+            except (ValueError, TypeError, AttributeError, OverflowError) as e:
+                raise ReceiptError(f"line {lineno}: {e}") from e
+            if r.receipt_id in ids:
+                raise ReceiptError(f"line {lineno}: duplicate receipt_id {r.receipt_id}")
+            ids.add(r.receipt_id)
             if _sha256_digest(r.result_canonical) != r.result_digest:
                 raise ReceiptError(f"line {lineno}: result_digest does not match result_canonical")
             dup = seen.get((r.session_id, r.turn_index))
