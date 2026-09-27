@@ -154,7 +154,8 @@ def extract_claims(
         )
 
     numbers = [
-        m for m in _NUMBER_RE.finditer(answer)
+        m
+        for m in _NUMBER_RE.finditer(answer)
         # Numbers inside a citation marker are not claims.
         if not any(c.start() <= m.start() < c.end() for c in _CITATION_RE.finditer(answer))
         and not is_parameter(m)
@@ -168,7 +169,8 @@ def extract_claims(
     for cit in _CITATION_RE.finditer(answer):
         sent_start, _ = _sentence_bounds(answer, cit.start())
         candidates = [
-            i for i, m in enumerate(numbers)
+            i
+            for i, m in enumerate(numbers)
             if i not in consumed and sent_start <= m.start() and m.end() <= cit.start()
         ]
         if not candidates:

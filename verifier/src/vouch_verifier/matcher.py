@@ -63,19 +63,28 @@ def _match_cited(
     assert claim.citation is not None
     matching = [r for r in receipts if r.receipt_id.startswith(claim.citation.receipt_id)]
     if not matching:
-        return MatchedClaim(claim, Verdict.UNSUPPORTED,
-                            note=f"cited receipt {claim.citation.receipt_id!r} does not exist")
+        return MatchedClaim(
+            claim,
+            Verdict.UNSUPPORTED,
+            note=f"cited receipt {claim.citation.receipt_id!r} does not exist",
+        )
     if len(matching) > 1:
-        return MatchedClaim(claim, Verdict.UNSUPPORTED,
-                            note=f"citation {claim.citation.receipt_id!r} is ambiguous "
-                                 f"({len(matching)} receipts)")
+        return MatchedClaim(
+            claim,
+            Verdict.UNSUPPORTED,
+            note=f"citation {claim.citation.receipt_id!r} is ambiguous ({len(matching)} receipts)",
+        )
     receipt = matching[0]
     for fact in receipt.facts:
         if fact.json_ptr == claim.citation.json_ptr:
             verdict = compare(claim.value, fact.value, _tolerance_for(fact, tolerances))
             return MatchedClaim(claim, verdict, fact=fact, receipt_id=receipt.receipt_id)
-    return MatchedClaim(claim, Verdict.UNSUPPORTED, receipt_id=receipt.receipt_id,
-                        note=f"receipt has no fact at {claim.citation.json_ptr}")
+    return MatchedClaim(
+        claim,
+        Verdict.UNSUPPORTED,
+        receipt_id=receipt.receipt_id,
+        note=f"receipt has no fact at {claim.citation.json_ptr}",
+    )
 
 
 def match_claims(
@@ -103,8 +112,13 @@ def match_claims(
         assert claim.entity is not None and claim.metric is not None
         candidates = facts_for(conn, claim.entity, claim.metric, claim.timeframe)
         if not candidates:
-            out.append(MatchedClaim(claim, Verdict.UNSUPPORTED,
-                                    note=f"no receipt covers ({claim.entity}, {claim.metric})"))
+            out.append(
+                MatchedClaim(
+                    claim,
+                    Verdict.UNSUPPORTED,
+                    note=f"no receipt covers ({claim.entity}, {claim.metric})",
+                )
+            )
             continue
 
         best: tuple[float, str, Fact] | None = None
@@ -118,11 +132,21 @@ def match_claims(
         else:
             assert best is not None
             _, receipt_id, fact = best
-            out.append(MatchedClaim(claim, Verdict.CONTRADICTED, fact=fact, receipt_id=receipt_id,
-                                    note=f"closest receipted value is {fact.value}"))
+            out.append(
+                MatchedClaim(
+                    claim,
+                    Verdict.CONTRADICTED,
+                    fact=fact,
+                    receipt_id=receipt_id,
+                    note=f"closest receipted value is {fact.value}",
+                )
+            )
 
     for claim in extraction.unresolved:
-        out.append(MatchedClaim(claim, Verdict.UNVERIFIABLE,
-                                note="no entity/metric resolution (Tier 3 not enabled)"))
+        out.append(
+            MatchedClaim(
+                claim, Verdict.UNVERIFIABLE, note="no entity/metric resolution (Tier 3 not enabled)"
+            )
+        )
     out.sort(key=lambda mc: mc.claim.span)
     return out

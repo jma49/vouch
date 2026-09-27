@@ -4,14 +4,13 @@ from pathlib import Path
 
 import pytest
 
+from vouch_harness.answers import synthesize
+from vouch_harness.gold import build_gold_set
+from vouch_harness.mutate import inject
 from vouch_verifier.claims import extract_claims
 from vouch_verifier.matcher import match_claims
 from vouch_verifier.receipts import load_log
 from vouch_verifier.verdict import Verdict
-
-from vouch_harness.answers import synthesize
-from vouch_harness.gold import build_gold_set
-from vouch_harness.mutate import inject
 
 GOLDEN = Path(__file__).parent.parent.parent / "testdata" / "receipts_golden.jsonl"
 KEY = b"vouch-golden-key"
@@ -33,8 +32,7 @@ def verdicts_for(answer, receipts):
 
 def is_flagged(answer, receipts):
     return any(
-        v in (Verdict.CONTRADICTED, Verdict.UNSUPPORTED)
-        for v in verdicts_for(answer, receipts)
+        v in (Verdict.CONTRADICTED, Verdict.UNSUPPORTED) for v in verdicts_for(answer, receipts)
     )
 
 
@@ -57,8 +55,14 @@ def test_gold_set_has_clean_and_mutant_cases(receipts):
     mutations = {c.mutation for c in cases if c.mutation}
     # These five must be present; timeframe_swap needs timeframe words in
     # the answer and false_absence applies too, via entity+metric claims.
-    for m in ("digit_swap", "magnitude_shift", "entity_swap", "sign_flip",
-              "fabricated_citation", "false_absence"):
+    for m in (
+        "digit_swap",
+        "magnitude_shift",
+        "entity_swap",
+        "sign_flip",
+        "fabricated_citation",
+        "false_absence",
+    ):
         assert m in mutations, f"missing mutation {m}"
 
 

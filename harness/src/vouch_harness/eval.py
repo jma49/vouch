@@ -13,19 +13,18 @@ import random
 import statistics
 from dataclasses import dataclass, field
 
+from vouch_harness.gold import build_gold_set
+from vouch_harness.mutate import MUTATIONS
 from vouch_verifier.claims import extract_claims
 from vouch_verifier.matcher import DEFAULT_TOLERANCES, match_claims
 from vouch_verifier.receipts import Receipt
 from vouch_verifier.verdict import Tolerance, Verdict
 
-from vouch_harness.gold import build_gold_set
-from vouch_harness.mutate import MUTATIONS
-
 
 @dataclass(frozen=True)
 class RunResult:
     seed: int
-    flagged: dict[str, bool]            # case name -> was flagged
+    flagged: dict[str, bool]  # case name -> was flagged
     mutation_of: dict[str, str | None]  # case name -> mutation (None = clean)
     tier1_share: float
     coverage: float
@@ -63,9 +62,7 @@ class EvalResult:
         names = set.intersection(*(set(r.flagged) for r in self.runs))
         if not names:
             return 0.0
-        agreed = sum(
-            1 for n in names if len({r.flagged[n] for r in self.runs}) == 1
-        )
+        agreed = sum(1 for n in names if len({r.flagged[n] for r in self.runs}) == 1)
         return agreed / len(names)
 
 
@@ -134,8 +131,7 @@ def run_eval(
     are exactly the artifact this project refuses to produce."""
     if n < 2:
         raise ValueError(
-            "vouch refuses to report a single-run score (docs/design.md "
-            "section 8.3); use n >= 2"
+            "vouch refuses to report a single-run score (docs/design.md section 8.3); use n >= 2"
         )
     tol = DEFAULT_TOLERANCES if tolerances is None else tolerances
     runs = tuple(_run_once(receipts, seed + i, tol) for i in range(n))

@@ -144,9 +144,7 @@ def load_log(path: str | Path, key: bytes | None = None) -> list[Receipt]:
                 continue
             r = _parse_receipt(line, lineno)
             if _sha256_digest(r.result_canonical) != r.result_digest:
-                raise ReceiptError(
-                    f"line {lineno}: result_digest does not match result_canonical"
-                )
+                raise ReceiptError(f"line {lineno}: result_digest does not match result_canonical")
             dup = seen.get((r.session_id, r.turn_index))
             if dup is not None:
                 raise ReceiptError(

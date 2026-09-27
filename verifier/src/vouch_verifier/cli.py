@@ -32,8 +32,9 @@ def main(argv: list[str] | None = None) -> int:
 
     key = os.environ.get("VOUCH_HMAC_KEY", "").encode() or None
     if key is None:
-        print("vouch-verify: warning: VOUCH_HMAC_KEY not set, signatures not checked",
-              file=sys.stderr)
+        print(
+            "vouch-verify: warning: VOUCH_HMAC_KEY not set, signatures not checked", file=sys.stderr
+        )
 
     answer = Path(args.answer).read_text(encoding="utf-8")
     receipts = load_log(args.receipts, key=key)

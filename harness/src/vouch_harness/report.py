@@ -79,16 +79,13 @@ def to_json(result: EvalResult, seed: int = 0) -> str:
     rng = random.Random(seed)
 
     def dump(s: Stats) -> dict:
-        return {"mean": s.mean, "std": s.std, "min": s.lo, "max": s.hi,
-                "ci95": [s.ci_lo, s.ci_hi]}
+        return {"mean": s.mean, "std": s.std, "min": s.lo, "max": s.hi, "ci95": [s.ci_lo, s.ci_hi]}
 
     payload = {
         "runs": len(result.runs),
         "overall": {k: dump(v) for k, v in _overall(result, rng).items()},
         "stability": result.stability,
-        "per_mutation_recall": {
-            m: dump(s) for m, s in _stats_for(result, rng).items()
-        },
+        "per_mutation_recall": {m: dump(s) for m, s in _stats_for(result, rng).items()},
         "tolerance_policy": {
             name: {"abs": t.abs, "rel": t.rel, "display_rel": t.display_rel}
             for name, t in sorted(result.tolerances.items())

@@ -48,7 +48,7 @@ def test_tampered_value_rejected(tmp_path):
     tampered = lines[0].replace("62.3", "68.1")
     assert tampered != lines[0]
     bad = tmp_path / "receipts.jsonl"
-    bad.write_text("\n".join([tampered] + lines[1:]) + "\n")
+    bad.write_text("\n".join([tampered, *lines[1:]]) + "\n")
     with pytest.raises(ReceiptError):
         load_log(bad, key=KEY)
 

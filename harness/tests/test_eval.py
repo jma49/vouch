@@ -1,16 +1,14 @@
 """Repeated-run eval: metrics, variance machinery, and the N>=2 rule."""
 
+import random
 from pathlib import Path
 
 import pytest
 
-from vouch_verifier.receipts import load_log
-
 from vouch_harness.cli import main
 from vouch_harness.eval import run_eval, summarize
 from vouch_harness.report import to_json, to_markdown
-
-import random
+from vouch_verifier.receipts import load_log
 
 GOLDEN = Path(__file__).parent.parent.parent / "testdata" / "receipts_golden.jsonl"
 KEY = b"vouch-golden-key"

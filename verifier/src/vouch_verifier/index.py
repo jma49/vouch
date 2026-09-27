@@ -52,8 +52,17 @@ def build_index(receipts: list[Receipt], db_path: str | Path = ":memory:") -> sq
             conn.executemany(
                 "INSERT INTO facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (r.receipt_id, f.entity, f.metric, f.value, f.unit,
-                     f.as_of, f.timeframe, f.json_ptr, f.tol_class)
+                    (
+                        r.receipt_id,
+                        f.entity,
+                        f.metric,
+                        f.value,
+                        f.unit,
+                        f.as_of,
+                        f.timeframe,
+                        f.json_ptr,
+                        f.tol_class,
+                    )
                     for f in r.facts
                 ],
             )
@@ -72,7 +81,10 @@ def facts_for(
     claim rarely pins one down; the matcher applies stricter rules when
     it can.
     """
-    q = "SELECT receipt_id, entity, metric, value, unit, as_of, timeframe, json_ptr, tol_class FROM facts WHERE entity = ? AND metric = ?"
+    q = (
+        "SELECT receipt_id, entity, metric, value, unit, as_of, timeframe, json_ptr, tol_class "
+        "FROM facts WHERE entity = ? AND metric = ?"
+    )
     params: list[object] = [entity, metric]
     if timeframe is not None:
         q += " AND timeframe = ?"
@@ -80,7 +92,18 @@ def facts_for(
     out = []
     for row in conn.execute(q, params):
         out.append(
-            (row[0], Fact(entity=row[1], metric=row[2], value=row[3], unit=row[4],
-                          as_of=row[5], timeframe=row[6], json_ptr=row[7], tol_class=row[8]))
+            (
+                row[0],
+                Fact(
+                    entity=row[1],
+                    metric=row[2],
+                    value=row[3],
+                    unit=row[4],
+                    as_of=row[5],
+                    timeframe=row[6],
+                    json_ptr=row[7],
+                    tol_class=row[8],
+                ),
+            )
         )
     return out
