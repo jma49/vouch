@@ -3,7 +3,8 @@
     vouch-verify --answer answer.txt --receipts receipts/receipts.jsonl \
         --public-key vouch.pub.pem [--public-key ...] \
         [--require-sealed] [--expect-head sha256:...] \
-        [--tolerances tolerance.yaml] [--format md|json]
+        [--tolerances tolerance.yaml] [--format md|json] \
+        [--as-of 2026-07-20T15:00:00Z]
 
 Trusted Ed25519 public keys come from --public-key (repeatable, for key
 rotation) or, when none is given, from $VOUCH_PUBLIC_KEY (paths
@@ -14,8 +15,15 @@ is detected only with --require-sealed (the log must end in the
 checkpoint the proxy writes when a session ends cleanly) or
 --expect-head (a head digest kept outside the log).
 
+--as-of verifies a backtest (design section 8.4): the agent was meant to
+act at that moment, so any receipt with later data is a look-ahead
+violation, and claims are judged only against data available then (a
+claim that matches only later data is STALE). A bare date means the end
+of that day.
+
 Exit codes: 0 when no claim fails; 1 when any claim is CONTRADICTED,
-UNSUPPORTED, or STALE; 2 for usage errors and for input that cannot be
+UNSUPPORTED, or STALE, or, with --as-of, any receipt holds later data;
+2 for usage errors and for input that cannot be
 verified at all (unreadable files, a malformed or tampered receipt log,
 a bad tolerance policy).
 """
@@ -28,6 +36,7 @@ import sys
 from pathlib import Path
 
 from vouch_verifier.claims import extract_claims
+from vouch_verifier.lookahead import find_lookahead, parse_moment
 from vouch_verifier.matcher import DEFAULT_TOLERANCES, load_tolerances, match_claims
 from vouch_verifier.receipts import ReceiptError, audit_log
 from vouch_verifier.report import build_report, to_json, to_markdown
@@ -53,6 +62,10 @@ def main(argv: list[str] | None = None) -> int:
         help="fail unless the log ends in a checkpoint",
     )
     p.add_argument("--expect-head", help="fail unless the chain head is this digest")
+    p.add_argument(
+        "--as-of",
+        help="a backtest's simulated moment (ISO 8601): flag data from after it",
+    )
     args = p.parse_args(argv)
 
     key_paths = args.public_key or [
@@ -79,19 +92,23 @@ def main(argv: list[str] | None = None) -> int:
             expect_head=args.expect_head,
         ).receipts
         tolerances = load_tolerances(args.tolerances) if args.tolerances else DEFAULT_TOLERANCES
+        as_of = parse_moment(args.as_of) if args.as_of else None
     except (OSError, UnicodeDecodeError, ReceiptError, ValueError) as e:
         print(f"vouch-verify: error: {e}", file=sys.stderr)
         return 2
 
     entities = {f.entity for r in receipts for f in r.facts if f.entity}
     extraction = extract_claims(answer, known_entities=entities)
-    matched = match_claims(extraction, receipts, tolerances)
-    report = build_report(extraction, matched, tolerances)
+    matched = match_claims(extraction, receipts, tolerances, as_of=as_of)
+    lookahead = find_lookahead(receipts, as_of) if as_of is not None else []
+    report = build_report(
+        extraction, matched, tolerances, as_of=args.as_of if as_of else None, lookahead=lookahead
+    )
 
     print(to_json(report) if args.format == "json" else to_markdown(report))
 
     bad = sum(1 for mc in matched if mc.verdict in FAILURES)
-    return 1 if bad else 0
+    return 1 if bad or lookahead else 0
 
 
 if __name__ == "__main__":

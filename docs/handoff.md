@@ -400,6 +400,20 @@ wrong in the stated way.
 - **Rounding is judged at the claim's own precision; ties go both ways**
   (pitfall P-036, issue #42). "182" covers 181.5-182.5.
 
+**Look-ahead: STALE and a log-level list, bare dates end the day** (#84)
+- Chosen: `--as-of` makes post-moment data fall outside every time
+  window (a match is `STALE`, noted "look-ahead"), lists every receipt
+  with later data, and fails the run if there is any, even when no
+  claim uses it. A bare date means the end of that day.
+- Rejected: a seventh verdict (the claim is true of the wrong time,
+  which is what `STALE` already means); reading a bare date as the start
+  of the day (a same-day close would pass under an intraday as-of: a
+  guess toward SUPPORTED, invariant 3).
+- Cost: daily data dated the as-of day is flagged under an intraday
+  as-of even if the tool meant the previous close; tools should stamp
+  data with times.
+- Revisit when: a data source dates bars by their open.
+
 ### Evaluation
 
 - **Synthetic upstream with real tickers** (Phase 2). Chosen over

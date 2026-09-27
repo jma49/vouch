@@ -1,8 +1,9 @@
 """Claim -> Fact matching and verdict assignment (design sections 3.3, 6).
 
-MVP scope is the three-verdict line: SUPPORTED / CONTRADICTED /
-UNSUPPORTED, plus UNVERIFIABLE for numeric spans extraction could not
-resolve. STALE and DERIVED are explicitly later (design section 11).
+Verdicts: SUPPORTED, CONTRADICTED, UNSUPPORTED, STALE (a value true
+only outside the claim's time window, including data from after a
+backtest's as-of moment, design section 8.4), and UNVERIFIABLE for
+spans extraction could not resolve. DERIVED is not built yet.
 """
 
 from __future__ import annotations
@@ -10,12 +11,14 @@ from __future__ import annotations
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 
 import yaml
 
 from vouch_verifier.claims import Claim, Extraction, negated_by_parentheses
 from vouch_verifier.index import build_index, facts_for
+from vouch_verifier.lookahead import after
 from vouch_verifier.receipts import Fact, Receipt
 from vouch_verifier.verdict import Tolerance, Verdict, compare
 
@@ -66,7 +69,10 @@ def _judge(claim: Claim, fact: Fact, tolerances: dict[str, Tolerance]) -> Verdic
 
 
 def _match_cited(
-    claim: Claim, receipts: list[Receipt], tolerances: dict[str, Tolerance]
+    claim: Claim,
+    receipts: list[Receipt],
+    tolerances: dict[str, Tolerance],
+    as_of: datetime | None = None,
 ) -> MatchedClaim:
     citation = claim.citation
     assert citation is not None
@@ -105,6 +111,14 @@ def _match_cited(
                     note=f"claim is in {claim.unit}, cited fact is in {fact.unit}",
                 )
             verdict = _judge(claim, fact, tolerances)
+            if as_of is not None and verdict is Verdict.SUPPORTED and after(fact, as_of):
+                return MatchedClaim(
+                    claim,
+                    Verdict.STALE,
+                    fact=fact,
+                    receipt_id=receipt.receipt_id,
+                    note=f"look-ahead: cited data is as of {fact.as_of}, after {as_of.isoformat()}",
+                )
             return MatchedClaim(claim, verdict, fact=fact, receipt_id=receipt.receipt_id)
     return MatchedClaim(
         claim,
@@ -141,32 +155,43 @@ def _closest(claim: Claim, pool: list[tuple[str, Fact]]) -> tuple[str, Fact]:
 
 
 def _match_uncited(
-    claim: Claim, conn: sqlite3.Connection, tol: dict[str, Tolerance]
+    claim: Claim,
+    conn: sqlite3.Connection,
+    tol: dict[str, Tolerance],
+    as_of: datetime | None = None,
 ) -> MatchedClaim:
     """Judge a Tier 2 claim against the receipted facts for its time window.
 
     A stated date selects that day's facts; with no date the window is
     the latest receipted day. A value that matches only outside the
     window is STALE rather than SUPPORTED: it was true, but not for the
-    time the claim is about (design section 6.1).
+    time the claim is about (design section 6.1). With a backtest's
+    as-of moment, data from after it is outside every window: the agent
+    should not have had it (design section 8.4).
     """
     assert claim.entity is not None and claim.metric is not None
     key = ", ".join(x for x in (claim.entity, claim.metric, claim.timeframe) if x)
     candidates = facts_for(conn, claim.entity, claim.metric, claim.timeframe)
     if not candidates:
         return MatchedClaim(claim, Verdict.UNSUPPORTED, note=f"no receipt covers ({key})")
+    future = [rf for rf in candidates if as_of is not None and after(rf[1], as_of)]
+    candidates = [rf for rf in candidates if rf not in future]
+    if not candidates and claim.as_of is None:
+        return _lookahead_only(claim, future, tol, key, as_of)
 
     if claim.as_of is not None:
         window = [rf for rf in candidates if _on_date(rf[1], claim.as_of)]
         if not window:
+            if dated := [rf for rf in future if _on_date(rf[1], claim.as_of)]:
+                return _lookahead_only(claim, dated, tol, key, as_of)
             return MatchedClaim(
                 claim, Verdict.UNSUPPORTED, note=f"no receipt covers ({key}) on {claim.as_of}"
             )
-        outside: list[tuple[str, Fact]] = []
+        outside: list[tuple[str, Fact]] = list(future)
     else:
         latest = max((_day(f.as_of) or "" for _, f in candidates), default="")
         window = [rf for rf in candidates if (_day(rf[1].as_of) or "") == latest]
-        outside = [rf for rf in candidates if rf not in window]
+        outside = [rf for rf in candidates if rf not in window] + future
 
     for receipt_id, fact in window:
         if _judge(claim, fact, tol) is Verdict.SUPPORTED:
@@ -174,13 +199,18 @@ def _match_uncited(
     for receipt_id, fact in outside:
         if _judge(claim, fact, tol) is Verdict.SUPPORTED:
             _, latest_fact = _closest(claim, window)
+            ahead = as_of is not None and after(fact, as_of)
             return MatchedClaim(
                 claim,
                 Verdict.STALE,
                 fact=fact,
                 receipt_id=receipt_id,
                 note=(
-                    f"matches the value as of {_day(fact.as_of)}; "
+                    f"look-ahead: matches data as of {fact.as_of}, after the as-of "
+                    f"{as_of.isoformat()}; latest available ({_day(latest_fact.as_of)}) is "
+                    f"{latest_fact.value}"
+                    if ahead and as_of is not None
+                    else f"matches the value as of {_day(fact.as_of)}; "
                     f"latest receipted ({_day(latest_fact.as_of)}) is {latest_fact.value}"
                 ),
             )
@@ -194,10 +224,36 @@ def _match_uncited(
     )
 
 
+def _lookahead_only(
+    claim: Claim,
+    future: list[tuple[str, Fact]],
+    tol: dict[str, Tolerance],
+    key: str,
+    as_of: datetime | None,
+) -> MatchedClaim:
+    """A claim whose only candidate facts are from after the as-of
+    moment: a match is STALE (look-ahead); anything else is unsupported
+    by data the agent could have had."""
+    assert as_of is not None
+    for receipt_id, fact in future:
+        if _judge(claim, fact, tol) is Verdict.SUPPORTED:
+            return MatchedClaim(
+                claim,
+                Verdict.STALE,
+                fact=fact,
+                receipt_id=receipt_id,
+                note=f"look-ahead: matches only data as of {fact.as_of}, after {as_of.isoformat()}",
+            )
+    return MatchedClaim(
+        claim, Verdict.UNSUPPORTED, note=f"no receipt covers ({key}) as of {as_of.isoformat()}"
+    )
+
+
 def match_claims(
     extraction: Extraction,
     receipts: list[Receipt],
     tolerances: dict[str, Tolerance] | None = None,
+    as_of: datetime | None = None,
 ) -> list[MatchedClaim]:
     """Assign a verdict to every numeric span the extractor found.
 
@@ -216,10 +272,10 @@ def match_claims(
     with closing(build_index(receipts)) as conn:
         for claim in extraction.claims:
             if claim.citation is not None:
-                out.append(_match_cited(claim, receipts, tol))
+                out.append(_match_cited(claim, receipts, tol, as_of))
                 continue
 
-            out.append(_match_uncited(claim, conn, tol))
+            out.append(_match_uncited(claim, conn, tol, as_of))
 
     for claim in extraction.unresolved:
         out.append(MatchedClaim(claim, Verdict.UNVERIFIABLE, note=_unresolved_note(claim)))

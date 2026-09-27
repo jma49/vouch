@@ -271,6 +271,8 @@ The mutation gold set (§9) measures detection of known error shapes on syntheti
 
 Because every receipt carries `data_asof` and replay carries a logical clock, look-ahead bias detection is free: if a receipt's `data_asof` is later than the simulated current time, flag a look-ahead violation. **Backtest correctness becomes a receipt-verification problem** — an angle we have not seen elsewhere.
 
+Implemented as `vouch-verify --as-of <moment>` (#84). Every receipt whose `data_asof` or fact `as_of` is later than the moment is listed as a look-ahead violation, and the run fails even if the answer states none of that data: the agent saw the future. Claims are judged only against data available at the moment, so a value that matches only later data is `STALE`, with a note that says look-ahead. A date without a time is the end of that day, on both sides: under an intraday as-of, the same day's close is look-ahead, because it is not known until the day ends.
+
 ---
 
 ## 9. Mutation injector and gold set
