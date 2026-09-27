@@ -124,6 +124,17 @@ same change that makes them stale.
 | `docs/pitfalls.md` | Known traps: symptom, cause, fix | You hit or discover a non-obvious trap, or fix one |
 | `docs/handoff.md` | Session-to-session state | End of every working session |
 | `docs/design.md` | Architecture and rationale | Design decisions change; keep its claims true |
+| `README.md` | The project's front page | Any user-visible change: behavior, CLI, verdicts, roadmap status, limitations |
+
+`README.md` rules: it is the first thing a reviewer reads, so hold it
+to a professional standard. Lead with the problem and a concrete
+example, not a feature list. Every claim must be true of the current
+code. Measured sections sit between `BEGIN/END GENERATED` markers and
+are produced by `make readme`; never edit them by hand (CI runs
+`make readme-check`). After any significant change, re-read the whole
+README: update the roadmap status table, "Known limitations", and any
+example the change affects. Plain, precise English; no hype, no emoji
+beyond status marks.
 
 `docs/handoff.md` rules: overwrite the "Current state" and "Next
 steps" sections each session (it is a snapshot, not a log); append one

@@ -8,14 +8,14 @@ import random
 from vouch_harness.eval import EvalResult, Stats, summarize
 
 
-def _stats_for(result: EvalResult, rng: random.Random) -> dict[str, Stats]:
+def per_mutation_stats(result: EvalResult, rng: random.Random) -> dict[str, Stats]:
     out = {}
     for mutation in result.mutations:
         out[mutation] = summarize(result.recall_series(mutation), rng)
     return out
 
 
-def _overall(result: EvalResult, rng: random.Random) -> dict[str, Stats]:
+def overall_stats(result: EvalResult, rng: random.Random) -> dict[str, Stats]:
     return {
         "detection": summarize(
             [
@@ -33,8 +33,8 @@ def _overall(result: EvalResult, rng: random.Random) -> dict[str, Stats]:
 
 def to_markdown(result: EvalResult, seed: int = 0) -> str:
     rng = random.Random(seed)
-    overall = _overall(result, rng)
-    per_mutation = _stats_for(result, rng)
+    overall = overall_stats(result, rng)
+    per_mutation = per_mutation_stats(result, rng)
     n = len(result.runs)
 
     def fmt(s: Stats) -> str:
@@ -83,9 +83,9 @@ def to_json(result: EvalResult, seed: int = 0) -> str:
 
     payload = {
         "runs": len(result.runs),
-        "overall": {k: dump(v) for k, v in _overall(result, rng).items()},
+        "overall": {k: dump(v) for k, v in overall_stats(result, rng).items()},
         "stability": result.stability,
-        "per_mutation_recall": {m: dump(s) for m, s in _stats_for(result, rng).items()},
+        "per_mutation_recall": {m: dump(s) for m, s in per_mutation_stats(result, rng).items()},
         "tolerance_policy": {
             name: {"abs": t.abs, "rel": t.rel, "display_rel": t.display_rel}
             for name, t in sorted(result.tolerances.items())

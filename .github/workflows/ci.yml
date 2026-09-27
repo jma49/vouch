@@ -85,3 +85,7 @@ jobs:
         run: |
           VOUCH_HMAC_KEY=vouch-golden-key vouch-eval \
             --receipts testdata/receipts_golden.jsonl --n 10 --tolerances tolerance.yaml
+      # README metrics are generated; a hand edit or an unregenerated
+      # behavior change shows up here as a stale README.
+      - name: README is current
+        run: VOUCH_HMAC_KEY=vouch-golden-key python -m vouch_harness.readme README.md --check

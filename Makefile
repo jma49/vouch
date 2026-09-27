@@ -8,7 +8,7 @@ STAMP := $(VENV)/.installed
 VENV_OK := $(PY) -c 'import sys, vouch_verifier, vouch_harness; \
 	sys.exit(not vouch_verifier.__file__.startswith("$(CURDIR)/"))'
 
-.PHONY: test test-go test-py test-harness lint lint-go lint-py fmt cover build install-py eval golden clean
+.PHONY: test test-go test-py test-harness lint lint-go lint-py fmt cover build install-py eval golden readme readme-check clean
 
 test: test-go test-py test-harness
 
@@ -65,6 +65,14 @@ golden:
 eval: install-py
 	VOUCH_HMAC_KEY=vouch-golden-key $(VENV)/bin/vouch-eval \
 		--receipts testdata/receipts_golden.jsonl --n 10 --tolerances tolerance.yaml
+
+# README metrics and the example report are generated, never hand-edited
+# (AGENTS.md invariant 7). readme-check is what CI runs.
+readme: install-py
+	VOUCH_HMAC_KEY=vouch-golden-key $(PY) -m vouch_harness.readme README.md
+
+readme-check: install-py
+	VOUCH_HMAC_KEY=vouch-golden-key $(PY) -m vouch_harness.readme README.md --check
 
 clean:
 	rm -rf $(VENV) proxy/bin proxy/coverage.out
