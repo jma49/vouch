@@ -30,5 +30,5 @@ domain had to supply is the two files above. The run that proved it is
 Known limits in this domain: a quarter named in prose ("in Q1") is not
 read as a date, so an undated claim is judged against the latest
 quarter and a correct statement about an earlier one comes out `STALE`;
-and percentage changes ("grew 4%") are not recomputed (`DERIVED` is not
-built).
+and percentage changes ("grew 4%") are not recomputed: the vocabulary
+names no `series`, and quarters are not dates `DERIVED` could anchor on.

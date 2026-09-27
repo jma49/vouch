@@ -20,6 +20,7 @@ from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Literal
 
 from vouch_verifier.tokens import MINUTE_TIMEFRAME, Kind, NumberToken, find_dates, tokenize
 from vouch_verifier.vocabulary import FINANCE, Vocabulary
@@ -31,6 +32,25 @@ class Citation:
 
     receipt_id: str  # may be a prefix of the full id
     json_ptr: str
+
+
+@dataclass(frozen=True)
+class Derivation:
+    """A claim about a quantity computed from a receipted series rather
+    than read off one fact (design section 6.2): a percentage change over
+    an explicit period, or a high or low over the last N sessions."""
+
+    op: Literal["pct_change", "max", "min"]
+    metric: str  # the series it is computed over
+    start: str | None = None  # pct_change from this date ("YYYY-MM-DD" or "--MM-DD")
+    end: str | None = None  # ... to this date; None means the latest receipted day
+    lookback: int | None = None  # sessions back from the latest receipted day
+
+    def describe(self) -> str:
+        if self.op == "pct_change":
+            span = f"since {self.start}" if self.start else f"over {self.lookback} sessions"
+            return f"{self.metric} change {span}" + (f" to {self.end}" if self.end else "")
+        return f"{self.lookback}-session {'high' if self.op == 'max' else 'low'} of {self.metric}"
 
 
 @dataclass(frozen=True)
@@ -53,6 +73,7 @@ class Claim:
     # from the cited fact, so the matcher applies it there.
     parenthesized: bool = False
     resolution: float = 0.0  # unit of the last displayed digit (see tokens)
+    derivation: Derivation | None = None  # judged by recomputation, not lookup
 
 
 @dataclass(frozen=True)
@@ -364,6 +385,72 @@ def _negated_by_direction(answer: str, m: NumberToken, scope: _Scope) -> bool:
     )
 
 
+# Periods a derived claim can be computed over. "Sessions" and "trading
+# days" are unambiguous; plain "days" could be calendar days, which move
+# the start point, so it is never guessed (_AMBIGUOUS_PERIOD).
+_LOOKBACK_RE = re.compile(
+    r"\b(?:over|in|during|across|for)\s+the\s+(?:past|last|previous|prior)\s+(\d+)\s+"
+    r"(sessions?|trading\s+days?|days?)\b",
+    re.IGNORECASE,
+)
+_NDAY_EXTREMUM_RE = re.compile(r"\b(\d+)[- ](?:day|session)\s+(high|low)\b", re.IGNORECASE)
+_EXTREMUM_RE = re.compile(r"\b(highest|lowest|peak|trough|high|low)\b", re.IGNORECASE)
+_SINCE_RE = re.compile(r"\b(since|from)\b", re.IGNORECASE)
+_AMBIGUOUS_PERIOD = "ambiguous period"
+
+
+def _derivation(
+    answer: str, m: NumberToken, scope: _Scope, metric: str | None, vocab: Vocabulary
+) -> Derivation | str | None:
+    """The computation a claim states, if any: a Derivation, the string
+    _AMBIGUOUS_PERIOD when the period cannot be pinned down, or None for
+    an ordinary point claim."""
+    if vocab.series is None:
+        return None
+    lo, hi = scope.clause
+    clause = answer[lo:hi]
+    series = metric if metric is not None and vocab.units.get(metric) == "USD" else vocab.series
+    lookback = _LOOKBACK_RE.search(clause)
+    if lookback and not re.match(r"sessions?|trading", lookback[2], re.IGNORECASE):
+        lookback_n: int | None = None
+        ambiguous = True
+    else:
+        lookback_n = int(lookback[1]) if lookback else None
+        ambiguous = False
+    if m.unit == "pct":
+        if ambiguous:
+            return _AMBIGUOUS_PERIOD
+        if lookback_n:
+            return Derivation("pct_change", series, lookback=lookback_n)
+        since = _SINCE_RE.search(answer, lo, hi)
+        if since:
+            dates = [d for d in find_dates(answer, since.end(), hi)]
+            if dates:
+                start = dates[0]
+                between = answer[since.end() : start[0]]
+                if len(between.split()) <= 2:  # "since July 17", "from its July 20 close"
+                    end = next(
+                        (d[1] for d in dates[1:] if re.search(r"\bto\b", answer[start[0] : d[0]])),
+                        None,
+                    )
+                    return Derivation("pct_change", series, start=start[1], end=end)
+        return None
+    if m.unit not in (None, "USD"):
+        return None
+    nday = _NDAY_EXTREMUM_RE.search(answer, lo, m.start)
+    if nday:
+        op: Literal["max", "min"] = "max" if nday[2].lower() == "high" else "min"
+        return Derivation(op, series, lookback=int(nday[1]))
+    extremum = _EXTREMUM_RE.search(answer, lo, m.start)
+    if extremum and (lookback_n or ambiguous):
+        if ambiguous:
+            return _AMBIGUOUS_PERIOD
+        word = extremum[1].lower()
+        op = "max" if word in ("highest", "peak", "high") else "min"
+        return Derivation(op, series, lookback=lookback_n)
+    return None
+
+
 def _resolve(
     answer: str,
     m: NumberToken,
@@ -390,6 +477,23 @@ def _resolve(
         _negated_by_direction(answer, m, scope)
     ):
         value = -value
+    derivation = None if cell is not None else _derivation(answer, m, scope, metric, vocab)
+    if derivation == _AMBIGUOUS_PERIOD:
+        # Unresolved rather than guessed: the claim becomes UNVERIFIABLE.
+        metric, derivation = None, None
+    if isinstance(derivation, Derivation):
+        return Claim(
+            value=value,
+            span=(m.start, m.end),
+            text=m.text,
+            tier=2,
+            entity=entity,
+            metric=derivation.metric,
+            unit=unit,
+            kind=m.kind,
+            resolution=m.resolution,
+            derivation=derivation,
+        )
     return Claim(
         value=value,
         span=(m.start, m.end),

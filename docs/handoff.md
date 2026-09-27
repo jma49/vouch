@@ -442,6 +442,24 @@ wrong in the stated way.
 - Revisit when: a domain needs units beyond USD and percent (the
   tokenizer would have to learn them).
 
+**DERIVED: explicit periods only, sessions not days** (#90)
+- Chosen: recompute a change over an explicit period and an N-session
+  high/low from the receipted daily series; tolerance from the policy
+  (`percentage` for changes, the fact's class for highs/lows). A match
+  is DERIVED, a mismatch CONTRADICTED with the recomputed value, a
+  missing point UNSUPPORTED; disagreeing receipts for one day make the
+  series unusable. "N-day high" counts sessions (market convention);
+  "over the past N days" is left UNVERIFIABLE.
+- Rejected: guessing calendar vs trading days (the start point moves,
+  and a wrong guess yields a confident CONTRADICTED); relative periods
+  ("this week", "month to date", which depend on a calendar the
+  receipts do not carry); difference and ratio (no claim shape in the
+  eval needed them yet).
+- Cost: correct claims phrased with unsupported periods stay
+  UNVERIFIABLE, which lowers coverage.
+- Revisit when: real-agent labels show which period phrasings models
+  actually use.
+
 ### Evaluation
 
 - **Synthetic upstream with real tickers** (Phase 2). Chosen over

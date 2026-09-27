@@ -2,8 +2,9 @@
 
 Verdicts: SUPPORTED, CONTRADICTED, UNSUPPORTED, STALE (a value true
 only outside the claim's time window, including data from after a
-backtest's as-of moment, design section 8.4), and UNVERIFIABLE for
-spans extraction could not resolve. DERIVED is not built yet.
+backtest's as-of moment, design section 8.4), DERIVED (a multi-day
+change or a high/low recomputed from the receipted series, design
+section 6.2), and UNVERIFIABLE for spans extraction could not resolve.
 """
 
 from __future__ import annotations
@@ -226,6 +227,96 @@ def _match_uncited(
     )
 
 
+def _series(
+    conn: sqlite3.Connection, entity: str, metric: str, as_of: datetime | None
+) -> dict[str, tuple[str, Fact]] | str:
+    """The receipted daily series of one metric: day -> (receipt, fact),
+    without data from after a backtest's as-of moment. Two different
+    values on one day make the series unusable (a string saying why):
+    the verifier will not pick one."""
+    series: dict[str, tuple[str, Fact]] = {}
+    for receipt_id, fact in facts_for(conn, entity, metric):
+        day = _day(fact.as_of)
+        if day is None or (as_of is not None and after(fact, as_of)):
+            continue
+        if day in series and series[day][1].value != fact.value:
+            return f"receipts disagree on {entity} {metric} for {day}"
+        series.setdefault(day, (receipt_id, fact))
+    return series
+
+
+def _match_derived(
+    claim: Claim,
+    conn: sqlite3.Connection,
+    tol: dict[str, Tolerance],
+    as_of: datetime | None,
+) -> MatchedClaim:
+    """Recompute a derived claim from its receipted series (design
+    section 6.2) and judge the stated value against the result: DERIVED
+    when within tolerance, CONTRADICTED when not, UNSUPPORTED when the
+    points it needs were never receipted."""
+    d = claim.derivation
+    assert d is not None and claim.entity is not None
+    what = f"{claim.entity} {d.describe()}"
+    series = _series(conn, claim.entity, d.metric, as_of)
+    if isinstance(series, str):
+        return MatchedClaim(claim, Verdict.UNSUPPORTED, note=series)
+    days = sorted(series)
+    if not days:
+        return MatchedClaim(claim, Verdict.UNSUPPORTED, note=f"no receipted series for {what}")
+
+    def day_of(date: str) -> str | None:
+        # "--MM-DD" (no year in the text) is that day in the latest year.
+        matching = [x for x in days if (x[4:] == date[1:] if date.startswith("--") else x == date)]
+        return matching[-1] if matching else None
+
+    if d.op == "pct_change":
+        if d.start is not None:
+            first, last = day_of(d.start), day_of(d.end) if d.end else days[-1]
+        else:
+            assert d.lookback is not None
+            first = days[-1 - d.lookback] if len(days) > d.lookback else None
+            last = days[-1]
+        if first is None or last is None or first >= last:
+            return MatchedClaim(
+                claim, Verdict.UNSUPPORTED, note=f"receipts lack the points to recompute {what}"
+            )
+        base, now = series[first][1].value, series[last][1].value
+        if base == 0:
+            return MatchedClaim(claim, Verdict.UNSUPPORTED, note=f"{what}: base value is zero")
+        computed = (now / base - 1) * 100
+        tolerance = tol.get("percentage", Tolerance())
+        basis = f"{first} ({base:g}) to {last} ({now:g})"
+        receipt_id = series[last][0]
+    else:
+        assert d.lookback is not None
+        if len(days) < d.lookback:
+            return MatchedClaim(
+                claim,
+                Verdict.UNSUPPORTED,
+                note=f"{what} needs {d.lookback} receipted sessions, found {len(days)}",
+            )
+        window = [series[x] for x in days[-d.lookback :]]
+        receipt_id, fact = (max if d.op == "max" else min)(window, key=lambda rf: rf[1].value)
+        computed = fact.value
+        tolerance = _tolerance_for(fact, tol)
+        basis = f"{days[-d.lookback]} to {days[-1]}, {_day(fact.as_of)}"
+    verdict = compare(claim.value, computed, tolerance, claim.resolution)
+    if verdict is Verdict.SUPPORTED:
+        return MatchedClaim(
+            claim,
+            Verdict.DERIVED,
+            receipt_id=receipt_id,
+            note=f"recomputed {what} = {computed:.4g} from {basis}",
+        )
+    return MatchedClaim(
+        claim,
+        Verdict.CONTRADICTED,
+        receipt_id=receipt_id,
+        note=f"recomputed {what} = {computed:.4g} from {basis}",
+    )
+
+
 def _lookahead_only(
     claim: Claim,
     future: list[tuple[str, Fact]],
@@ -276,6 +367,9 @@ def match_claims(
         for claim in extraction.claims:
             if claim.citation is not None:
                 out.append(_match_cited(claim, receipts, tol, as_of, vocabulary))
+                continue
+            if claim.derivation is not None:
+                out.append(_match_derived(claim, conn, tol, as_of))
                 continue
 
             out.append(_match_uncited(claim, conn, tol, as_of))

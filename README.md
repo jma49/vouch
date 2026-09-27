@@ -65,7 +65,7 @@ flowchart LR
 | `UNSUPPORTED` | No receipt covers the claim: fabricated from parametric memory | ✅ |
 | `UNVERIFIABLE` | Out of scope or unresolvable, and counted rather than guessed | ✅ |
 | `STALE` | Matches only a fact from outside the claim's time window: true once, not for the date claimed, or, in a backtest (`--as-of`), data the agent could not yet have had | ✅ |
-| `DERIVED` | Recomputable from receipts via whitelisted operations only | planned |
+| `DERIVED` | Not in any receipt, but recomputed from a receipted series: a change over an explicit period (*"up 6.8% since July 20"*) or an N-session high or low | ✅ |
 
 Fabrication and contradiction are different failures with different fixes, so vouch never collapses them into a single "hallucination" bit.
 

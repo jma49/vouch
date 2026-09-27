@@ -37,6 +37,10 @@ class Vocabulary:
     # the metric of a bare number after a move and "to"/"at"
     # ("fell 1.35% to 172.04")
     move_target: str | None = None
+    # the receipted series a multi-day change or a high/low is computed
+    # over when the sentence names no metric of its own ("up 6.2% since
+    # July 17"); None means the domain has no derived claims (design 6.2)
+    series: str | None = None
 
 
 FINANCE = Vocabulary(
@@ -67,6 +71,7 @@ FINANCE = Vocabulary(
     signed=frozenset({"change_pct", "macd_hist"}),
     pct_fallback="change_pct",
     move_target="last_price",
+    series="close_price",
 )
 
 
@@ -77,7 +82,7 @@ def load_vocabulary(path: str | Path) -> Vocabulary:
     raw: Any = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise ValueError(f"vocabulary {path}: expected a mapping")
-    unknown = set(raw) - {"synonyms", "units", "signed", "pct_fallback", "move_target"}
+    unknown = set(raw) - {"synonyms", "units", "signed", "pct_fallback", "move_target", "series"}
     if unknown:
         raise ValueError(f"vocabulary {path}: unknown keys {sorted(unknown)}")
     synonyms = raw.get("synonyms") or {}
@@ -94,7 +99,7 @@ def load_vocabulary(path: str | Path) -> Vocabulary:
     signed = raw.get("signed") or []
     if not isinstance(signed, list):
         raise ValueError(f"vocabulary {path}: signed must be a list")
-    for name in ("pct_fallback", "move_target"):
+    for name in ("pct_fallback", "move_target", "series"):
         value = raw.get(name)
         if value is not None and value not in metrics:
             raise ValueError(
@@ -106,4 +111,5 @@ def load_vocabulary(path: str | Path) -> Vocabulary:
         signed=frozenset(str(s) for s in signed),
         pct_fallback=raw.get("pct_fallback"),
         move_target=raw.get("move_target"),
+        series=raw.get("series"),
     )
