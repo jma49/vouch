@@ -7,40 +7,39 @@ Snapshot of where work stands, for the next session. Overwrite
 
 ## Current state
 
-- **Phases 0, 1, 3, 4, 5 complete. Phase 2: everything buildable is
-  done; runs and labels are pending** (they need the maintainer's model
-  budget and a human labeler; see memory: no paid model calls without
-  approval). Phase 6 (optional) not started.
-- **Phase 4 (canonical JSON), 2026-09-27:** differential fuzzing Go vs
-  Python (`vouch canon --lines`, `FuzzCanonicalize`, corpus committed,
-  `test_differential.py`); found #61 (stray `}` accepted) and #62 (no
-  nesting limit) -> canonical JSON v2, receipt payload `version=4`,
-  checkpoint `version=2`. Fixture keys compare numbers by value (#64).
-- **Phase 5 (proxy), 2026-09-27:** session resume via log-assigned
-  turns (#69); shell-style `--upstream` splitting (#70); concurrent
-  requests with cancellation and progress (#67); server-to-client
-  requests, `tools/list_changed`, version negotiation (#68);
-  integration tests against the official reference server, which found
-  #74 (`"params":null`); `make bench` and a README latency table (#77);
-  Streamable HTTP for upstreams and `--listen` (#79).
-- **Phase 2 citation channel:** `vouch proxy --cite` and
-  `vouch-agent --cite`, adherence in the real-eval report (#81).
-- Tests: verifier 338 (+1 documented xfail), harness 119, Go under
+- **Phases 0, 1, 3, 4, 5 complete; Phase 6 complete except Tier 3.
+  Phase 2: everything buildable is done; runs and labels are pending**
+  (they need the maintainer's model budget and a human labeler; see
+  memory: no paid model calls without approval).
+- **Phase 4 (canonical JSON):** differential fuzzing Go vs Python found
+  #61 and #62 -> canonical JSON v2 (receipt `version=4`, checkpoint
+  `version=2`); fixture keys compare numbers by value (#64).
+- **Phase 5 (proxy):** log-assigned turns (#69), shell-style
+  `--upstream` (#70), concurrency with cancellation and progress (#67),
+  server-to-client forwarding, list_changed, version negotiation
+  (#68), reference-server integration tests (found #74), `make bench`
+  (#77), Streamable HTTP both ways (#79).
+- **Phase 2:** citation channel, `--cite` in proxy and agent runner,
+  adherence in the real-eval report (#81).
+- **Phase 6:** look-ahead with `--as-of` (#84), HTML report (#86),
+  second domain `examples/analytics` with `--vocabulary` and per-row
+  entities (#88), `DERIVED` recomputation, which also fixed multi-day
+  claims being falsely CONTRADICTED (#90).
+- Tests: verifier 375 (+1 documented xfail), harness 121, Go under
   `-race`, integration (stdio and HTTP) in its own CI job. Corpus 166.
-- Process lessons: `docs/pitfalls.md` P-006, P-007, and AGENTS.md.
 
 ## Next steps
 
 1. Phase 2 data, when the maintainer can run a model:
    `make agent MODEL=gemini-flash ARGS="--samples 3"` (dry-run first;
-   add `--cite` for the citation condition), then label with
-   `vouch-label serve`. Never run it without approval.
-2. Phase 6 (optional), no model calls needed: look-ahead detection
-   (design section 8.4), HTML report, a second domain schema pack,
-   `DERIVED` recomputation. Tier 3 LLM extraction needs model calls.
-3. Proxy follow-ups, only when needed: group commit for appends under
-   concurrent load; authentication before exposing `--listen` beyond
-   loopback; resources and prompts federation.
+   `--cite` for the citation condition), then `vouch-label serve`.
+   Never run a model without approval. Then switch the README headline
+   to the real numbers and relabel the synthetic metrics.
+2. Tier 3 LLM extraction (needs model calls): a strict-schema fallback
+   for UNVERIFIABLE spans, with its nondeterminism measured.
+3. Follow-ups, only when a need shows up: group commit for appends;
+   authentication before exposing `--listen`; resources and prompts
+   federation; difference/ratio derivations; quarters as dates.
 
 ## Open questions for the maintainer
 
@@ -504,3 +503,5 @@ wrong in the stated way.
 - 2026-09-27: Phases 4 and 5 and the citation channel: issues #61-#81,
   PRs #65, #66, #71-#73, #76, #78, #80, #82. The reference-server
   integration test found #74 on its first run.
+- 2026-09-27: Phase 6 (except Tier 3): #84, #86, #88, #90 (PRs #85,
+  #87, #89, #91); handoff refreshed (#83).
