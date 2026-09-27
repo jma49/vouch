@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from bisect import bisect_left, bisect_right
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal
@@ -195,14 +195,21 @@ def _sentence_bounds(answer: str, pos: int) -> _Bounds:
 
 
 def _segment(answer: str, bounds: _Bounds, pos: int, splitter: re.Pattern[str]) -> _Bounds:
-    start, end = bounds
-    for m in splitter.finditer(answer, start, end):
-        if m.end() <= pos:
-            start = m.end()
-        elif m.start() >= pos:
-            end = m.start()
-            break
-    return start, end
+    """The part of bounds between the splits around pos. Split points are
+    found once per span and bisected, as sentence breaks are: scanning
+    from the span's start for every number was quadratic (#97)."""
+    starts, ends = _splits(answer, bounds[0], bounds[1], splitter)
+    i = bisect_right(ends, pos) - 1
+    j = bisect_left(starts, pos)
+    return (ends[i] if i >= 0 else bounds[0]), (starts[j] if j < len(starts) else bounds[1])
+
+
+@lru_cache(maxsize=4096)
+def _splits(
+    answer: str, start: int, end: int, splitter: re.Pattern[str]
+) -> tuple[list[int], list[int]]:
+    matches = list(splitter.finditer(answer, start, end))
+    return [m.start() for m in matches], [m.end() for m in matches]
 
 
 def _scope(answer: str, pos: int) -> _Scope:
@@ -213,22 +220,67 @@ def _scope(answer: str, pos: int) -> _Scope:
 
 
 def _mentions(
-    answer: str, bounds: _Bounds, names: Iterable[str], flags: int = 0
+    answer: str, bounds: _Bounds, names: frozenset[str] | tuple[str, ...], flags: int = 0
 ) -> list[tuple[int, str]]:
-    """(position, name) for every whole-word mention of a name, in order."""
-    start, end = bounds
-    found: list[tuple[int, str]] = []
-    for name in names:
-        rx = re.compile(r"(?<!\w)" + re.escape(name) + r"(?!\w)", flags)
-        found.extend((m.start(), name) for m in rx.finditer(answer, start, end))
-    return sorted(found)
+    """(position, name) for every whole-word mention of a name, in order.
+    Where names overlap at one position, the longest wins ("closed at"
+    over "closed")."""
+    return list(_mentions_in(answer, bounds[0], bounds[1], names, flags))
+
+
+# Extraction asks for the same sentence's mentions once per number; one
+# compiled alternation per name set, and the results per span, keep it
+# linear (#97). Bounded caches of pure functions, like _sentence_breaks.
+@lru_cache(maxsize=64)
+def _alternation(
+    names: frozenset[str] | tuple[str, ...], flags: int
+) -> tuple[re.Pattern[str], dict[str, str]]:
+    ordered = sorted(names, key=len, reverse=True)
+    rx = re.compile(r"(?<!\w)(?:" + "|".join(map(re.escape, ordered)) + r")(?!\w)", flags)
+    fold = bool(flags & re.IGNORECASE)
+    return rx, {(n.lower() if fold else n): n for n in ordered}
+
+
+@lru_cache(maxsize=4096)
+def _mentions_in(
+    answer: str, start: int, end: int, names: frozenset[str] | tuple[str, ...], flags: int
+) -> tuple[tuple[int, str], ...]:
+    if not names:
+        return ()
+    rx, lookup = _alternation(names, flags)
+    fold = bool(flags & re.IGNORECASE)
+    return tuple(
+        (m.start(), lookup[m.group().lower() if fold else m.group()])
+        for m in rx.finditer(answer, start, end)
+    )
+
+
+_find_dates = lru_cache(maxsize=4096)(find_dates)
+
+
+def clear_caches() -> None:
+    """Drop the per-answer caches, so a benchmark measures real work."""
+    for cached in (
+        _sentence_breaks,
+        _splits,
+        _mentions_in,
+        _find_dates,
+        _timeframe_match,
+        _table_headers,
+    ):
+        cached.cache_clear()
+
+
+@lru_cache(maxsize=4096)
+def _timeframe_match(answer: str, start: int, end: int) -> re.Match[str] | None:
+    return _TIMEFRAME_RE.search(answer, start, end)
 
 
 def _within(p: int, bounds: _Bounds) -> bool:
     return bounds[0] <= p < bounds[1]
 
 
-def _entity(answer: str, pos: int, scope: _Scope, entities: set[str]) -> str | None:
+def _entity(answer: str, pos: int, scope: _Scope, entities: frozenset[str]) -> str | None:
     mentions = _mentions(answer, scope.sentence, entities)
     before = [(p, e) for p, e in mentions if p < pos]
     after = [(p, e) for p, e in mentions if p > pos]
@@ -266,7 +318,7 @@ def _date(answer: str, pos: int, scope: _Scope) -> str | None:
     earnings on August 27; it closed at 181.52" the date is the
     earnings'.
     """
-    dates = find_dates(answer, *scope.phrase)
+    dates = _find_dates(answer, *scope.phrase)
     if dates:
         return min(dates, key=lambda d: abs(d[0] - pos))[1]
     # Only a phrase that is nothing but a time ("On July 23,") dates what
@@ -274,7 +326,7 @@ def _date(answer: str, pos: int, scope: _Scope) -> str | None:
     # date (#95).
     before = [
         d
-        for d in find_dates(answer, *scope.clause)
+        for d in _find_dates(answer, *scope.clause)
         if d[0] < pos and _only_a_time(answer, d, scope)
     ]
     return before[-1][1] if before else None
@@ -288,7 +340,7 @@ def _only_a_time(answer: str, date: tuple[int, str], scope: _Scope) -> bool:
 
 
 def _timeframe(answer: str, scope: _Scope) -> str | None:
-    m = _TIMEFRAME_RE.search(answer, *scope.clause)
+    m = _timeframe_match(answer, *scope.clause)
     if m is None:
         return None
     if m["word"]:
@@ -319,10 +371,34 @@ def _cells(line: str) -> list[str]:
     return [c.strip() for c in line.strip().strip("|").split("|")]
 
 
+@lru_cache(maxsize=16)
+def _table_headers(answer: str) -> dict[int, tuple[str, ...]]:
+    """Every table body line's start -> its header cells, found in one
+    pass: the header is the row above a table's separator, and body rows
+    run until a line that is not a table row. Walking up to the header
+    from every cell made a long table quadratic (#97). A number in a
+    header row is not a cell."""
+    headers: dict[int, tuple[str, ...]] = {}
+    current: tuple[str, ...] | None = None
+    previous = ""
+    pos = 0
+    for text in answer.split("\n"):
+        if _TABLE_SEPARATOR_RE.match(text):
+            current = tuple(_cells(previous)) if _TABLE_ROW_RE.match(previous) else None
+        elif _TABLE_ROW_RE.match(text):
+            if current is not None:
+                headers[pos] = current
+        else:
+            current = None
+        previous = text
+        pos += len(text) + 1
+    return headers
+
+
 def _table_cell(
     answer: str,
     m: NumberToken,
-    entities: set[str],
+    entities: frozenset[str],
     vocab: Vocabulary,
 ) -> _Cell | None:
     """Resolve a number inside a markdown table body row, or None if it
@@ -334,22 +410,7 @@ def _table_cell(
     line = answer[start:end]
     if not _TABLE_ROW_RE.match(line) or _TABLE_SEPARATOR_RE.match(line):
         return None
-    # Walk up through the body rows to the separator; the header is the
-    # row above it. A number in the header row itself is not a cell.
-    header: list[str] | None = None
-    cursor = start
-    while cursor > 0:
-        above_start, above_end = _line_bounds(answer, cursor - 1)
-        above = answer[above_start:above_end]
-        if _TABLE_SEPARATOR_RE.match(above):
-            if above_start > 0:
-                head_start, head_end = _line_bounds(answer, above_start - 1)
-                if _TABLE_ROW_RE.match(answer[head_start:head_end]):
-                    header = _cells(answer[head_start:head_end])
-            break
-        if not _TABLE_ROW_RE.match(above):
-            break
-        cursor = above_start
+    header = _table_headers(answer).get(start)
     if header is None:
         return None
     column = line[: m.start - start].strip().lstrip("|").count("|")
@@ -368,7 +429,7 @@ def _table_cell(
 
     row = [c for i, c in enumerate(_cells(line)) if i != column]
     entity = next((e for c in row if (e := entity_in(c))), None) or entity_in(heading)
-    dates = find_dates(line)
+    dates = _find_dates(line)
     return _Cell(entity, metric, dates[0][1] if dates else None)
 
 
@@ -376,7 +437,7 @@ def _keyword_hits(answer: str, pos: int, scope: _Scope, table: Mapping[str, str]
     """Metrics named around the number, in the order they should be tried:
     the phrase by distance, then the rest of the clause before and after
     the number (nearest first), then earlier clauses of the sentence."""
-    keywords = sorted(table, key=len, reverse=True)
+    keywords = tuple(sorted(table, key=len, reverse=True))
     hits = [(p, table[kw]) for p, kw in _mentions(answer, scope.sentence, keywords, re.IGNORECASE)]
     phrase: list[tuple[int, str]] = []
     before: list[tuple[int, str]] = []
@@ -458,7 +519,7 @@ def _derivation(
     cued = lookback or nday or (extremum and lookback)
     start: tuple[int, str] | None = None
     if since and not cued:
-        dates = find_dates(answer, since.end(), hi)
+        dates = _find_dates(answer, since.end(), hi)
         # "since July 17", "from its July 20 close": the date follows closely.
         if dates and len(answer[since.end() : dates[0][0]].split()) <= 2:
             start = dates[0]
@@ -472,7 +533,7 @@ def _derivation(
     # since July 20", "volume hit a 5-day high") is about that metric,
     # whose change nobody receipted: unresolved, never recomputed from
     # the close (#94).
-    keywords = sorted(vocab.synonyms, key=len, reverse=True)
+    keywords = tuple(sorted(vocab.synonyms, key=len, reverse=True))
     period = lookback.span() if lookback else (0, 0)  # "over the last 3 sessions" names no metric
     named = [
         vocab.synonyms[kw]
@@ -488,12 +549,12 @@ def _derivation(
     # latest receipted day.
     end: str | None = None
     if start is not None:
-        later = find_dates(answer, start[0] + 1, hi)
+        later = _find_dates(answer, start[0] + 1, hi)
         end = next((d[1] for d in later if re.search(r"\bto\b", answer[start[0] : d[0]])), None)
     if end is None:
         excluded = start[0] if start is not None else hi
-        stated = [d for d in find_dates(answer, lo, hi) if d[0] < excluded and d[0] != m.start]
-        clause_before = [d for d in find_dates(answer, *scope.clause) if d[0] < lo]
+        stated = [d for d in _find_dates(answer, lo, hi) if d[0] < excluded and d[0] != m.start]
+        clause_before = [d for d in _find_dates(answer, *scope.clause) if d[0] < lo]
         pool = stated or clause_before
         end = pool[-1][1] if pool else None
 
@@ -523,11 +584,11 @@ def _resolve(
     """Attach entity and metric to one Tier 2 numeric token."""
     value, unit = m.value, m.unit
     scope = _scope(answer, m.start)
-    cell = _table_cell(answer, m, set(known_entities), vocab)
+    cell = _table_cell(answer, m, frozenset(known_entities), vocab)
     if cell is not None:
         entity, metric = cell.entity, cell.metric
     else:
-        entity = _entity(answer, m.start, scope, set(known_entities))
+        entity = _entity(answer, m.start, scope, frozenset(known_entities))
         metric = _pick_metric(_keyword_hits(answer, m.start, scope, vocab.synonyms), unit, vocab)
     if (
         cell is None
@@ -631,7 +692,7 @@ def extract_claims(
                     tier=1,
                     # What the prose says the number is about; the matcher
                     # checks the cited fact agrees (#95).
-                    entity=_entity(answer, m.start, scope, set(known_entities)),
+                    entity=_entity(answer, m.start, scope, frozenset(known_entities)),
                     as_of=_date(answer, m.start, scope),
                     unit=m.unit,
                     resolution=m.resolution,
