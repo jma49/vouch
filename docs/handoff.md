@@ -300,6 +300,19 @@ entry whenever a choice closes off an alternative (AGENTS.md).
 - Revisit when: agents cite reliably enough to make Tier 1 the default.
 
 
+**Proxy lifecycle and limits** (#100)
+- Chosen: the tool catalog follows every upstream page and is built on
+  first use (after the agent's `initialized`), served to the agent in
+  one page (an agent cursor is refused); calls the proxy makes itself
+  get 30 s; upstream notifications go through one ordered queue of 256
+  and are dropped past it; the HTTP endpoint allows 64 requests in
+  flight, checks Host when on loopback, reads within a minute, and
+  follows no redirects; SSE lines are capped at the frame limit.
+- Rejected: proxying upstream cursors (meaningless across upstreams);
+  blocking the upstream's reader on a slow agent.
+- Cost: an agent that cannot keep up loses progress notifications; a
+  very large tool catalog is sent whole.
+
 **Streamable HTTP: one session per process, simple stream routing** (#79)
 - Chosen: `--listen` serves exactly one session; DELETE or a signal
   ends it and seals the log, as EOF does on stdio. Every POSTed request
@@ -423,6 +436,16 @@ wrong in the stated way.
   leak nothing).
 - Cost: `title` tooltips are plain text and slow to appear.
 
+**Analytics facts come from the server, not the agent's query** (#103)
+- Chosen: `run_sql` returns the query's rows plus a server-built `facts`
+  array with the true figures for each (region, quarter) the rows
+  mention; the schema receipts only `facts`. Queries get 2 s and 1 MB
+  per value.
+- Rejected: receipting query columns (the audited agent picks them and
+  can select literals); SQL provenance analysis (fragile).
+- Cost: aggregates across quarters and custom metrics are not facts, so
+  claims about them are UNSUPPORTED.
+
 **A domain is two config files; finance stays the default** (#88)
 - Chosen: schemas gain a per-element `entity_ptr`; the verifier's
   finance constants become a `Vocabulary` (synonyms, units, signed
@@ -440,6 +463,19 @@ wrong in the stated way.
   verification run: an answer mixing domains needs a merged file.
 - Revisit when: a domain needs units beyond USD and percent (the
   tokenizer would have to learn them).
+
+**DERIVED from one receipt's series; citations answer to the prose** (#94, #95)
+- Chosen: a derived value is recomputed only from one receipt's dated
+  series (plus a check that no other receipt disagrees on the days
+  used); a cited number whose sentence names another entity or date is
+  UNSUPPORTED; prefixes under 8 characters cite nothing; disagreeing
+  timeframes make an untimed claim UNVERIFIABLE.
+- Rejected: stitching series across receipts (cannot tell sessions from
+  gaps); trusting a citation over the prose around it.
+- Cost: a correct multi-day claim whose points came from separate calls
+  stays UNSUPPORTED; an answer citing the right fact under a pronoun it
+  cannot resolve keeps its citation's entity only when the prose names
+  none.
 
 **DERIVED: explicit periods only, sessions not days** (#90)
 - Chosen: recompute a change over an explicit period and an N-session

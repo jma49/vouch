@@ -16,7 +16,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
-from vouch_verifier.signing import key_id
+from vouch_verifier.signing import env_public_keys, key_id
 
 EVAL_SIGNING_KEY = Path("testdata/keys/eval.pem")
 EVAL_PUBLIC_KEY = Path("testdata/keys/eval.pub.pem")
@@ -35,8 +35,7 @@ def resolve_public_keys(explicit: list[Path] | None = None) -> list[Path]:
     else the eval public key."""
     if explicit:
         return explicit
-    env = [Path(p) for p in os.environ.get("VOUCH_PUBLIC_KEY", "").split(os.pathsep) if p]
-    return env or [EVAL_PUBLIC_KEY]
+    return env_public_keys() or [EVAL_PUBLIC_KEY]
 
 
 def signing_key_id(path: Path) -> str:

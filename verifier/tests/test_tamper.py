@@ -41,6 +41,22 @@ def _resigned_with_bad_link() -> list[str]:
     return signed_chain(entries, overrides={1: {"seq": 7}})
 
 
+def _merged(lower: str, upper: str) -> str:
+    """One line holding two envelopes, one under each key spelling: Go
+    used to read one and Python the other (#98)."""
+    capitalised = (
+        upper.replace('"payload"', '"Payload"')
+        .replace('"payloadType"', '"PayloadType"')
+        .replace('"signatures"', '"Signatures"')
+    )
+    return lower.rstrip().removesuffix("}") + ", " + capitalised.lstrip().removeprefix("{")
+
+
+def _case_variant_body() -> list[str]:
+    entries = [(kind, json.loads(body)) for kind, body in bodies([R0, R1])]
+    return signed_chain(entries, overrides={1: {"Facts": []}})
+
+
 CASES = [
     pytest.param([R0, R2, CP], GOLDEN_KEYS, "chain broken", id="delete-middle"),
     pytest.param([R1, R0, R2, CP], GOLDEN_KEYS, "chain broken", id="reorder"),
@@ -53,6 +69,20 @@ CASES = [
         id="edit-fact",
     ),
     pytest.param([R0, R1, R2, CP], OTHER_KEYS, "no valid signature", id="unknown-key"),
+    pytest.param([_merged(R0, R1), R1, R2, CP], GOLDEN_KEYS, "envelope keys", id="merge-by-case"),
+    pytest.param(
+        [R0.replace("{", '{"payloadType": "x", ', 1), R1, R2, CP],
+        GOLDEN_KEYS,
+        "duplicate key",
+        id="duplicate-envelope-key",
+    ),
+    pytest.param(
+        [R0.replace('"keyid"', '"KeyID": "x", "keyid"', 1), R1, R2, CP],
+        GOLDEN_KEYS,
+        "signatures must be",
+        id="extra-signature-key",
+    ),
+    pytest.param(_case_variant_body(), GOLDEN_KEYS, "only in case", id="case-variant-body-key"),
     pytest.param(
         [R0, R1, R2, _swap_signature(CP, R0)], GOLDEN_KEYS, "no valid signature", id="swap-sig"
     ),

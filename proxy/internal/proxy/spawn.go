@@ -3,6 +3,7 @@ package proxy
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -159,6 +160,13 @@ func Connect(spec UpstreamSpec, header http.Header) (*Upstream, error) {
 	if strings.ContainsAny(spec.Command, " \t") {
 		return nil, fmt.Errorf("proxy: upstream %s: a URL takes no arguments", spec.Name)
 	}
+	// Credentials in the URL would become the upstream's name, which
+	// appears in errors sent to the agent and in fixtures (#100); they
+	// belong in --upstream-header, ideally as env:VAR.
+	if u, err := url.Parse(spec.Command); err != nil || u.User != nil {
+		// Not named in the error: for such a URL the name is the URL.
+		return nil, fmt.Errorf("proxy: an upstream URL carries credentials; put them in --upstream-header, not the URL")
+	}
 	hc := mcp.NewHTTPClient(spec.Command, header, nil)
 	return &Upstream{Name: spec.Name, Client: mcp.NewClient(hc), Close: hc.Close}, nil
 }
@@ -179,6 +187,7 @@ func Spawn(spec UpstreamSpec) (*Upstream, error) {
 		name = joinCommand(fields)
 	}
 	cmd := exec.Command(fields[0], fields[1:]...)
+	cmd.Env = upstreamEnv(os.Environ())
 	cmd.Stderr = os.Stderr
 
 	stdin, err := cmd.StdinPipe()
@@ -213,6 +222,21 @@ func Spawn(spec UpstreamSpec) (*Upstream, error) {
 			}
 		},
 	}, nil
+}
+
+// upstreamEnv is the environment a spawned upstream gets: the proxy's,
+// minus every VOUCH_ variable. An upstream is trusted for nothing
+// (docs/threat-model.md); it must not learn where the signing key is
+// (#101). The CLI also drops the key path and env: credentials from its
+// own environment once read; this filter is the backstop.
+func upstreamEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "VOUCH_") {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // closeTimeout bounds how long Upstream.Close waits for a graceful exit

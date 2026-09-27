@@ -51,13 +51,32 @@ def make_handler(
 
 
 def serve(handle: Handler, stdin: TextIO, stdout: TextIO) -> None:
+    """Answer each line. A line that is not a JSON-RPC object, or a
+    handler that fails, gets an error reply; nothing ends the session
+    but EOF (#103)."""
     for line in stdin:
         if not line.strip():
             continue
-        reply = handle(json.loads(line))
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError as e:
+            reply: dict[str, Any] | None = _error(None, -32700, f"parse error: {e}")
+        else:
+            if not isinstance(msg, dict) or not isinstance(msg.get("params") or {}, dict):
+                reply = _error(msg.get("id") if isinstance(msg, dict) else None, -32600,
+                               "invalid request")  # fmt: skip
+            else:
+                try:
+                    reply = handle(msg)
+                except Exception as e:
+                    reply = _error(msg.get("id"), -32603, f"internal error: {e}")
         if reply is not None:
             stdout.write(json.dumps(reply) + "\n")
             stdout.flush()
+
+
+def _error(msg_id: object, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
 
 
 def tool_error(message: str) -> dict[str, Any]:

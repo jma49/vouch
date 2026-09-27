@@ -3,7 +3,8 @@
 //	vouch keygen [--out <dir>] [--name <name>]
 //	vouch proxy --signing-key <key.pem> --upstream "[name=]cmd args" \
 //	    [--upstream "[name=]https://host/mcp" --upstream-header "name=H: v"] \
-//	    [--listen 127.0.0.1:8765] [--cite] --receipts <dir> --schemas <dir> [--session <id>]
+//	    [--listen 127.0.0.1:8766] [--cite] --receipts <dir> --schemas <dir> [--session <id>]
+//	    [--mode live|record|replay --fixtures <dir>]
 //	vouch receipts cat <log>
 //	vouch canon [--lines] < input
 //	vouch receipts verify --public-key <key.pub.pem> [--public-key ...] \
@@ -79,12 +80,15 @@ func usage() {
   vouch keygen [--out <dir>] [--name <name>]
   vouch proxy --signing-key <key.pem> --upstream "[name=]cmd args" [--upstream ...] \
       [--upstream "[name=]https://host/mcp" --upstream-header "name=Header: value"] \
-      [--listen 127.0.0.1:8765] [--cite] --receipts <dir> --schemas <dir> [--session <id>]
+      [--listen 127.0.0.1:8766] [--cite] --receipts <dir> --schemas <dir> [--session <id>]
+      [--mode live|record|replay --fixtures <dir>]
   vouch receipts cat <log>
   vouch receipts verify --public-key <key.pub.pem> [--public-key ...] \
       [--require-sealed] [--expect-head <digest>] <log>
   vouch canon [--lines] < input
-  vouch version`)
+  vouch version
+
+Run a command with -h for every flag it takes.`)
 }
 
 func runProxy(args []string) error {
@@ -118,6 +122,9 @@ func runProxy(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Upstreams are spawned with this process's environment; the key's
+	// path is none of their business once the key is loaded (#101).
+	os.Unsetenv("VOUCH_SIGNING_KEY")
 	signer := sign.NewSigner(priv)
 	if *session == "" {
 		*session = "s-" + randomHex(8)
@@ -343,6 +350,9 @@ func parseHeaders(values []string, specs []proxy.UpstreamSpec) (map[string]http.
 			if value == "" {
 				return nil, fmt.Errorf("--upstream-header %q: $%s is empty", v, env)
 			}
+			// The credential is for one HTTP upstream; spawned upstreams
+			// inherit the environment, so it leaves it (#101).
+			os.Unsetenv(env)
 		}
 		if out[name] == nil {
 			out[name] = http.Header{}
@@ -361,13 +371,20 @@ func serveHTTP(addr string) (*mcp.HTTPServer, func(), error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("listen: %w", err)
 	}
-	if host, _, _ := net.SplitHostPort(ln.Addr().String()); !net.ParseIP(host).IsLoopback() {
+	hs := mcp.NewHTTPServer(nil)
+	if host, _, _ := net.SplitHostPort(ln.Addr().String()); net.ParseIP(host).IsLoopback() {
+		hs.LoopbackHostsOnly()
+	} else {
 		fmt.Fprintf(os.Stderr, "vouch proxy: warning: listening on %s, beyond this machine; the endpoint has no authentication\n", ln.Addr())
 	}
-	hs := mcp.NewHTTPServer(nil)
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", hs)
-	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	// No write timeout: event streams stay open for as long as a call
+	// runs. Reads and idle connections are bounded (#100).
+	server := &http.Server{
+		Handler: mux, ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout: time.Minute, IdleTimeout: 2 * time.Minute,
+	}
 	go func() {
 		if err := server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintln(os.Stderr, "vouch proxy:", err)

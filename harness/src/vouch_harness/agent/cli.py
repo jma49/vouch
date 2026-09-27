@@ -17,12 +17,13 @@ import os
 import sys
 import tempfile
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from vouch_harness.agent.llm import (
     CachedClient,
     LLMError,
+    ModelConfig,
     OpenAICompatClient,
     cache_identity,
     load_models,
@@ -56,6 +57,23 @@ def run_batch(pending: list[RunSpec], run_one: Callable[[RunSpec], Path], out: P
     return failed
 
 
+def _positive(text: str) -> int:
+    n = int(text)
+    if n < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return n
+
+
+def proxy_environment(
+    environ: Mapping[str, str], models: Mapping[str, ModelConfig]
+) -> dict[str, str]:
+    """The environment for the proxy, and so for the upstream it spawns:
+    this process's, without any model's API key. Only the LLM client,
+    in this process, needs those (#101)."""
+    secrets = {m.api_key_env for m in models.values()}
+    return {k: v for k, v in environ.items() if k not in secrets}
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="vouch-agent",
@@ -65,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--model", required=True, help="model name from --models")
     p.add_argument("--models", type=Path, default=Path("eval/models.yaml"))
     p.add_argument("--tasks", type=Path, default=Path("eval/tasks.yaml"))
-    p.add_argument("--samples", type=int, default=5, help="runs per task (default 5)")
+    p.add_argument("--samples", type=_positive, default=5, help="runs per task (default 5)")
     p.add_argument("--task", action="append", default=[], help="only this task id (repeatable)")
     p.add_argument("--out", type=Path, default=Path("eval/runs"))
     p.add_argument("--cache", type=Path, default=Path("eval/.cache"))
@@ -120,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     with tempfile.TemporaryDirectory(prefix="vouch-agent-") as private_dir:
         # A 0600 copy that lives only for this batch (signing.private_copy).
         key_copy = private_copy(signing_key, Path(private_dir))
-        env = {**os.environ, "VOUCH_SIGNING_KEY": str(key_copy)}
+        env = {**proxy_environment(os.environ, models), "VOUCH_SIGNING_KEY": str(key_copy)}
         failed = run_batch(
             pending,
             lambda spec: execute(spec, client, args.out, args.proxy, args.schemas, env),

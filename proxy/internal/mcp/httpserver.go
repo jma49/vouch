@@ -37,6 +37,7 @@ import (
 type HTTPServer struct {
 	logf        func(format string, args ...any)
 	allowOrigin func(origin string) bool
+	allowHost   func(host string) bool // nil: any Host header
 
 	in        chan *Message
 	done      chan struct{}
@@ -44,6 +45,7 @@ type HTTPServer struct {
 
 	mu        sync.Mutex
 	sessionID string
+	initKey   string                  // the initialize request's id until it is answered
 	version   string                  // negotiated, from the initialize response
 	posts     map[string]*eventStream // by request id
 	order     []string                // open POST streams, oldest first
@@ -55,6 +57,7 @@ type HTTPServer struct {
 type eventStream struct {
 	out  chan []byte
 	gone chan struct{} // closed when the HTTP handler returns
+	stop chan struct{} // closed to end the stream from outside (a replaced GET)
 }
 
 // NewHTTPServer returns a transport that accepts browser origins only
@@ -85,6 +88,22 @@ func loopbackOrigin(origin string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// MaxInflight bounds concurrent requests in one session: each holds a
+// stream, a goroutine, and an upstream call (#100).
+const MaxInflight = 64
+
+// LoopbackHostsOnly refuses requests whose Host header is not a loopback
+// name, for a server listening on loopback: with the Origin check, a
+// browser page on another host cannot reach it under any name (#100).
+func (s *HTTPServer) LoopbackHostsOnly() {
+	s.allowHost = func(host string) bool {
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		return loopbackOrigin("http://" + strings.Trim(host, "[]"))
+	}
+}
+
 // Read returns the next message the agent sent, or io.EOF after the
 // session ended.
 func (s *HTTPServer) Read() (*Message, error) {
@@ -112,6 +131,12 @@ func (s *HTTPServer) Write(m *Message) error {
 		return fmt.Errorf("mcp: marshal frame: %w", err)
 	}
 	s.mu.Lock()
+	if m.Method == "" && s.initKey != "" && string(bytes.TrimSpace(m.ID)) == s.initKey {
+		s.initKey = ""
+		if m.Error != nil {
+			s.sessionID = "" // a refused initialize leaves no session behind
+		}
+	}
 	if m.Method == "" && m.Error == nil && s.version == "" {
 		var r struct {
 			ProtocolVersion string `json:"protocolVersion"`
@@ -175,6 +200,10 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
+	if s.allowHost != nil && !s.allowHost(r.Host) {
+		http.Error(w, "host not allowed", http.StatusForbidden)
+		return
+	}
 	select {
 	case <-s.done:
 		http.Error(w, "session ended", http.StatusNotFound)
@@ -201,15 +230,22 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // every request after initialize. It writes the error response itself.
 func (s *HTTPServer) checkSession(w http.ResponseWriter, r *http.Request, initializing bool) bool {
 	s.mu.Lock()
+	if initializing {
+		// Checked and claimed under one lock: two concurrent initialize
+		// POSTs must not both get a session (#100).
+		if s.sessionID != "" {
+			s.mu.Unlock()
+			writeRPCError(w, http.StatusBadRequest, "this proxy serves one session, already initialized")
+			return false
+		}
+		s.sessionID = newSessionID()
+		s.mu.Unlock()
+		return true
+	}
 	session, version := s.sessionID, s.version
 	s.mu.Unlock()
 	got := r.Header.Get("Mcp-Session-Id")
 	switch {
-	case initializing && session != "":
-		writeRPCError(w, http.StatusBadRequest, "this proxy serves one session, already initialized")
-		return false
-	case initializing:
-		return true
 	case session == "":
 		writeRPCError(w, http.StatusBadRequest, "no session: initialize first")
 		return false
@@ -249,10 +285,20 @@ func (s *HTTPServer) post(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(&Message{JSONRPC: "2.0", ID: nullID, Error: &Error{Code: code, Message: err.Error()}})
 		return
 	}
-	initializing := m.Method == "initialize"
+	// Only an initialize request opens a session; one sent as a
+	// notification is just a notification.
+	initializing := m.Method == "initialize" && len(m.ID) > 0
 	if !s.checkSession(w, r, initializing) {
 		return
 	}
+	claimed := initializing
+	defer func() {
+		if claimed { // refused before the proxy saw it: release the session
+			s.mu.Lock()
+			s.sessionID, s.initKey = "", ""
+			s.mu.Unlock()
+		}
+	}()
 	if m.Method == "" || len(m.ID) == 0 { // a notification or a response
 		if !s.enqueue(m) {
 			http.Error(w, "session ended", http.StatusNotFound)
@@ -277,8 +323,14 @@ func (s *HTTPServer) post(w http.ResponseWriter, r *http.Request) {
 		writeRPCError(w, http.StatusBadRequest, fmt.Sprintf("request id %s is already in flight", m.ID))
 		return
 	}
+	if len(s.posts) >= MaxInflight {
+		s.mu.Unlock()
+		writeRPCError(w, http.StatusTooManyRequests, fmt.Sprintf("more than %d requests in flight", MaxInflight))
+		return
+	}
 	if initializing {
-		s.sessionID = newSessionID()
+		s.initKey = key
+		claimed = false // the proxy answers it; Write releases on an error
 		w.Header().Set("Mcp-Session-Id", s.sessionID)
 	}
 	s.posts[key] = stream
@@ -339,10 +391,13 @@ func (s *HTTPServer) listen(w http.ResponseWriter, r *http.Request) {
 	if !s.checkSession(w, r, false) {
 		return
 	}
-	stream := &eventStream{out: make(chan []byte, 64), gone: make(chan struct{})}
+	stream := &eventStream{out: make(chan []byte, 64), gone: make(chan struct{}), stop: make(chan struct{})}
 	defer close(stream.gone)
 	s.mu.Lock()
-	s.get = stream // a new GET replaces an older one
+	if s.get != nil {
+		close(s.get.stop) // a new GET replaces an older one, which ends
+	}
+	s.get = stream
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
@@ -363,6 +418,8 @@ func (s *HTTPServer) listen(w http.ResponseWriter, r *http.Request) {
 			}
 			flush(w)
 		case <-r.Context().Done():
+			return
+		case <-stream.stop:
 			return
 		case <-s.done:
 			return

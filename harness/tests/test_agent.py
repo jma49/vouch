@@ -234,6 +234,27 @@ def test_cache_keys_on_request_and_sample(tmp_path: Path) -> None:
     )
 
 
+def test_cache_survives_new_receipt_ids(tmp_path: Path) -> None:
+    """#104: under --cite, receipt ids in tool results are random, so a
+    rerun used to miss every turn after the first tool call. The key
+    ignores which ids they are, and a replayed reply cites this run's."""
+
+    def conversation(rid: str) -> list[Message]:
+        return [
+            {"role": "user", "content": "How is NVDA?"},
+            {"role": "tool", "tool_call_id": "c1",
+             "content": f"[vouch] ... rsi_14 = 62.3  -> [[r:{rid}#/rsi_14]]"},
+        ]  # fmt: skip
+
+    inner = ScriptedClient([answer("RSI is 62.3 [[r:aaaaaaaaaaaa#/rsi_14]].")])
+    first = CachedClient(inner, tmp_path, identity="m")
+    first.complete(conversation("aaaaaaaaaaaa"), [], 0)
+    again = CachedClient(inner, tmp_path, identity="m")  # inner has no replies left
+    reply = again.complete(conversation("bbbbbbbbbbbb"), [], 0)
+    assert (again.hits, again.misses) == (1, 0)
+    assert reply.message["content"] == "RSI is 62.3 [[r:bbbbbbbbbbbb#/rsi_14]]."
+
+
 @dataclass
 class FakeProvider:
     """A local OpenAI-compatible endpoint that answers with scripted statuses."""
@@ -605,3 +626,11 @@ def test_end_to_end_citation_condition(tmp_path: Path) -> None:
     ]
     assert claim.verdict is Verdict.SUPPORTED
     assert claim.receipt_id == receipts[0].receipt_id
+
+
+def test_the_proxy_gets_no_api_keys() -> None:
+    # #101: the proxy's environment is inherited by the upstream it spawns.
+    models = load_models(ROOT / "eval" / "models.yaml")
+    key_var = next(iter(models.values())).api_key_env
+    env = agent_cli.proxy_environment({key_var: "sk-secret", "PATH": "/bin"}, models)
+    assert env == {"PATH": "/bin"}

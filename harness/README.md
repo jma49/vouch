@@ -13,4 +13,4 @@ vouch-eval --receipts ./receipts/receipts.jsonl --n 10 --tolerances tolerance.ya
 
 Fixture record/replay lives in the Go proxy (`vouch proxy --mode=record|replay`), because it has to sit on the upstream call path.
 
-Two mutations are known not to be caught by the MVP verifier and are kept in the gold set on purpose, so the per-mutation recall table reports the gap rather than hiding it: `timeframe_swap` (Tier 2 claims carry no timeframe yet) and `false_absence` (an omitted claim produces no verdict to flag).
+`false_absence` is known not to be caught (an omitted claim produces no verdict to flag) and stays in the gold set on purpose, so the per-mutation recall table reports the gap rather than hiding it. `timeframe_swap` is defined but never generated for the golden answers (P-042).

@@ -8,7 +8,14 @@ STAMP := $(VENV)/.installed
 VENV_OK := $(PY) -c 'import sys, vouch_verifier, vouch_harness; \
 	sys.exit(not vouch_verifier.__file__.startswith("$(CURDIR)/"))'
 
-.PHONY: test test-go test-py test-harness fuzz integration bench lint lint-go lint-py fmt cover build install-py eval golden readme readme-check agent eval-real clean
+.PHONY: check golden-check test test-go test-py test-harness fuzz integration bench lint lint-go lint-py fmt cover build install-py eval golden readme readme-check agent eval-real clean
+
+# Everything CI checks, in one command: run it before every commit.
+check: build test lint readme-check golden-check
+
+# The golden log must regenerate byte for byte (invariant 1).
+golden-check: golden
+	git diff --exit-code testdata/receipts_golden.jsonl
 
 test: test-go test-py test-harness
 
@@ -48,11 +55,13 @@ bench: install-py
 FUZZTIME ?= 2m
 fuzz: install-py build
 	cd proxy && go test ./internal/receipt -run '^$$' -fuzz FuzzCanonicalize -fuzztime $(FUZZTIME)
-	cp "$$(cd proxy && go env GOCACHE)"/fuzz/github.com/jma49/vouch/proxy/internal/receipt/FuzzCanonicalize/* \
-		proxy/internal/receipt/testdata/fuzz/FuzzCanonicalize/ 2>/dev/null || true
+	corpus="$$(cd proxy && go env GOCACHE)/fuzz/github.com/jma49/vouch/proxy/internal/receipt/FuzzCanonicalize"; \
+		if [ -d "$$corpus" ]; then cp "$$corpus"/* proxy/internal/receipt/testdata/fuzz/FuzzCanonicalize/; fi
 	cd verifier && VOUCH_DIFF_EXAMPLES=2000 ../$(PY) -m pytest -q tests/test_differential.py
 
-test-harness: install-py
+# build: the end-to-end tests drive the real proxy; without a fresh
+# binary they would skip, or test yesterday's proxy (#105).
+test-harness: install-py build
 	cd harness && ../$(PY) -m pytest -q
 
 lint: lint-go lint-py
@@ -112,8 +121,13 @@ agent: build install-py
 
 # Score real runs against human labels (docs/labeling.md). LABELER is
 # whose labels count as ground truth.
-LABELER ?= $(shell ls eval/labels 2>/dev/null | head -1 | sed 's/\.jsonl$$//')
+# With one labels file it is the default; with several, choose: whoever
+# sorts first is not ground truth by accident (#104).
+LABEL_FILES := $(wildcard eval/labels/*.jsonl)
+LABELER ?= $(if $(filter 1,$(words $(LABEL_FILES))),$(basename $(notdir $(LABEL_FILES))),)
 eval-real: install-py
+	@if [ -z "$(LABELER)" ] && [ $(words $(LABEL_FILES)) -gt 1 ]; then \
+		echo "eval-real: several labelers; choose one with LABELER=<name>"; exit 2; fi
 	$(VENV)/bin/vouch-eval-real --labeler $(or $(LABELER),none)
 
 # README metrics and the example report are generated, never hand-edited

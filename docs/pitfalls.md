@@ -208,6 +208,19 @@ remembering. The 2026-09-27 audit filed #8-#48; all are closed.
 - **Status:** fixed (#74). Reproduced; found by the reference-server
   integration test (#75), which is why that test exists.
 
+### P-026 `encoding/json` matches struct fields case-insensitively
+- **Symptom:** tools/call params with both `"arguments"` and
+  `"Arguments"` ran NVDA upstream while the signed receipt recorded
+  AAPL; one log line read as two different logs by Go and Python.
+- **Cause:** decoding into a struct folds key case and keeps the last
+  match; MCP SDKs and Python dicts match exactly. `Canonicalize` only
+  refused exact duplicates.
+- **Fix / workaround:** security-relevant JSON goes through
+  `receipt.DecodeStrict` (a key that differs from a field only in case
+  is an error) or `receipt.ExactKeys` (envelopes); Python refuses the
+  same keys.
+- **Status:** fixed (#98). Reproduced; found by the 2026-09-27 audit.
+
 ### P-044 Agents cannot use the citation protocol
 - **Symptom:** real agent answers never contain Tier 1 citations, so
   Tier 1 share is 0 and every claim goes through Tier 2.

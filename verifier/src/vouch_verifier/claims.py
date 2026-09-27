@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from bisect import bisect_left, bisect_right
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal
@@ -43,14 +43,17 @@ class Derivation:
     op: Literal["pct_change", "max", "min"]
     metric: str  # the series it is computed over
     start: str | None = None  # pct_change from this date ("YYYY-MM-DD" or "--MM-DD")
-    end: str | None = None  # ... to this date; None means the latest receipted day
-    lookback: int | None = None  # sessions back from the latest receipted day
+    end: str | None = None  # the last day; None means the latest receipted day
+    lookback: int | None = None  # sessions back from the last day
 
     def describe(self) -> str:
+        to = f" to {self.end}" if self.end else ""
         if self.op == "pct_change":
             span = f"since {self.start}" if self.start else f"over {self.lookback} sessions"
-            return f"{self.metric} change {span}" + (f" to {self.end}" if self.end else "")
-        return f"{self.lookback}-session {'high' if self.op == 'max' else 'low'} of {self.metric}"
+            return f"{self.metric} change {span}{to}"
+        return (
+            f"{self.lookback}-session {'high' if self.op == 'max' else 'low'} of {self.metric}{to}"
+        )
 
 
 @dataclass(frozen=True)
@@ -100,12 +103,6 @@ _SENTENCE_SPLIT_RE = re.compile(r"[.!?](?:\s|$)|\n")
 _TABLE_ROW_RE = re.compile(r"^[ \t]*\|.*\|[ \t]*$")
 _TABLE_SEPARATOR_RE = re.compile(r"^[ \t]*\|(?:[ \t]*:?-{3,}:?[ \t]*\|)+[ \t]*$")
 
-# The finance vocabulary is the default; see vouch_verifier.vocabulary.
-# These names stay for callers that read the default tables.
-DEFAULT_METRIC_SYNONYMS: dict[str, str] = dict(FINANCE.synonyms)
-DEFAULT_METRIC_UNITS: dict[str, str | None] = dict(FINANCE.units)
-DEFAULT_SIGNED_METRICS: frozenset[str] = FINANCE.signed
-
 # "fell 1.35% to 172.04", "rose from 170 to 172.04": a bare number after
 # a move and "to" is the resulting price (issue #39). Only used when no
 # price keyword resolves it first, so "closed up 1.92% at 181.52" still
@@ -120,7 +117,18 @@ _MOVE_TARGET_RE = re.compile(r"(?:%|\d)\s+(?:to|at)\s+\$?$", re.IGNORECASE)
 
 # "down 1.35%" claims -1.35, not 1.35 — without this, sign flips are
 # invisible to the matcher.
-_NEGATION_RE = re.compile(r"\b(down|fell|dropped|declined|lost|slid)\b", re.IGNORECASE)
+_NEGATION_RE = re.compile(
+    r"\b(down|fell|falls?|dropped|drops?|declined|declines?|decline of|lost|loss of|slid|dipped"
+    r"|dips?|slipped|decreased|decrease of)\b",
+    re.IGNORECASE,
+)
+# "didn't fall 1.35%", "was not down 2%": a direction the sentence
+# denies. Signing the number either way would be a guess, so the claim
+# is left unresolved (#96).
+_DENIED_DIRECTION_RE = re.compile(
+    r"(?:\bnot\b|n't\b|\bnever\b|\bno longer\b)[^.;,]{0,20}?" + _NEGATION_RE.pattern,
+    re.IGNORECASE,
+)
 
 
 # Scope boundaries inside a sentence (P-032). Independent clauses split
@@ -181,14 +189,21 @@ def _sentence_bounds(answer: str, pos: int) -> _Bounds:
 
 
 def _segment(answer: str, bounds: _Bounds, pos: int, splitter: re.Pattern[str]) -> _Bounds:
-    start, end = bounds
-    for m in splitter.finditer(answer, start, end):
-        if m.end() <= pos:
-            start = m.end()
-        elif m.start() >= pos:
-            end = m.start()
-            break
-    return start, end
+    """The part of bounds between the splits around pos. Split points are
+    found once per span and bisected, as sentence breaks are: scanning
+    from the span's start for every number was quadratic (#97)."""
+    starts, ends = _splits(answer, bounds[0], bounds[1], splitter)
+    i = bisect_right(ends, pos) - 1
+    j = bisect_left(starts, pos)
+    return (ends[i] if i >= 0 else bounds[0]), (starts[j] if j < len(starts) else bounds[1])
+
+
+@lru_cache(maxsize=4096)
+def _splits(
+    answer: str, start: int, end: int, splitter: re.Pattern[str]
+) -> tuple[list[int], list[int]]:
+    matches = list(splitter.finditer(answer, start, end))
+    return [m.start() for m in matches], [m.end() for m in matches]
 
 
 def _scope(answer: str, pos: int) -> _Scope:
@@ -199,25 +214,81 @@ def _scope(answer: str, pos: int) -> _Scope:
 
 
 def _mentions(
-    answer: str, bounds: _Bounds, names: Iterable[str], flags: int = 0
+    answer: str, bounds: _Bounds, names: frozenset[str] | tuple[str, ...], flags: int = 0
 ) -> list[tuple[int, str]]:
-    """(position, name) for every whole-word mention of a name, in order."""
-    start, end = bounds
-    found: list[tuple[int, str]] = []
-    for name in names:
-        rx = re.compile(r"(?<!\w)" + re.escape(name) + r"(?!\w)", flags)
-        found.extend((m.start(), name) for m in rx.finditer(answer, start, end))
-    return sorted(found)
+    """(position, name) for every whole-word mention of a name, in order.
+    Where names overlap at one position, the longest wins ("closed at"
+    over "closed")."""
+    return list(_mentions_in(answer, bounds[0], bounds[1], names, flags))
+
+
+# Extraction asks for the same sentence's mentions once per number; one
+# compiled alternation per name set, and the results per span, keep it
+# linear (#97). Bounded caches of pure functions, like _sentence_breaks.
+@lru_cache(maxsize=64)
+def _alternation(
+    names: frozenset[str] | tuple[str, ...], flags: int
+) -> tuple[re.Pattern[str], dict[str, str]]:
+    ordered = sorted(names, key=len, reverse=True)
+    rx = re.compile(r"(?<!\w)(?:" + "|".join(map(re.escape, ordered)) + r")(?!\w)", flags)
+    fold = bool(flags & re.IGNORECASE)
+    return rx, {(n.lower() if fold else n): n for n in ordered}
+
+
+@lru_cache(maxsize=4096)
+def _mentions_in(
+    answer: str, start: int, end: int, names: frozenset[str] | tuple[str, ...], flags: int
+) -> tuple[tuple[int, str], ...]:
+    if not names:
+        return ()
+    rx, lookup = _alternation(names, flags)
+    fold = bool(flags & re.IGNORECASE)
+    return tuple(
+        (m.start(), lookup[m.group().lower() if fold else m.group()])
+        for m in rx.finditer(answer, start, end)
+    )
+
+
+_find_dates = lru_cache(maxsize=4096)(find_dates)
+
+
+def clear_caches() -> None:
+    """Drop the per-answer caches, so a benchmark measures real work."""
+    for cached in (
+        _sentence_breaks,
+        _splits,
+        _mentions_in,
+        _find_dates,
+        _timeframe_match,
+        _table_headers,
+    ):
+        cached.cache_clear()
+
+
+@lru_cache(maxsize=4096)
+def _timeframe_match(answer: str, start: int, end: int) -> re.Match[str] | None:
+    return _TIMEFRAME_RE.search(answer, start, end)
 
 
 def _within(p: int, bounds: _Bounds) -> bool:
     return bounds[0] <= p < bounds[1]
 
 
-def _entity(answer: str, pos: int, scope: _Scope, entities: set[str]) -> str | None:
+def _entity(answer: str, pos: int, scope: _Scope, entities: frozenset[str]) -> str | None:
     mentions = _mentions(answer, scope.sentence, entities)
     before = [(p, e) for p, e in mentions if p < pos]
     after = [(p, e) for p, e in mentions if p > pos]
+    # A sentence opening with a pronoun is about the previous sentence's
+    # subject until it names someone before the number: in "AMD has been
+    # weak. It closed at 181.52 while NVDA rallied." the close is AMD's,
+    # not NVDA's (#95). With no subject to inherit, it stays unresolved.
+    head = answer[scope.sentence[0] : scope.sentence[1]]
+    if not before and _PRONOUN_START_RE.match(head):
+        if scope.sentence[0] == 0:
+            return None
+        previous = _sentence_bounds(answer, max(0, scope.sentence[0] - 2))
+        earlier = _mentions(answer, previous, entities)
+        return earlier[0][1] if earlier else None
     # Nearest preceding in the phrase, then following in the phrase, then
     # preceding in the clause and sentence, then following in the clause.
     for pool, pick_last in (
@@ -229,28 +300,41 @@ def _entity(answer: str, pos: int, scope: _Scope, entities: set[str]) -> str | N
     ):
         if pool:
             return (pool[-1] if pick_last else pool[0])[1]
-    if not mentions and scope.sentence[0] > 0:
-        head = answer[scope.sentence[0] : scope.sentence[1]]
-        if _PRONOUN_START_RE.match(head):
-            previous = _sentence_bounds(answer, max(0, scope.sentence[0] - 2))
-            earlier = _mentions(answer, previous, entities)
-            if earlier:
-                return earlier[0][1]  # the previous sentence's subject
     return None
 
 
 def _date(answer: str, pos: int, scope: _Scope) -> str | None:
-    """The date a claim is about: the nearest one in its own clause.
-
-    Dates never cross a semicolon: in "NVDA reports Q2 earnings on
-    August 27; it closed at 181.52" the date belongs to the earnings.
+    """The date a claim is about: the nearest one in its own phrase, else
+    the nearest one before it in its clause ("On July 23, NVDA closed at
+    176.10"). A date later in the clause belongs to another phrase: in
+    "NVDA closed at 181.52, up from 176.10 on July 23" it dates the 176.10
+    only (#95). Dates never cross a semicolon: in "NVDA reports Q2
+    earnings on August 27; it closed at 181.52" the date is the
+    earnings'.
     """
-    dates = find_dates(answer, *scope.clause)
-    return min(dates, key=lambda d: abs(d[0] - pos))[1] if dates else None
+    dates = _find_dates(answer, *scope.phrase)
+    if dates:
+        return min(dates, key=lambda d: abs(d[0] - pos))[1]
+    # Only a phrase that is nothing but a time ("On July 23,") dates what
+    # follows; "down 5% since July 20" makes its own claim and keeps its
+    # date (#95).
+    before = [
+        d
+        for d in _find_dates(answer, *scope.clause)
+        if d[0] < pos and _only_a_time(answer, d, scope)
+    ]
+    return before[-1][1] if before else None
+
+
+def _only_a_time(answer: str, date: tuple[int, str], scope: _Scope) -> bool:
+    """Whether the phrase holding a date makes no numeric claim of its
+    own (tokenize masks the date itself)."""
+    lo, hi = _segment(answer, scope.clause, date[0], _PHRASE_SPLIT_RE)
+    return not tokenize(answer[lo:hi])
 
 
 def _timeframe(answer: str, scope: _Scope) -> str | None:
-    m = _TIMEFRAME_RE.search(answer, *scope.clause)
+    m = _timeframe_match(answer, *scope.clause)
     if m is None:
         return None
     if m["word"]:
@@ -281,10 +365,34 @@ def _cells(line: str) -> list[str]:
     return [c.strip() for c in line.strip().strip("|").split("|")]
 
 
+@lru_cache(maxsize=16)
+def _table_headers(answer: str) -> dict[int, tuple[str, ...]]:
+    """Every table body line's start -> its header cells, found in one
+    pass: the header is the row above a table's separator, and body rows
+    run until a line that is not a table row. Walking up to the header
+    from every cell made a long table quadratic (#97). A number in a
+    header row is not a cell."""
+    headers: dict[int, tuple[str, ...]] = {}
+    current: tuple[str, ...] | None = None
+    previous = ""
+    pos = 0
+    for text in answer.split("\n"):
+        if _TABLE_SEPARATOR_RE.match(text):
+            current = tuple(_cells(previous)) if _TABLE_ROW_RE.match(previous) else None
+        elif _TABLE_ROW_RE.match(text):
+            if current is not None:
+                headers[pos] = current
+        else:
+            current = None
+        previous = text
+        pos += len(text) + 1
+    return headers
+
+
 def _table_cell(
     answer: str,
     m: NumberToken,
-    entities: set[str],
+    entities: frozenset[str],
     vocab: Vocabulary,
 ) -> _Cell | None:
     """Resolve a number inside a markdown table body row, or None if it
@@ -296,22 +404,7 @@ def _table_cell(
     line = answer[start:end]
     if not _TABLE_ROW_RE.match(line) or _TABLE_SEPARATOR_RE.match(line):
         return None
-    # Walk up through the body rows to the separator; the header is the
-    # row above it. A number in the header row itself is not a cell.
-    header: list[str] | None = None
-    cursor = start
-    while cursor > 0:
-        above_start, above_end = _line_bounds(answer, cursor - 1)
-        above = answer[above_start:above_end]
-        if _TABLE_SEPARATOR_RE.match(above):
-            if above_start > 0:
-                head_start, head_end = _line_bounds(answer, above_start - 1)
-                if _TABLE_ROW_RE.match(answer[head_start:head_end]):
-                    header = _cells(answer[head_start:head_end])
-            break
-        if not _TABLE_ROW_RE.match(above):
-            break
-        cursor = above_start
+    header = _table_headers(answer).get(start)
     if header is None:
         return None
     column = line[: m.start - start].strip().lstrip("|").count("|")
@@ -330,7 +423,7 @@ def _table_cell(
 
     row = [c for i, c in enumerate(_cells(line)) if i != column]
     entity = next((e for c in row if (e := entity_in(c))), None) or entity_in(heading)
-    dates = find_dates(line)
+    dates = _find_dates(line)
     return _Cell(entity, metric, dates[0][1] if dates else None)
 
 
@@ -338,7 +431,7 @@ def _keyword_hits(answer: str, pos: int, scope: _Scope, table: Mapping[str, str]
     """Metrics named around the number, in the order they should be tried:
     the phrase by distance, then the rest of the clause before and after
     the number (nearest first), then earlier clauses of the sentence."""
-    keywords = sorted(table, key=len, reverse=True)
+    keywords = tuple(sorted(table, key=len, reverse=True))
     hits = [(p, table[kw]) for p, kw in _mentions(answer, scope.sentence, keywords, re.IGNORECASE)]
     phrase: list[tuple[int, str]] = []
     before: list[tuple[int, str]] = []
@@ -400,54 +493,79 @@ _AMBIGUOUS_PERIOD = "ambiguous period"
 
 
 def _derivation(
-    answer: str, m: NumberToken, scope: _Scope, metric: str | None, vocab: Vocabulary
+    answer: str, m: NumberToken, scope: _Scope, vocab: Vocabulary
 ) -> Derivation | str | None:
     """The computation a claim states, if any: a Derivation, the string
-    _AMBIGUOUS_PERIOD when the period cannot be pinned down, or None for
-    an ordinary point claim."""
+    _AMBIGUOUS_PERIOD when it names a period or series that cannot be
+    pinned down, or None for an ordinary point claim.
+
+    Every cue must be in the number's own phrase (#94): in "NVDA rose
+    3.08% on the day, its biggest gain since July 20" the "since" belongs
+    to another phrase and the 3.08% is a day change.
+    """
     if vocab.series is None:
         return None
-    lo, hi = scope.clause
-    clause = answer[lo:hi]
-    series = metric if metric is not None and vocab.units.get(metric) == "USD" else vocab.series
-    lookback = _LOOKBACK_RE.search(clause)
+    lo, hi = scope.phrase
+    lookback = _LOOKBACK_RE.search(answer, lo, hi)
+    since = _SINCE_RE.search(answer, lo, hi) if m.unit == "pct" else None
+    nday = _NDAY_EXTREMUM_RE.search(answer, lo, m.start) if m.unit != "pct" else None
+    extremum = _EXTREMUM_RE.search(answer, lo, m.start) if m.unit != "pct" else None
+    cued = lookback or nday or (extremum and lookback)
+    start: tuple[int, str] | None = None
+    if since and not cued:
+        dates = _find_dates(answer, since.end(), hi)
+        # "since July 17", "from its July 20 close": the date follows closely.
+        if dates and len(answer[since.end() : dates[0][0]].split()) <= 2:
+            start = dates[0]
+    if not (cued or start):
+        return None
+    if m.unit not in (None, "USD", "pct"):
+        return None
+
+    # The series: the metric the phrase names, if it is a USD metric, else
+    # the vocabulary's. A phrase naming another metric ("RSI rose 6.8%
+    # since July 20", "volume hit a 5-day high") is about that metric,
+    # whose change nobody receipted: unresolved, never recomputed from
+    # the close (#94).
+    keywords = tuple(sorted(vocab.synonyms, key=len, reverse=True))
+    period = lookback.span() if lookback else (0, 0)  # "over the last 3 sessions" names no metric
+    named = [
+        vocab.synonyms[kw]
+        for pos, kw in _mentions(answer, scope.phrase, keywords, re.IGNORECASE)
+        if not period[0] <= pos < period[1]
+    ]
+    if any(vocab.units.get(n) != "USD" and n != vocab.series for n in named):
+        return _AMBIGUOUS_PERIOD
+    series = next((n for n in named if vocab.units.get(n) == "USD"), vocab.series)
+
+    # The day the computation ends: a "to <date>", else a date the claim
+    # states ("On July 23, NVDA hit a 3-day high of 176.10"), else the
+    # latest receipted day.
+    end: str | None = None
+    if start is not None:
+        later = _find_dates(answer, start[0] + 1, hi)
+        end = next((d[1] for d in later if re.search(r"\bto\b", answer[start[0] : d[0]])), None)
+    if end is None:
+        excluded = start[0] if start is not None else hi
+        stated = [d for d in _find_dates(answer, lo, hi) if d[0] < excluded and d[0] != m.start]
+        clause_before = [d for d in _find_dates(answer, *scope.clause) if d[0] < lo]
+        pool = stated or clause_before
+        end = pool[-1][1] if pool else None
+
     if lookback and not re.match(r"sessions?|trading", lookback[2], re.IGNORECASE):
-        lookback_n: int | None = None
-        ambiguous = True
-    else:
-        lookback_n = int(lookback[1]) if lookback else None
-        ambiguous = False
+        return _AMBIGUOUS_PERIOD  # plain "days": trading or calendar?
     if m.unit == "pct":
-        if ambiguous:
-            return _AMBIGUOUS_PERIOD
-        if lookback_n:
-            return Derivation("pct_change", series, lookback=lookback_n)
-        since = _SINCE_RE.search(answer, lo, hi)
-        if since:
-            dates = [d for d in find_dates(answer, since.end(), hi)]
-            if dates:
-                start = dates[0]
-                between = answer[since.end() : start[0]]
-                if len(between.split()) <= 2:  # "since July 17", "from its July 20 close"
-                    end = next(
-                        (d[1] for d in dates[1:] if re.search(r"\bto\b", answer[start[0] : d[0]])),
-                        None,
-                    )
-                    return Derivation("pct_change", series, start=start[1], end=end)
-        return None
-    if m.unit not in (None, "USD"):
-        return None
-    nday = _NDAY_EXTREMUM_RE.search(answer, lo, m.start)
+        if lookback:
+            return Derivation("pct_change", series, end=end, lookback=int(lookback[1]))
+        assert start is not None
+        return Derivation("pct_change", series, start=start[1], end=end)
     if nday:
         op: Literal["max", "min"] = "max" if nday[2].lower() == "high" else "min"
-        return Derivation(op, series, lookback=int(nday[1]))
-    extremum = _EXTREMUM_RE.search(answer, lo, m.start)
-    if extremum and (lookback_n or ambiguous):
-        if ambiguous:
-            return _AMBIGUOUS_PERIOD
+        return Derivation(op, series, end=end, lookback=int(nday[1]))
+    if extremum and lookback:
         word = extremum[1].lower()
         op = "max" if word in ("highest", "peak", "high") else "min"
-        return Derivation(op, series, lookback=lookback_n)
+        return Derivation(op, series, end=end, lookback=int(lookback[1]))
     return None
 
 
@@ -460,11 +578,11 @@ def _resolve(
     """Attach entity and metric to one Tier 2 numeric token."""
     value, unit = m.value, m.unit
     scope = _scope(answer, m.start)
-    cell = _table_cell(answer, m, set(known_entities), vocab)
+    cell = _table_cell(answer, m, frozenset(known_entities), vocab)
     if cell is not None:
         entity, metric = cell.entity, cell.metric
     else:
-        entity = _entity(answer, m.start, scope, set(known_entities))
+        entity = _entity(answer, m.start, scope, frozenset(known_entities))
         metric = _pick_metric(_keyword_hits(answer, m.start, scope, vocab.synonyms), unit, vocab)
     if (
         cell is None
@@ -477,7 +595,9 @@ def _resolve(
         _negated_by_direction(answer, m, scope)
     ):
         value = -value
-    derivation = None if cell is not None else _derivation(answer, m, scope, metric, vocab)
+    if m.unit == "pct" and _DENIED_DIRECTION_RE.search(answer, scope.phrase[0], m.start):
+        metric = None
+    derivation = None if cell is not None else _derivation(answer, m, scope, vocab)
     if derivation == _AMBIGUOUS_PERIOD:
         # Unresolved rather than guessed: the claim becomes UNVERIFIABLE.
         metric, derivation = None, None
@@ -556,13 +676,18 @@ def extract_claims(
             consumed.add(i)
             # The same sign rules as Tier 2 (issue #43): a citation pins
             # which fact is meant, not how the sign was written.
-            negated = _negated_by_direction(answer, m, _scope(answer, m.start))
+            scope = _scope(answer, m.start)
+            negated = _negated_by_direction(answer, m, scope)
             claims.append(
                 Claim(
                     value=-m.value if negated else m.value,
                     span=(m.start, m.end),
                     text=m.text,
                     tier=1,
+                    # What the prose says the number is about; the matcher
+                    # checks the cited fact agrees (#95).
+                    entity=_entity(answer, m.start, scope, frozenset(known_entities)),
+                    as_of=_date(answer, m.start, scope),
                     unit=m.unit,
                     resolution=m.resolution,
                     citation=Citation(receipt_id=cit.group(1), json_ptr=cit.group(2) or "/"),

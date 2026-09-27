@@ -106,9 +106,17 @@ def load_models(path: str | Path) -> dict[str, ModelConfig]:
         # Only the config key is restricted; the provider's model id
         # ("vendor/model" on OpenRouter) is free-form.
         check_path_segment("model name", name)
+        if not isinstance(spec, dict):
+            raise ValueError(f"model {name}: expected a mapping")
         unknown = set(spec) - {"base_url", "model", "api_key_env", "rpm", "params"}
         if unknown:
             raise ValueError(f"model {name}: unknown keys {sorted(unknown)}")
+        missing = {"base_url", "model", "api_key_env"} - set(spec)
+        if missing:
+            raise ValueError(f"model {name}: missing keys {sorted(missing)}")
+        rpm = spec.get("rpm", 10.0)
+        if isinstance(rpm, bool) or not isinstance(rpm, int | float) or rpm <= 0:
+            raise ValueError(f"model {name}: rpm must be a positive number")
         out[name] = ModelConfig(name=name, **spec)
     return out
 
@@ -223,8 +231,45 @@ class OpenAICompatClient:
         raise AssertionError("unreachable: the last attempt returns or raises")
 
 
+# A receipt citation in a message: "[[r:" and a hex receipt id (prefix).
+_RECEIPT_REF = re.compile(r"\[\[r:([0-9a-f]{8,64})")
+
+
+def _receipt_ids(text: str) -> dict[str, str]:
+    """Each receipt id in text, in order of first appearance, mapped to a
+    placeholder naming only that order."""
+    ids: dict[str, str] = {}
+    for m in _RECEIPT_REF.finditer(text):
+        ids.setdefault(m[1], f"receipt-{len(ids) + 1}")
+    return ids
+
+
+def _message_ids(messages: list[Message]) -> dict[str, str]:
+    return _receipt_ids(json.dumps(messages, sort_keys=True, ensure_ascii=False))
+
+
+def _swap(text: str, mapping: dict[str, str]) -> str:
+    return _RECEIPT_REF.sub(lambda m: "[[r:" + mapping.get(m[1], m[1]), text)
+
+
+_PLACEHOLDER_REF = re.compile(r"\[\[r:(receipt-\d+)")
+
+
+def _unswap(text: str, ids: dict[str, str]) -> str:
+    """A cached reply with this run's receipt ids in place of placeholders."""
+    back = {placeholder: rid for rid, placeholder in ids.items()}
+    return _PLACEHOLDER_REF.sub(lambda m: "[[r:" + back.get(m[1], m[1]), text)
+
+
 class CachedClient:
-    """Wraps a client with a content-addressed on-disk response cache."""
+    """Wraps a client with a content-addressed on-disk response cache.
+
+    Receipt ids are random, and under the citation condition they appear
+    in tool results, so a rerun's messages differ from the cached run's
+    after the first tool call and every later turn missed (#104). Keys
+    are therefore computed with receipt ids replaced by their order of
+    appearance, and a cached reply's citations are mapped back to the
+    ids of the run replaying it."""
 
     def __init__(self, inner: ChatClient, cache_dir: str | Path, identity: str) -> None:
         self._inner = inner
@@ -240,14 +285,16 @@ class CachedClient:
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+        return hashlib.sha256(_swap(blob, _message_ids(messages)).encode("utf-8")).hexdigest()
 
     def complete(self, messages: list[Message], tools: list[dict[str, Any]], sample: int) -> Reply:
         key = self.key(messages, tools, sample)
+        ids = _message_ids(messages)
         path = self._dir / key[:2] / f"{key}.json"
         if path.exists():
             self.hits += 1
-            cached: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+            text = _unswap(path.read_text(encoding="utf-8"), ids)
+            cached: dict[str, Any] = json.loads(text)
             if "role" in cached:  # written before finish_reason was kept: a bare message
                 return Reply(cached, None)
             return Reply(cached["message"], cached.get("finish_reason"))
@@ -256,6 +303,7 @@ class CachedClient:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         entry = {"message": reply.message, "finish_reason": reply.finish_reason}
+        entry = json.loads(_swap(json.dumps(entry, ensure_ascii=False), ids))
         tmp.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
         tmp.replace(path)  # atomic: an interrupted run never leaves half a response
         return reply

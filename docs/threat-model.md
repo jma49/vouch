@@ -43,8 +43,8 @@ to that statement.
 | P4 | A log cut back to an earlier point is detected, **given an external head** | log holder | head digest printed at seal, recorded in eval runs' `meta.json`; `--expect-head` (#54) | `test_tail_truncation_needs_sealing_or_an_external_head`; `test_a_run_whose_log_no_longer_matches_its_head_is_refused` |
 | P5 | The receipt covers what the agent actually received, not only the extracted payload; under `--cite` the agent also sees a block the proxy derives from the receipt itself (#81) | a misleading upstream response | `response_canonical` and its digest, signed (#20) | `TestReceiptBindsTheResponse`; `test_tampered_response_is_rejected_without_a_key` |
 | P6 | Numbers are recorded exactly as the tool wrote them; ambiguous input is refused | canonicalization drift | vouch canonical JSON v2: literals verbatim; duplicate keys, lone surrogates, and nesting past 256 levels rejected in both languages (#9, #27, #52, #62) | `testdata/canonical_vectors.json` in Go and Python; differential fuzzing (`test_differential.py`, `FuzzCanonicalize`) |
-| P7 | A (session, turn) is recorded once | replay within a log | uniqueness checked by the store and the verifier | duplicate tests, including a validly signed replay |
-| P8 | Anyone can verify, without a secret and without vouch's code | n/a (a capability) | public keys; DSSE verification needs only base64 and Ed25519 | cross-language golden log, checked by Go and Python in CI |
+| P7 | A (session, turn) and a receipt id are recorded once, and each receipt's digests cover what they claim | replay within a log | uniqueness and digests checked by the store and by both verifiers (Go `receipts verify` since #99) | duplicate tests, including a validly signed replay; tamper suites |
+| P8 | Anyone can verify, without a secret and without vouch's code, and every verifier reads the same log | a log crafted to parse differently per reader | public keys; DSSE verification needs only base64 and Ed25519; envelopes and bodies read by exact key in both languages (#98) | cross-language golden log, checked by Go and Python in CI; tamper suites' key-case cases |
 
 ## Not protected
 
@@ -97,6 +97,8 @@ any system of this shape; the rest are open work.
 
 ## Operating guidance
 
+- One proxy per receipt log: the log is locked while open (#99), and it
+  is created owner-only (0600, in a 0700 directory).
 - Generate a key per proxy deployment with `vouch keygen`; keep the
   private key on that host, mode 0600; distribute only the public key.
 - When a session ends, keep the head digest the proxy prints, or
@@ -106,6 +108,11 @@ any system of this shape; the rest are open work.
   or `vouch-verify` with the same options.
 - Rotate keys by adding the new public key to verifiers' keyrings
   before switching the proxy; keyrings accept any trusted signature.
+- Spawned upstreams inherit the proxy's environment minus every
+  `VOUCH_` variable, the key path, and `env:` credentials (#101), but
+  they run as the proxy's user: an upstream that reads the key file
+  directly can still forge receipts. Run untrusted upstreams as another
+  user, or reach them over HTTP.
 - Keep `--listen` on a loopback address. The HTTP endpoint checks
   browser origins (against DNS rebinding) but has no authentication:
   anyone who can reach it can make calls that get receipted. Pass

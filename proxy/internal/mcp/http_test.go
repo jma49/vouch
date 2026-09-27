@@ -261,3 +261,85 @@ func TestSSEReader(t *testing.T) {
 		t.Fatalf("end: %v", err)
 	}
 }
+
+// TestHTTPSessionRaces pins #100: concurrent initialize POSTs get one
+// session, and an initialize the proxy refuses leaves none behind.
+func TestHTTPSessionRaces(t *testing.T) {
+	srv := NewHTTPServer(t.Logf)
+	hs := httptest.NewServer(srv)
+	defer hs.Close()
+	refuse := true
+	go func() {
+		for {
+			m, err := srv.Read()
+			if err != nil {
+				return
+			}
+			if m.Method != "initialize" {
+				continue
+			}
+			if refuse {
+				refuse = false
+				_ = srv.Write(&Message{ID: m.ID, Error: &Error{Code: CodeInternalError, Message: "no"}})
+				continue
+			}
+			_ = srv.Write(&Message{ID: m.ID, Result: json.RawMessage(`{"protocolVersion":"2025-06-18"}`)})
+		}
+	}()
+	init := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
+	resp := do(t, hs, "POST", init, nil)
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"error"`) {
+		t.Fatalf("first initialize should be refused: %s", body)
+	}
+	// The refusal released the session: a retry, raced by a second
+	// initialize, gets exactly one.
+	codes := make(chan int, 2)
+	for range 2 {
+		go func() {
+			req, _ := http.NewRequest("POST", hs.URL, strings.NewReader(init))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+			r, err := hs.Client().Do(req)
+			if err != nil {
+				codes <- 0
+				return
+			}
+			io.Copy(io.Discard, r.Body)
+			r.Body.Close()
+			codes <- r.StatusCode
+		}()
+	}
+	got := []int{<-codes, <-codes}
+	if !(got[0] == 200) == !(got[1] == 200) {
+		t.Fatalf("status codes %v, want exactly one 200", got)
+	}
+}
+
+func TestHTTPServerLimits(t *testing.T) {
+	srv := NewHTTPServer(t.Logf)
+	srv.LoopbackHostsOnly()
+	hs := httptest.NewServer(srv)
+	defer hs.Close()
+	req, _ := http.NewRequest("POST", hs.URL, strings.NewReader("{}"))
+	req.Host = "evil.example"
+	resp, err := hs.Client().Do(req)
+	if err != nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("foreign Host: %v %v", resp, err)
+	}
+	resp.Body.Close()
+}
+
+func TestHTTPClientDoesNotFollowRedirects(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("redirect followed, carrying %q", r.Header.Get("X-Api-Key"))
+	}))
+	defer target.Close()
+	hs := httptest.NewServer(http.RedirectHandler(target.URL, http.StatusTemporaryRedirect))
+	defer hs.Close()
+	hc := NewHTTPClient(hs.URL, http.Header{"X-Api-Key": {"secret"}}, t.Logf)
+	defer hc.Close()
+	if _, err := NewClient(hc).Call("ping", nil); err == nil || !strings.Contains(err.Error(), "307") {
+		t.Fatalf("redirect: %v, want the 307 reported", err)
+	}
+}

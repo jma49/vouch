@@ -82,8 +82,7 @@ func LoadDir(dir string) (map[string]*Schema, error) {
 		if err != nil {
 			return nil, err
 		}
-		if prev, dup := out[s.Tool]; dup {
-			_ = prev
+		if _, dup := out[s.Tool]; dup {
 			return nil, fmt.Errorf("extract: duplicate schema for tool %q (%s)", s.Tool, name)
 		}
 		out[s.Tool] = s
@@ -98,13 +97,41 @@ func (s *Schema) validate() error {
 	if len(s.Facts) == 0 {
 		return fmt.Errorf("no fact mappings")
 	}
+	for _, p := range []string{s.EntityPtr, s.AsOfPtr} {
+		if !validPointer(p) {
+			return fmt.Errorf("ptr %q is not a JSON pointer (RFC 6901: it starts with /)", p)
+		}
+	}
 	return validateMappings(s.Facts, false)
+}
+
+// validPointer reports whether p is an RFC 6901 JSON pointer: empty, or
+// "/"-separated tokens where "~" is only "~0" or "~1". "close" without
+// its slash used to load and silently match nothing (#102).
+func validPointer(p string) bool {
+	if p == "" {
+		return true
+	}
+	if p[0] != '/' {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		if p[i] == '~' && (i+1 == len(p) || (p[i+1] != '0' && p[i+1] != '1')) {
+			return false
+		}
+	}
+	return true
 }
 
 func validateMappings(ms []FactMapping, nested bool) error {
 	for _, m := range ms {
 		if m.Ptr == "" {
 			return fmt.Errorf("fact mapping missing ptr")
+		}
+		for _, p := range []string{m.Ptr, m.AsOfPtr, m.EntityPtr} {
+			if !validPointer(p) {
+				return fmt.Errorf("ptr %q is not a JSON pointer (RFC 6901: it starts with /)", p)
+			}
 		}
 		if m.EntityPtr != "" && len(m.Each) == 0 {
 			return fmt.Errorf("ptr %s: entity_ptr applies only to an each mapping", m.Ptr)
@@ -214,6 +241,11 @@ func factAt(doc any, m FactMapping, absPtr, entity, asOf string) (receipt.Fact, 
 	}
 	v, err := num.Float64()
 	if errors.Is(err, strconv.ErrRange) && math.IsInf(v, 0) {
+		return receipt.Fact{}, false, nil
+	}
+	// Underflow: a nonzero literal too small for float64 parses to 0,
+	// which would receipt a value the tool never returned (#102).
+	if mantissa, _, _ := strings.Cut(strings.ToLower(string(num)), "e"); v == 0 && strings.ContainsAny(mantissa, "123456789") {
 		return receipt.Fact{}, false, nil
 	}
 	if err != nil {

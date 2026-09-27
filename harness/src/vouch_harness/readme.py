@@ -21,8 +21,8 @@ from typing import Any
 from vouch_harness.eval import EvalResult, run_eval
 from vouch_harness.gold import build_gold_set
 from vouch_harness.report import overall_stats, per_mutation_stats
-from vouch_verifier.claims import extract_claims
-from vouch_verifier.matcher import load_tolerances, match_claims
+from vouch_verifier.judge import judge
+from vouch_verifier.matcher import load_tolerances
 from vouch_verifier.receipts import Receipt, load_log
 from vouch_verifier.report import md_cell
 from vouch_verifier.signing import load_keyring
@@ -75,8 +75,7 @@ def render_metrics(result: EvalResult, receipts: list[Receipt]) -> str:
 
 
 def render_example(answer: str, receipts: list[Receipt], tolerances: dict[str, Tolerance]) -> str:
-    entities = {f.entity for r in receipts for f in r.facts if f.entity}
-    matched = match_claims(extract_claims(answer, known_entities=entities), receipts, tolerances)
+    _, matched = judge(answer, receipts, tolerances)
     lines = [
         "```text",
         answer.strip(),

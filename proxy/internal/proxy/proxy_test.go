@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -253,7 +254,11 @@ func TestResultPayloadSelection(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p, source := resultPayload(json.RawMessage(tc.result))
+			var res toolResult
+			if err := receipt.DecodeStrict([]byte(tc.result), &res); err != nil {
+				t.Fatal(err)
+			}
+			p, source := res.payload(json.RawMessage(tc.result))
 			if string(p) != tc.payload || source != tc.source {
 				t.Fatalf("got %s from %q, want %s from %q", p, source, tc.payload, tc.source)
 			}
@@ -475,5 +480,37 @@ func TestCiteModeLeavesFactlessResultsAlone(t *testing.T) {
 	}
 	if got := withCitations(json.RawMessage(`{"content":"not a list"}`), r); string(got) != `{"content":"not a list"}` {
 		t.Fatalf("changed a result whose content is not a list: %s", got)
+	}
+}
+
+// TestCaseVariantKeysAreRefused pins #98: params or a result that one
+// party would read differently from another never produce a receipt.
+// The upstream would run NVDA while Go read AAPL from "Arguments", and
+// an "IsError" beside "isError" would decide whether facts are taken.
+func TestCaseVariantKeysAreRefused(t *testing.T) {
+	s := startSession(t)
+	if _, err := s.agent.Call("initialize", map[string]any{"protocolVersion": "2025-06-18"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, params := range []string{
+		`{"name":"get_indicators","arguments":{"symbol":"NVDA"},"Arguments":{"symbol":"AAPL"}}`,
+		`{"name":"get_indicators","Name":"get_quote","arguments":{"symbol":"NVDA"}}`,
+		`{"name":"get_indicators","arguments":{"symbol":"NVDA"},"_meta":{},"_META":{}}`,
+	} {
+		_, err := s.agent.Call("tools/call", json.RawMessage(params))
+		var rpcErr *mcp.Error
+		if !errors.As(err, &rpcErr) || rpcErr.Code != mcp.CodeInvalidParams {
+			t.Errorf("%s: got %v, want invalid params", params, err)
+		}
+	}
+	s.shutdown()
+	if receipts, err := store.Scan(s.logPath); err != nil || len(receipts) != 0 {
+		t.Fatalf("receipts: %d, %v; want none", len(receipts), err)
+	}
+
+	srv, _ := recordingServer(t)
+	result := json.RawMessage(`{"isError":false,"IsError":true,"structuredContent":{"rsi_14":62.3,"symbol":"NVDA"}}`)
+	if _, err := srv.record("get_indicators", json.RawMessage(`{}`), result, 0); err == nil || !strings.Contains(err.Error(), "only in case") {
+		t.Fatalf("ambiguous result receipted: %v", err)
 	}
 }

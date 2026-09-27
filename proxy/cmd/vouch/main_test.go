@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -16,6 +17,11 @@ func TestParseHeaders(t *testing.T) {
 	}
 	if got["remote"].Get("Authorization") != "s3cret" || got["remote"].Get("X-Team") != "data" {
 		t.Fatalf("got %v", got)
+	}
+	// #101: once read, the credential leaves the environment spawned
+	// upstreams inherit.
+	if _, still := os.LookupEnv("VOUCH_TEST_TOKEN"); still {
+		t.Fatal("env: credential still in the environment")
 	}
 	for _, bad := range []struct{ value, want string }{
 		{"remote=Authorization", "want name=Header: value"},

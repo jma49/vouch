@@ -9,18 +9,19 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 from vouch_harness.eval import run_eval
 from vouch_harness.report import to_json, to_markdown
 from vouch_verifier.matcher import load_tolerances
 from vouch_verifier.receipts import ReceiptError, load_log
-from vouch_verifier.signing import load_keyring
+from vouch_verifier.signing import env_public_keys, load_keyring
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="vouch-eval", description=__doc__)
+    p = argparse.ArgumentParser(
+        prog="vouch-eval", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("--receipts", required=True, help="receipt log (JSONL)")
     p.add_argument("--n", type=int, default=10, help="number of runs (minimum 2)")
     p.add_argument("--seed", type=int, default=0)
@@ -34,18 +35,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = p.parse_args(argv)
 
-    key_paths = args.public_key or [
-        k for k in os.environ.get("VOUCH_PUBLIC_KEY", "").split(os.pathsep) if k
-    ]
+    key_paths = args.public_key or env_public_keys()
     if not key_paths:
         print("vouch-eval: warning: no public key given, signatures not checked", file=sys.stderr)
 
     try:
         receipts = load_log(args.receipts, load_keyring(key_paths) if key_paths else None)
+        tolerances = load_tolerances(args.tolerances) if args.tolerances else None
     except (OSError, ReceiptError, ValueError) as e:
         print(f"vouch-eval: error: {e}", file=sys.stderr)
         return 2
-    tolerances = load_tolerances(args.tolerances) if args.tolerances else None
     try:
         result = run_eval(receipts, n=args.n, seed=args.seed, tolerances=tolerances)
     except ValueError as e:

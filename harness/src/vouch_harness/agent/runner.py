@@ -262,10 +262,18 @@ def execute(
         host = host_factory(argv, env, d)
         result, transcript = run_agent(client, host, spec.task.prompt, spec.sample, cite=spec.cite)
     else:
-        with StdioMCPClient(argv, env=env, stderr=d / "proxy.log") as mcp:
+        mcp = StdioMCPClient(argv, env=env, stderr=d / "proxy.log")
+        try:
             result, transcript = run_agent(
                 client, mcp, spec.task.prompt, spec.sample, cite=spec.cite
             )
+        finally:
+            code = mcp.close()
+        # A proxy that did not exit cleanly did not seal the log; writing
+        # meta.json would mark the run complete and never retry it, and
+        # scoring would later refuse the whole report (#104).
+        if code != 0:
+            raise RuntimeError(f"proxy exited with status {code}; see {d / 'proxy.log'}")
     (d / "answer.txt").write_text(result.answer + "\n", encoding="utf-8")
     (d / "transcript.json").write_text(
         json.dumps(transcript, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"

@@ -39,6 +39,7 @@ def parse_preserving(raw: str | bytes) -> object:
             raw,
             parse_float=_NumberLiteral,
             parse_int=_NumberLiteral,
+            parse_constant=_not_json,
             object_pairs_hook=_no_duplicate_keys,
         )
     except json.JSONDecodeError as e:
@@ -58,14 +59,30 @@ def parse_preserving(raw: str | bytes) -> object:
 MAX_DEPTH = 256
 
 
+def _not_json(name: str) -> object:
+    # json.loads accepts NaN and Infinity; JSON does not, and Go refuses
+    # them (#96).
+    raise ValueError(f"canonicalize: {name} is not JSON")
+
+
 def _check_depth(tree: object) -> None:
+    """Refuse nesting past MAX_DEPTH and lone surrogates anywhere, at
+    parse time: a document is refused whole, as Go refuses it, whether or
+    not the part that is wrong is ever serialized (#62, #96)."""
     # Iterative, so checking cannot itself hit the recursion limit.
     stack: list[tuple[object, int]] = [(tree, 0)]
     while stack:
         value, depth = stack.pop()
-        if isinstance(value, dict | list):
+        if isinstance(value, str):
+            if _SURROGATE_RE.search(value):
+                raise ValueError("canonicalize: lone surrogate in string")
+        elif isinstance(value, dict | list):
             if depth == MAX_DEPTH:
                 raise ValueError(f"canonicalize: nested deeper than {MAX_DEPTH} levels")
+            if isinstance(value, dict):
+                for key in value:
+                    if _SURROGATE_RE.search(key):
+                        raise ValueError("canonicalize: lone surrogate in string")
             children = value.values() if isinstance(value, dict) else value
             stack.extend((child, depth + 1) for child in children)
 
@@ -143,5 +160,5 @@ def _write(parts: list[str], value: object) -> None:
             parts.append(":")
             _write(parts, value[key])
         parts.append("}")
-    else:  # pragma: no cover - unreachable with the parse hooks above
+    else:  # pragma: no cover - unreachable: parse_constant refuses NaN and Infinity
         raise ValueError(f"canonicalize: unsupported type {type(value).__name__}")

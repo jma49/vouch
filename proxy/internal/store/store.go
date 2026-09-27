@@ -87,12 +87,19 @@ func (e *Entry) link() receipt.Link {
 // rebuilds the uniqueness index. signer signs every appended entry; a
 // log opened with a nil signer can be read but refuses appends.
 func Open(path string, signer *sign.Signer) (*Log, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	// Owner-only: receipts hold tool arguments and results, which can be
+	// confidential (docs/threat-model.md, #99). Existing files and
+	// directories keep their modes.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("store: mkdir: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("store: open: %w", err)
+	}
+	if err := lockFile(f); err != nil {
+		f.Close()
+		return nil, err
 	}
 	l := &Log{
 		f: f, path: path, signer: signer,
@@ -323,9 +330,27 @@ func (l *Log) Close() error {
 // signature from one of them before trusting the payload; without, it
 // only decodes.
 func decodeEntry(line []byte, keys sign.Keyring) (*Entry, error) {
+	// Exactly the DSSE keys, in both languages: a line with "payload"
+	// and "Payload" would otherwise be one log to Go and another to the
+	// Python verifier (#98).
+	if _, err := receipt.Canonicalize(line); err != nil {
+		return nil, fmt.Errorf("not an envelope: %w", err)
+	}
+	if err := receipt.ExactKeys(line, "payload", "payloadType", "signatures"); err != nil {
+		return nil, fmt.Errorf("not an envelope: %w", err)
+	}
 	var env sign.Envelope
 	if err := json.Unmarshal(line, &env); err != nil {
 		return nil, fmt.Errorf("not an envelope: %w", err)
+	}
+	var sigs []json.RawMessage
+	if err := json.Unmarshal(extractRaw(line, "signatures"), &sigs); err != nil {
+		return nil, fmt.Errorf("not an envelope: signatures: %w", err)
+	}
+	for i, s := range sigs {
+		if err := receipt.ExactKeys(s, "keyid", "sig"); err != nil {
+			return nil, fmt.Errorf("not an envelope: signature %d: %w", i, err)
+		}
 	}
 	if env.PayloadType != receipt.PayloadType && env.PayloadType != receipt.CheckpointType {
 		return nil, fmt.Errorf("unknown payload type %q", env.PayloadType)
@@ -344,7 +369,7 @@ func decodeEntry(line []byte, keys sign.Keyring) (*Entry, error) {
 	e := &Entry{Payload: payload, KeyID: keyID}
 	if env.PayloadType == receipt.CheckpointType {
 		var cp receipt.Checkpoint
-		if err := json.Unmarshal(payload, &cp); err != nil {
+		if err := receipt.DecodeStrict(payload, &cp); err != nil {
 			return nil, fmt.Errorf("parse checkpoint: %w", err)
 		}
 		e.Checkpoint = &cp
@@ -388,14 +413,27 @@ func Verify(path string, keys sign.Keyring) (*Audit, error) {
 	}
 	a := &Audit{}
 	chain := chainState{head: receipt.Genesis}
-	line := 0
+	ids := make(map[string]bool)
+	turns := make(map[sessionTurn]bool)
 	err := walk(path, keys, func(e *Entry) error {
-		line++
 		if err := chain.accept(e); err != nil {
 			return err
 		}
-		if e.Receipt != nil {
-			a.Receipts = append(a.Receipts, *e.Receipt)
+		if r := e.Receipt; r != nil {
+			// The same checks the Python verifier makes (#99): a signed
+			// receipt must still be consistent with itself and unique.
+			if err := checkDigests(r); err != nil {
+				return err
+			}
+			key := sessionTurn{r.SessionID, r.TurnIndex}
+			switch {
+			case ids[r.ReceiptID]:
+				return fmt.Errorf("duplicate receipt_id %s", r.ReceiptID)
+			case turns[key]:
+				return fmt.Errorf("duplicate (session_id=%s, turn_index=%d)", r.SessionID, r.TurnIndex)
+			}
+			ids[r.ReceiptID], turns[key] = true, true
+			a.Receipts = append(a.Receipts, *r)
 		} else {
 			a.Checkpoints++
 		}
@@ -407,6 +445,19 @@ func Verify(path string, keys sign.Keyring) (*Audit, error) {
 	}
 	a.Head = chain.head
 	return a, nil
+}
+
+// checkDigests confirms a receipt's digests cover what they claim to.
+func checkDigests(r *receipt.Receipt) error {
+	if got := receipt.Digest(r.ResultCanonical); got != r.ResultDigest {
+		return fmt.Errorf("receipt %s: result_digest %s does not match result_canonical (%s)", r.ReceiptID, r.ResultDigest, got)
+	}
+	// Every body carries response_canonical (null at worst), and Python
+	// always checks it; so does Go.
+	if got := receipt.Digest(r.ResponseCanonical); got != r.ResponseDigest {
+		return fmt.Errorf("receipt %s: response_digest %s does not match response_canonical (%s)", r.ReceiptID, r.ResponseDigest, got)
+	}
+	return nil
 }
 
 // ScanVerified is Verify returning only the receipts.
@@ -450,4 +501,12 @@ func walk(path string, keys sign.Keyring, visit func(*Entry) error) error {
 			return nil
 		}
 	}
+}
+
+// extractRaw returns the raw value of key in a JSON object already
+// checked by receipt.ExactKeys.
+func extractRaw(obj []byte, key string) json.RawMessage {
+	var m map[string]json.RawMessage
+	_ = json.Unmarshal(obj, &m)
+	return m[key]
 }

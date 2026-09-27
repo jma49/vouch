@@ -5,7 +5,10 @@ description = "Eval harness for vouch: mutation injection, gold sets, repeated-r
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-dependencies = ["vouch-verifier", "pyyaml>=6", "cryptography>=42"]
+# Pinned to this repo's verifier, which is not on PyPI: an unpinned name
+# could resolve to someone else's package there (dependency confusion).
+# Install both from this checkout: pip install -e verifier -e harness.
+dependencies = ["vouch-verifier==0.0.1.dev0", "pyyaml>=6", "cryptography>=42"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.16", "mypy>=1.10", "types-PyYAML", "pytest-cov>=5"]

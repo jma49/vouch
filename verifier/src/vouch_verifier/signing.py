@@ -12,6 +12,8 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -52,8 +54,21 @@ def load_public_key(path: str | Path) -> Ed25519PublicKey:
     return key
 
 
-def load_keyring(paths: list[str | Path]) -> Keyring:
+def env_public_keys() -> list[Path]:
+    """Public key paths from $VOUCH_PUBLIC_KEY, separated by the OS path
+    separator: the one place every CLI reads it (#105)."""
+    return [Path(p) for p in os.environ.get("VOUCH_PUBLIC_KEY", "").split(os.pathsep) if p]
+
+
+def load_keyring(paths: Sequence[str | Path]) -> Keyring:
     return {key_id(k): k for k in (load_public_key(p) for p in paths)}
+
+
+# Exactly these keys, as in Go (store.decodeEntry): a line carrying both
+# "payload" and "Payload" must not be one log to Go and another here
+# (#98).
+ENVELOPE_KEYS = frozenset({"payload", "payloadType", "signatures"})
+SIGNATURE_KEYS = frozenset({"keyid", "sig"})
 
 
 def decode(envelope: dict[str, Any], payload_type: str) -> bytes:
@@ -61,6 +76,15 @@ def decode(envelope: dict[str, Any], payload_type: str) -> bytes:
     without verifying any signature."""
     if not isinstance(envelope, dict):
         raise SignatureError("line is not a DSSE envelope object")
+    if set(envelope) != ENVELOPE_KEYS:
+        raise SignatureError(
+            f"envelope keys {sorted(envelope)}, want exactly {sorted(ENVELOPE_KEYS)}"
+        )
+    signatures = envelope["signatures"]
+    if not isinstance(signatures, list) or any(
+        not isinstance(s, dict) or set(s) != SIGNATURE_KEYS for s in signatures
+    ):
+        raise SignatureError(f"signatures must be objects with exactly {sorted(SIGNATURE_KEYS)}")
     if envelope.get("payloadType") != payload_type:
         raise SignatureError(f"payload type {envelope.get('payloadType')!r}, want {payload_type!r}")
     payload = envelope.get("payload")

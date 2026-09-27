@@ -40,7 +40,7 @@ ruff, mypy; no doc claim contradicts `docs/pitfalls.md`.
 Result: fresh clone passes `make test lint readme-check` locally
 (2026-09-27). Found and fixed along the way: a SQLite connection leak
 in the matcher (P-043) and a lint target that could not fail (P-003).
-The workflow has not yet run on GitHub; confirm on first push.
+The workflow runs on every PR and on `main`.
 
 ---
 
@@ -105,7 +105,7 @@ figures surface as `UNSUPPORTED`.
 | Citation channel: opt-in proxy mode that shows the model a receipt id it can cite (P-044), so Tier 1 adherence can be measured | done (#81): `--cite` in the proxy and the agent runner; adherence in the report |
 
 Exit criteria: `make eval-real` reproduces the report from committed
-labels and fixtures; README headline numbers come from it.
+runs and labels; README headline numbers come from it.
 
 ---
 
