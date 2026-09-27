@@ -203,13 +203,45 @@ TOOLS: list[dict[str, Any]] = [
 _HANDLERS = {"get_quote": get_quote, "get_indicators": get_indicators, "get_ohlcv": get_ohlcv}
 
 
-def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+_JSON_TYPES: dict[str, tuple[type, ...]] = {"string": (str,), "integer": (int,)}
+
+
+def _argument_error(tool: dict[str, Any], arguments: object) -> str | None:
+    """What is wrong with the arguments against the tool's inputSchema,
+    or None. Checked before the handler runs: real models send extra
+    keys, wrong types, and non-objects, and any of those reaching the
+    handler would raise and take the whole server down."""
+    if not isinstance(arguments, dict):
+        return f"arguments must be an object, got {type(arguments).__name__}"
+    schema = tool["inputSchema"]
+    props: dict[str, Any] = schema["properties"]
+    for key in arguments:
+        if key not in props:
+            return f"unexpected argument {key!r}; accepted: {', '.join(sorted(props))}"
+    for key in schema.get("required", []):
+        if key not in arguments:
+            return f"missing required argument {key!r}"
+    for key, value in arguments.items():
+        kind = props[key]["type"]
+        # bool is an int subclass in Python but not a JSON integer.
+        if isinstance(value, bool) or not isinstance(value, _JSON_TYPES[kind]):
+            article = "an" if kind[0] in "aeiou" else "a"
+            return f"argument {key!r} must be {article} {kind}, got {json.dumps(value)}"
+    return None
+
+
+def call_tool(name: str, arguments: object) -> dict[str, Any]:
     """An MCP tools/call result. Bad input is a tool error the model can
     read and recover from, not a protocol error."""
     handler = _HANDLERS.get(name)
-    symbol = arguments.get("symbol")
     if handler is None:
-        return _tool_error(f"unknown tool {name!r}")
+        return _tool_error(f"unknown tool {name!r}; available: {', '.join(sorted(_HANDLERS))}")
+    tool = next(t for t in TOOLS if t["name"] == name)
+    problem = _argument_error(tool, arguments)
+    if problem is not None:
+        return _tool_error(problem)
+    assert isinstance(arguments, dict)
+    symbol = arguments["symbol"]
     if symbol not in _UNIVERSE:
         return _tool_error(f"unknown symbol {symbol!r}; supported: {', '.join(sorted(_UNIVERSE))}")
     payload = handler(**arguments)

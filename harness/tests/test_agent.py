@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from vouch_harness import market
+from vouch_harness.agent import cli as agent_cli
 from vouch_harness.agent import runner
 from vouch_harness.agent.llm import (
     CachedClient,
@@ -23,6 +24,7 @@ from vouch_harness.agent.llm import (
     OpenAICompatClient,
     load_models,
 )
+from vouch_harness.agent.mcp_client import RPCError
 from vouch_verifier.receipts import load_log
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -105,6 +107,63 @@ def test_loop_reports_tool_errors_and_bad_arguments_to_the_model() -> None:
     assert tool_msgs[0]["content"].startswith("ERROR: unknown symbol")
     assert tool_msgs[1]["content"].startswith("ERROR: arguments are not valid JSON")
     assert tool_msgs[1]["tool_call_id"] == "c2"
+
+
+class RejectingHost(InProcessHost):
+    """Answers unknown tool names the way the proxy does: a JSON-RPC error."""
+
+    def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if name not in market._HANDLERS:
+            raise RPCError(f"tools/call: unknown tool {name!r}")
+        return super().call_tool(name, arguments)
+
+
+def test_loop_survives_malformed_tool_calls() -> None:
+    dict_args = tool_call("get_quote", "", call_id="c3")
+    dict_args["tool_calls"][0]["function"]["arguments"] = {"symbol": "NVDA"}
+    client = ScriptedClient(
+        [
+            tool_call("get_price", '{"symbol": "NVDA"}'),
+            tool_call("get_quote", '["NVDA"]', call_id="c2"),
+            dict_args,
+            tool_call("get_quote", '{"symbol": "NVDA", "timeframe": "1d"}', call_id="c4"),
+            answer("done"),
+        ]
+    )
+    host = RejectingHost()
+    result, transcript = runner.run_agent(client, host, "q", sample=0)
+    assert result.finished and result.answer == "done"
+    tool_msgs = [m["content"] for m in transcript if m["role"] == "tool"]
+    assert tool_msgs[0].startswith("ERROR: tools/call: unknown tool 'get_price'")
+    assert tool_msgs[1].startswith("ERROR: arguments must be a JSON object")
+    assert json.loads(tool_msgs[2])["symbol"] == "NVDA"  # a dict is taken as is
+    assert tool_msgs[3].startswith("ERROR: unexpected argument 'timeframe'")
+
+
+def test_batch_records_an_unexpected_failure_and_continues(tmp_path: Path) -> None:
+    specs = [runner.RunSpec("m", runner.Task(f"t{i}", "q"), 0) for i in range(3)]
+    done: list[str] = []
+
+    def run_one(spec: runner.RunSpec) -> Path:
+        if spec.task.id == "t1":
+            raise KeyError("boom")
+        done.append(spec.task.id)
+        return runner.run_dir(tmp_path, spec)
+
+    assert agent_cli.run_batch(specs, run_one, tmp_path) == 1
+    assert done == ["t0", "t2"]
+    error = (runner.run_dir(tmp_path, specs[1]) / "error.txt").read_text()
+    assert "KeyError: 'boom'" in error
+    assert not (runner.run_dir(tmp_path, specs[1]) / "meta.json").exists()  # retried on rerun
+
+
+def test_execute_clears_a_previous_error(tmp_path: Path) -> None:
+    spec = runner.RunSpec("fake", runner.Task("t01", "q"), sample=0)
+    d = runner.run_dir(tmp_path, spec)
+    d.mkdir(parents=True)
+    (d / "error.txt").write_text("old failure\n")
+    runner.execute(spec, ScriptedClient([answer("ok")]), tmp_path, PROXY, ROOT, {}, _in_process)
+    assert not (d / "error.txt").exists()
 
 
 def test_loop_gives_up_after_max_turns() -> None:
@@ -242,3 +301,26 @@ def test_end_to_end_through_the_go_proxy(tmp_path: Path) -> None:
     assert {f.entity for r in receipts for f in r.facts} == {"NVDA", "AMD"}
     nvda_last = next(f for f in receipts[0].facts if f.metric == "last_price")
     assert nvda_last.value == market.get_quote("NVDA")["last"]
+
+
+@pytest.mark.skipif(not PROXY.exists(), reason="proxy binary not built (make build)")
+def test_end_to_end_malformed_calls_do_not_end_the_run(tmp_path: Path) -> None:
+    spec = runner.RunSpec("fake", runner.Task("t01", "How is NVDA?"), sample=0)
+    client = ScriptedClient(
+        [
+            tool_call("get_price", '{"symbol": "NVDA"}'),
+            tool_call("get_quote", '{"symbol": ["NVDA"], "timeframe": "1d"}', call_id="c2"),
+            tool_call("get_quote", '{"symbol": "NVDA"}', call_id="c3"),
+            answer("NVDA moved."),
+        ]
+    )
+    env = {"VOUCH_HMAC_KEY": "vouch-eval-key", "PATH": "/usr/bin:/bin"}
+    d = runner.execute(spec, client, tmp_path, PROXY, ROOT / "schemas", env)
+    meta = json.loads((d / "meta.json").read_text())
+    assert meta["finished"] and meta["tool_calls"] == 3
+    tool_msgs = [m["content"] for m in json.loads((d / "transcript.json").read_text())[3::2]]
+    assert tool_msgs[0].startswith("ERROR:") and "get_price" in tool_msgs[0]
+    assert tool_msgs[1].startswith("ERROR:")
+    assert json.loads(tool_msgs[2])["symbol"] == "NVDA"
+    receipts = load_log(d / "receipts.jsonl", key=b"vouch-eval-key")
+    assert "NVDA" in {f.entity for r in receipts for f in r.facts}

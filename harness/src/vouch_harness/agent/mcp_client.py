@@ -28,6 +28,12 @@ class MCPError(RuntimeError):
     """The server returned a JSON-RPC error or broke the protocol."""
 
 
+class RPCError(MCPError):
+    """The server answered with a JSON-RPC error. The session is intact,
+    unlike the other MCPErrors (a closed pipe, a mismatched id), so the
+    agent loop can report it to the model and carry on."""
+
+
 class StdioMCPClient:
     def __init__(
         self, argv: Sequence[str], *, env: dict[str, str] | None = None, stderr: Path | None = None
@@ -73,7 +79,7 @@ class StdioMCPClient:
             if msg["id"] != self._next_id:
                 raise MCPError(f"{method}: response id {msg['id']} != request id {self._next_id}")
             if "error" in msg:
-                raise MCPError(f"{method}: {msg['error'].get('message', msg['error'])}")
+                raise RPCError(f"{method}: {msg['error'].get('message', msg['error'])}")
             result: dict[str, Any] = msg["result"]
             return result
 
