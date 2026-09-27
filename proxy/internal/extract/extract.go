@@ -8,9 +8,12 @@ package extract
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -121,9 +124,15 @@ func validateMappings(ms []FactMapping, nested bool) error {
 }
 
 // Extract pulls Facts from a canonicalized tool result. Pointers that
-// resolve to nothing are skipped (upstreams omit optional fields);
-// pointers that resolve to a non-numeric value are an error, because a
-// silently mistyped schema would erase coverage.
+// resolve to nothing or to null are skipped (upstreams omit optional
+// fields or send null for "no value"); pointers that resolve to any
+// other non-numeric value are an error, because a silently mistyped
+// schema would erase coverage.
+//
+// A number outside the float64 range (1e400) is also skipped: Fact.Value
+// cannot hold it, and clamping to the largest float would invent a
+// value the tool never returned. The literal stays in result_canonical,
+// and a claim about it resolves to UNSUPPORTED, never SUPPORTED.
 func (s *Schema) Extract(resultCanonical []byte) ([]receipt.Fact, error) {
 	dec := json.NewDecoder(bytes.NewReader(resultCanonical))
 	dec.UseNumber()
@@ -149,8 +158,8 @@ func (s *Schema) Extract(resultCanonical []byte) ([]receipt.Fact, error) {
 		}
 
 		node, err := resolvePtr(doc, m.Ptr)
-		if err != nil {
-			continue // absent array: skip like any absent field
+		if err != nil || node == nil {
+			continue // absent or null array: skip like any absent field
 		}
 		arr, ok := node.([]any)
 		if !ok {
@@ -179,10 +188,11 @@ func (s *Schema) Extract(resultCanonical []byte) ([]receipt.Fact, error) {
 }
 
 // factAt builds one Fact from the mapping m evaluated against doc,
-// recording absPtr as provenance. ok=false means the field was absent.
+// recording absPtr as provenance. ok=false means there is no fact: the
+// field was absent, null, or out of float64 range (see Extract).
 func factAt(doc any, m FactMapping, absPtr, entity, asOf string) (receipt.Fact, bool, error) {
 	node, err := resolvePtr(doc, m.Ptr)
-	if err != nil {
+	if err != nil || node == nil {
 		return receipt.Fact{}, false, nil
 	}
 	num, ok := node.(json.Number)
@@ -190,6 +200,9 @@ func factAt(doc any, m FactMapping, absPtr, entity, asOf string) (receipt.Fact, 
 		return receipt.Fact{}, false, fmt.Errorf("extract: ptr %s: expected number, got %T", absPtr, node)
 	}
 	v, err := num.Float64()
+	if errors.Is(err, strconv.ErrRange) && math.IsInf(v, 0) {
+		return receipt.Fact{}, false, nil
+	}
 	if err != nil {
 		return receipt.Fact{}, false, fmt.Errorf("extract: ptr %s: %w", absPtr, err)
 	}

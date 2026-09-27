@@ -242,9 +242,12 @@ func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int
 		return fmt.Errorf("canonicalize result: %w", err)
 	}
 
+	// A tool error is receipted, because the agent saw it, but it is not
+	// evidence: numbers in an error payload describe the failure, not
+	// data the tool returned, so it carries no facts.
 	var facts []receipt.Fact
 	var dataAsOf string
-	if schema, ok := s.Schemas[tool]; ok {
+	if schema, ok := s.Schemas[tool]; ok && !isToolError(result) {
 		facts, err = schema.Extract(resultCanon)
 		if err != nil {
 			return err
@@ -274,6 +277,15 @@ func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int
 	}
 	s.turn++
 	return nil
+}
+
+// isToolError reports whether an MCP tools/call result is flagged as a
+// tool-level error (isError: true).
+func isToolError(result json.RawMessage) bool {
+	var res struct {
+		IsError bool `json:"isError"`
+	}
+	return json.Unmarshal(result, &res) == nil && res.IsError
 }
 
 // resultPayload picks the JSON document facts are extracted from:

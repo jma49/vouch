@@ -97,9 +97,53 @@ func TestExtractRejectsNonNumeric(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.Extract([]byte(`{"symbol":"NVDA","rsi_14":"62.3"}`))
-	if err == nil || !strings.Contains(err.Error(), "expected number") {
-		t.Fatalf("got %v, want type error", err)
+	for _, v := range []string{`"62.3"`, `true`, `{"v":62.3}`, `[62.3]`} {
+		_, err = s.Extract([]byte(`{"symbol":"NVDA","rsi_14":` + v + `}`))
+		if err == nil || !strings.Contains(err.Error(), "expected number") {
+			t.Fatalf("rsi_14=%s: got %v, want type error", v, err)
+		}
+	}
+}
+
+// TestExtractSkipsNullAndOutOfRange pins that "no value" and "no
+// representable value" produce no fact rather than failing the call:
+// a missing fact can only tighten verification (UNSUPPORTED), while a
+// failed call hides the result from the agent entirely.
+func TestExtractSkipsNullAndOutOfRange(t *testing.T) {
+	indicators, err := LoadSchema(writeSchema(t, "get_indicators.yaml", indicatorsSchema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ohlcv, err := LoadSchema(writeSchema(t, "get_ohlcv.yaml", ohlcvSchema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		schema  *Schema
+		result  string
+		metrics []string
+	}{
+		{"null field", indicators, `{"symbol":"NVDA","rsi_14":null,"close":181.52}`, []string{"close_price"}},
+		{"null parent", indicators, `{"symbol":"NVDA","macd":null,"rsi_14":62.3}`, []string{"rsi_14"}},
+		{"overflow", indicators, `{"symbol":"NVDA","rsi_14":1e400,"close":-1e400}`, nil},
+		{"null array", ohlcv, `{"symbol":"NVDA","bars":null}`, nil},
+		{"null element field", ohlcv, `{"symbol":"NVDA","bars":[{"t":"x","close":null,"volume":1200}]}`, []string{"volume"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			facts, err := tc.schema.Extract([]byte(tc.result))
+			if err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			var got []string
+			for _, f := range facts {
+				got = append(got, f.Metric)
+			}
+			if strings.Join(got, ",") != strings.Join(tc.metrics, ",") {
+				t.Fatalf("metrics %v, want %v", got, tc.metrics)
+			}
+		})
 	}
 }
 
