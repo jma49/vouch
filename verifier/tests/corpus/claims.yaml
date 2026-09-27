@@ -282,6 +282,16 @@ cases:
   - text: NVDA RSI (62.3) [[r:r-nvda-ind#/rsi_14]] is elevated.
     expect: ["62.3 -> SUPPORTED"]
 
+  # --- a citation does not change what kind of quantity a claim is (#13) ---
+  - text: NVDA closed at $1.92 [[r:r-nvda-quote#/change_pct]].
+    expect: ["1.92 -> CONTRADICTED"]
+  - text: NVDA change was 181.52% [[r:r-nvda-quote#/close_price]].
+    expect: ["181.52% -> CONTRADICTED"]
+  - text: NVDA closed at $181.52 [[r:r-nvda-quote#/close_price]].
+    expect: ["181.52 -> SUPPORTED"]
+  - text: NVDA change is 1.92 [[r:r-nvda-quote#/change_pct]].
+    expect: ["1.92 -> SUPPORTED"]
+
   # --- dates, times, quarters, ordinals, periods are not claims ---
   - text: As of 2026-07-24, NVDA closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]

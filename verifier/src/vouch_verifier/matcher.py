@@ -92,6 +92,18 @@ def _match_cited(
         if fact.json_ptr == citation.json_ptr:
             if negated_by_parentheses(claim.parenthesized, claim.value, fact.metric):
                 claim = replace(claim, value=-claim.value)
+            # A citation says which fact is meant, not that any number the
+            # fact happens to equal is the same kind of quantity: "$1.92"
+            # citing a percentage is a contradiction (issue #13). A bare
+            # number carries no unit and is taken as the cited fact's.
+            if claim.unit and fact.unit and claim.unit != fact.unit:
+                return MatchedClaim(
+                    claim,
+                    Verdict.CONTRADICTED,
+                    fact=fact,
+                    receipt_id=receipt.receipt_id,
+                    note=f"claim is in {claim.unit}, cited fact is in {fact.unit}",
+                )
             verdict = _judge(claim, fact, tolerances)
             return MatchedClaim(claim, verdict, fact=fact, receipt_id=receipt.receipt_id)
     return MatchedClaim(
