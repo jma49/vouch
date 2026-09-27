@@ -11,21 +11,28 @@ Snapshot of where work stands, for the next session. Overwrite
   Phase 2: everything buildable is done; runs and labels are pending**
   (they need the maintainer's model budget and a human labeler; see
   memory: no paid model calls without approval).
-- **Phase 4 (canonical JSON):** differential fuzzing Go vs Python found
-  #61 and #62 -> canonical JSON v2 (receipt `version=4`, checkpoint
-  `version=2`); fixture keys compare numbers by value (#64).
-- **Phase 5 (proxy):** log-assigned turns (#69), shell-style
-  `--upstream` (#70), concurrency with cancellation and progress (#67),
-  server-to-client forwarding, list_changed, version negotiation
-  (#68), reference-server integration tests (found #74), `make bench`
-  (#77), Streamable HTTP both ways (#79).
-- **Phase 2:** citation channel, `--cite` in proxy and agent runner,
-  adherence in the real-eval report (#81).
-- **Phase 6:** look-ahead with `--as-of` (#84), HTML report (#86),
-  second domain `examples/analytics` with `--vocabulary` and per-row
-  entities (#88), `DERIVED` recomputation, which also fixed multi-day
-  claims being falsely CONTRADICTED (#90).
-- Tests: verifier 375 (+1 documented xfail), harness 121, Go under
+- **Audit 2026-09-27 (second round):** four parallel reviews (Go proxy,
+  Python verifier, security, architecture and docs) led to 13 issues,
+  #94-#106, all fixed in PRs #107-#119. Highlights:
+  - JSON is read by exact key in Go and Python, so a receipt cannot
+    disagree with what ran and both verifiers read the same log (#98);
+  - analytics facts come from the server, not the agent's SQL (#103);
+  - verifier false passes closed: DERIVED over one receipt's series,
+    citations checked against their prose, timeframe ambiguity,
+    pronouns, dates (#94, #95); look-ahead holes and exit codes (#96);
+  - spawned upstreams no longer see the key path or credentials (#101);
+  - one writer per log, owner-only files, Go verify parity (#99);
+  - proxy lifecycle: pagination, timeouts, cancellation races, HTTP
+    session races and limits, SSE memory (#100); underflow, pointers,
+    monotonic latency (#102);
+  - extraction is linear again (#97); cite-mode cache hits (#104);
+  - `vouch_verifier.judge()` as the one entry point and `make check` as
+    the one pre-commit gate (#105).
+- **Toolchain:** CI and the Dockerfile build with Go 1.27 and actions
+  pinned by SHA, with govulncheck, pip-audit, and dependabot (#93);
+  `go.mod` declares 1.27 (#106). CI's job with both toolchains runs the
+  whole harness suite and fails if the proxy binary is missing.
+- Tests: verifier 421 (+1 documented xfail), harness 135, Go under
   `-race`, integration (stdio and HTTP) in its own CI job. Corpus 166.
 
 ## Next steps
@@ -35,11 +42,12 @@ Snapshot of where work stands, for the next session. Overwrite
    `--cite` for the citation condition), then `vouch-label serve`.
    Never run a model without approval. Then switch the README headline
    to the real numbers and relabel the synthetic metrics.
-2. Tier 3 LLM extraction (needs model calls): a strict-schema fallback
-   for UNVERIFIABLE spans, with its nondeterminism measured.
+2. Tier 3 LLM extraction (needs model calls).
 3. Follow-ups, only when a need shows up: group commit for appends;
    authentication before exposing `--listen`; resources and prompts
-   federation; difference/ratio derivations; quarters as dates.
+   federation; difference/ratio derivations; quarters as dates; a
+   non-root Docker user; `--vocabulary` for vouch-eval and
+   vouch-eval-real (they now share `judge()`, so it is a flag away).
 
 ## Open questions for the maintainer
 
@@ -547,3 +555,6 @@ wrong in the stated way.
   integration test found #74 on its first run.
 - 2026-09-27: Phase 6 (except Tier 3): #84, #86, #88, #90 (PRs #85,
   #87, #89, #91); handoff refreshed (#83).
+- 2026-09-27: second audit (four parallel reviews): issues #94-#106,
+  fixed in PRs #107-#119; merged the maintainer's #93 (Go 1.27, pinned
+  actions, vulnerability scanning).
