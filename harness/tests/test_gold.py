@@ -10,7 +10,7 @@ from vouch_harness.mutate import inject
 from vouch_verifier.claims import extract_claims
 from vouch_verifier.matcher import match_claims
 from vouch_verifier.receipts import Receipt, load_log
-from vouch_verifier.verdict import Verdict
+from vouch_verifier.verdict import FAILURES, Verdict
 
 GOLDEN = Path(__file__).parent.parent.parent / "testdata" / "receipts_golden.jsonl"
 KEY = b"vouch-golden-key"
@@ -31,9 +31,7 @@ def verdicts_for(answer: str, receipts: list[Receipt]) -> list[Verdict]:
 
 
 def is_flagged(answer: str, receipts: list[Receipt]) -> bool:
-    return any(
-        v in (Verdict.CONTRADICTED, Verdict.UNSUPPORTED) for v in verdicts_for(answer, receipts)
-    )
+    return any(v in FAILURES for v in verdicts_for(answer, receipts))
 
 
 def test_synthesized_answers_are_clean(receipts: list[Receipt]) -> None:

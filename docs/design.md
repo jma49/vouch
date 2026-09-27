@@ -160,7 +160,13 @@ NVDA's RSI(14) is 62.3 [[r:a1b2#/indicators/rsi_14]]
 
 Cited claims are trivially and deterministically matchable. Highest reliability.
 
-**Tier 2 — deterministic candidate scan (fallback).** Regex over the answer for numeric spans + nearby entity/metric keywords, producing *candidate* claims.
+**Tier 2 — deterministic candidate scan (fallback).** Three stages, all deterministic:
+
+1. *Tokenize* (`tokens.py`). Mask structure that is numeric but not a claim, such as dates, clock times, fiscal periods, ordinals, period lengths (*"50-day"*), and chart timeframes. Then classify each remaining span as a point, a multiplier (*"3x"*), or a range (*"60-65"*). Parse magnitude words and suffixes, percent, and currency, and record the resolution of the last displayed digit, which the tolerance policy uses (§6.3). Only points can be judged.
+2. *Resolve* (`claims.py`). Bind each point to an entity, a metric, a date, and a timeframe within its clause. Semicolons separate independent clauses, and commas and coordinating words separate phrases. The entity is the nearest preceding mention in the phrase, widening outward. A metric keyword may come from an earlier clause but never a later one. A metric must agree with the claim's unit: a percentage is never a price. A sentence that opens with a pronoun inherits the previous subject.
+3. *Match* (`matcher.py`). Compare against facts in the claim's time window: the stated date, or the latest receipted day. A value that matches only outside the window is `STALE`.
+
+Behavior on hand-written prose is pinned by an adversarial corpus (`verifier/tests/corpus/claims.yaml`) and by property-based tests.
 
 **Tier 3 — LLM structured extraction (last resort).** Candidates that Tier 2 cannot resolve are passed to a small model with a strict JSON-schema output contract, converting spans into Claims.
 
@@ -189,13 +195,18 @@ Allowed operations: percentage change, difference, ratio, and min/max/count over
 
 ```yaml
 # tolerance.yaml
-price:      { abs: 0.01 }
-indicator:  { rel: 1.0e-6, display_rel: 0.005 }   # display-layer rounding allowed
-percentage: { abs: 0.05 }                          # unit: percentage points
-count:      { abs: 0 }
+price:      { abs: 0.01, display_round: true }
+indicator:  { rel: 1.0e-6, display_rel: 0.005, display_round: true }
+percentage: { abs: 0.05, display_round: true }   # unit: percentage points
+count:      { abs: 0, display_round: true }
 ```
 
-`62.3` reported as "62" is legitimate display rounding (`display_rel`); reported as "68" is a contradiction. Without this two-level distinction the false-positive rate makes the tool unusable. Tolerance policy is config, versioned with the eval, and printed in every report.
+`62.3` reported as "62" is legitimate display rounding; reported as "68" is a contradiction. Without this distinction the false-positive rate makes the tool unusable. Two mechanisms carry it:
+
+- `display_rel`: relative slack for a class, independent of how the claim is written.
+- `display_round`: half a unit of the claim's *own* last displayed digit. "182" asserts a value in 181.5–182.5 and is consistent with 181.52, "181" is not, and "52.4 million" asserts 52.35M–52.45M. Digit swaps and magnitude shifts stay contradictions, because they move the value rather than its precision. The flag is opt-in per class, so an unknown class (a schema typo) gets exact comparison and no slack.
+
+Tolerance policy is config, versioned with the eval, and printed in every report.
 
 ---
 
@@ -287,7 +298,7 @@ Status: all six items are implemented. The SQLite index is built in memory by th
 ### Later (explicitly optional)
 
 - `DERIVED` recomputation engine
-- `STALE` verdicts and look-ahead detection
+- Look-ahead detection (the `STALE` verdict itself is implemented; see §5)
 - Tier 3 LLM fallback extraction
 - HTML report with span highlighting
 - gRPC streaming verification (verify-as-you-stream)

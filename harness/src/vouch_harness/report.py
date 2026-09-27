@@ -70,7 +70,7 @@ def to_markdown(result: EvalResult, seed: int = 0) -> str:
         "",
     ]
     for name, t in sorted(result.tolerances.items()):
-        lines.append(f"- `{name}`: abs={t.abs} rel={t.rel} display_rel={t.display_rel}")
+        lines.append(f"- `{name}`: {t.describe()}")
     lines.append("")
     return "\n".join(lines)
 
@@ -86,9 +86,6 @@ def to_json(result: EvalResult, seed: int = 0) -> str:
         "overall": {k: dump(v) for k, v in overall_stats(result, rng).items()},
         "stability": result.stability,
         "per_mutation_recall": {m: dump(s) for m, s in per_mutation_stats(result, rng).items()},
-        "tolerance_policy": {
-            name: {"abs": t.abs, "rel": t.rel, "display_rel": t.display_rel}
-            for name, t in sorted(result.tolerances.items())
-        },
+        "tolerance_policy": {name: t.as_dict() for name, t in sorted(result.tolerances.items())},
     }
     return json.dumps(payload, indent=2)

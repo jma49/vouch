@@ -87,7 +87,9 @@ def facts_for(
     )
     params: list[object] = [entity, metric]
     if timeframe is not None:
-        q += " AND timeframe = ?"
+        # A fact with no timeframe (a quote, not a bar) is not
+        # contradicted by the claim naming one.
+        q += " AND (timeframe = ? OR timeframe IS NULL OR timeframe = '')"
         params.append(timeframe)
     out = []
     for row in conn.execute(q, params):

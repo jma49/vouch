@@ -120,3 +120,11 @@ def test_load_tolerances_matches_defaults(tmp_path: Path) -> None:
     bad.write_text("price: { abs: 0.01, typo: 1 }\n")
     with pytest.raises(ValueError, match="unknown keys"):
         load_tolerances(bad)
+
+
+def test_load_tolerances_rejects_non_bool_display_round(tmp_path: Path) -> None:
+    # A quoted "yes" must not silently enable rounding slack.
+    bad = tmp_path / "bad.yaml"
+    bad.write_text('price: { abs: 0.01, display_round: "yes" }\n')
+    with pytest.raises(ValueError, match="display_round"):
+        load_tolerances(bad)

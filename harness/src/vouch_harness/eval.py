@@ -18,7 +18,7 @@ from vouch_harness.mutate import MUTATIONS
 from vouch_verifier.claims import extract_claims
 from vouch_verifier.matcher import DEFAULT_TOLERANCES, match_claims
 from vouch_verifier.receipts import Receipt
-from vouch_verifier.verdict import Tolerance, Verdict
+from vouch_verifier.verdict import FAILURES, Tolerance, Verdict
 
 
 @dataclass(frozen=True)
@@ -104,9 +104,7 @@ def _run_once(receipts: list[Receipt], seed: int, tolerances: dict[str, Toleranc
     for case in build_gold_set(receipts, seed=seed):
         extraction = extract_claims(case.answer, known_entities=entities)
         matched = match_claims(extraction, receipts, tolerances)
-        flagged[case.name] = any(
-            mc.verdict in (Verdict.CONTRADICTED, Verdict.UNSUPPORTED) for mc in matched
-        )
+        flagged[case.name] = any(mc.verdict in FAILURES for mc in matched)
         mutation_of[case.name] = case.mutation
         tier1 += sum(1 for mc in matched if mc.claim.tier == 1)
         judged += sum(1 for mc in matched if mc.verdict is not Verdict.UNVERIFIABLE)

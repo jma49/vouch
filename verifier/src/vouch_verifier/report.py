@@ -73,10 +73,7 @@ def to_json(report: Report) -> str:
             "tier1_share": report.tier_share(1),
             "tier2_share": report.tier_share(2),
         },
-        "tolerance_policy": {
-            name: {"abs": t.abs, "rel": t.rel, "display_rel": t.display_rel}
-            for name, t in sorted(report.tolerances.items())
-        },
+        "tolerance_policy": {name: t.as_dict() for name, t in sorted(report.tolerances.items())},
     }
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
@@ -110,6 +107,6 @@ def to_markdown(report: Report) -> str:
     lines.append("## Tolerance policy")
     lines.append("")
     for name, t in sorted(report.tolerances.items()):
-        lines.append(f"- `{name}`: abs={t.abs} rel={t.rel} display_rel={t.display_rel}")
+        lines.append(f"- `{name}`: {t.describe()}")
     lines.append("")
     return "\n".join(lines)
