@@ -160,7 +160,7 @@ vouch is an MVP. The most consequential gaps, each tracked with a reproduction i
 - **Extraction is deterministic, English-only, and keyword-driven.** It handles dates, magnitudes, units, signs (including Unicode minus and accounting parentheses), clause structure, markdown tables and lists, and pronouns that open a sentence, measured by a 166-case adversarial corpus and property-based tests. It does not do general coreference, it reads a threshold (*"below the 70 overbought line"*) as a claim, and a ticker that no tool returned is left unjudged rather than flagged. The LLM fallback (Tier 3) is not built yet.
 - **The headline metrics are synthetic.** See the note under [Measured results](#measured-results); the real evaluation is Phase 2.
 - **Signatures are symmetric.** HMAC gives tamper evidence to key holders, not public verifiability, and the log has no hash chain yet, so deleted lines go undetected.
-- **Canonicalization is literal-preserving, not RFC 8785.** It is consistent across Go and Python, but `62.30` and `62.3` digest differently.
+- **Canonicalization is vouch's own, not RFC 8785**, on purpose: number literals are kept exactly as a tool wrote them, so `62.30` and `62.3` digest differently. The rules are specified in [`docs/canonical-json.md`](docs/canonical-json.md) and pinned across Go and Python.
 - **The proxy serves one request at a time** and does not yet forward server-to-client requests or cancellation.
 
 ## Roadmap
@@ -173,7 +173,7 @@ Measurement before features. Full plan with exit criteria in [`docs/roadmap.md`]
 | 1 | Verifier correctness on real prose | done |
 | 2 | Real evaluation: human-labeled claims from multiple models | tooling done, collecting data |
 | 3 | Integrity: Ed25519, hash-chained log, tamper suite | planned |
-| 4 | RFC 8785 canonicalization with cross-language differential fuzzing | planned |
+| 4 | Canonical JSON: specified contract (done), cross-language differential fuzzing | in progress |
 | 5 | Proxy protocol completeness and latency benchmarks | planned |
 
 ## Repository layout

@@ -217,17 +217,9 @@ Tolerance policy is config, versioned with the eval, and printed in every report
 
 ## 7. Canonicalization
 
-Both `args_canonical` and `result_canonical` — and the digest and signature over them — depend on a stable canonical JSON form:
+Arguments, results, the full response, and the receipt body are digested in **vouch canonical JSON v1**, specified in [canonical-json.md](canonical-json.md): keys sorted by code point, compact output, number literals copied exactly as written, and input with duplicate keys, invalid UTF-8, or lone-surrogate escapes rejected instead of repaired. The Go writer and the Python reader are pinned byte for byte by `testdata/canonical_vectors.json`, and a CI job regenerates the Go-written golden log and fails on drift.
 
-**Target (RFC 8785 / JCS semantics):**
-
-- Object keys sorted lexicographically (recursive)
-- Numbers serialized in a fixed format: shortest round-trip representation; `-0` normalized to `0`; no exponent form below 1e21
-- Strings NFC-normalized; no escaped forward slashes
-- No insignificant whitespace
-- UTC ISO-8601 timestamps with explicit `Z`
-
-**Implemented today (literal-preserving contract):** keys sorted recursively, compact output, UTF-8 passthrough with no HTML escaping, and number literals *preserved exactly as the upstream wrote them*. The Go writer rejects, rather than normalizes, input with duplicate object keys, invalid UTF-8, or lone-surrogate `\u` escapes: the tool call fails (invariant 2) instead of signing a document that means something other than what the agent received. There is no number normalization and no NFC pass, so `62.30` and `62.3` digest differently (pitfalls P-010). The contract is internally consistent and pinned across Go and Python by `testdata/canonical_vectors.json` and a CI job that regenerates the Go-written golden log and fails on drift. Closing the gap to JCS, with differential fuzzing between the two implementations, is roadmap Phase 4.
+It is deliberately not RFC 8785 (JCS). JCS rewrites every number as a double, which would make a receipt record numbers the agent never saw, such as integers above 2^53, long decimals, or the trailing zero in `181.50`. vouch notarizes data other parties wrote, so fidelity wins over a standard format. Third-party verification does not depend on canonicalization, because signatures cover exact payload bytes (section 3.1). The trade-off is recorded in handoff.md ("Decisions and trade-offs").
 
 This is the part that silently breaks cross-language (Go writes, Python verifies) if hand-rolled inconsistently.
 
@@ -329,7 +321,7 @@ Status: all six items are implemented. The SQLite index is built in memory by th
 | Verifier language | Python | Numeric tooling and eval ecosystem |
 | Receipt store | JSONL, SQLite index derived by the verifier | Append-only survives crashes mid-write; the index is disposable and rebuilt from the log; no server dependency |
 | Signing | HMAC-SHA256 | Symmetric is sufficient for the stated threat model (§3.1); asymmetric adds ops burden with no benefit here |
-| Canonical JSON | RFC 8785 (JCS) | Cross-language stability; shared test vectors |
+| Canonical JSON | vouch canonical JSON v1, not RFC 8785 | Number literals kept exactly (fidelity over a standard format); shared cross-language vectors; see section 7 |
 | Upstream servers | Existing open-source market-data MCP servers | We deliberately do not rebuild market data; the README says so |
 
 **Open questions:**

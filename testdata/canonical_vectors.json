@@ -1,5 +1,5 @@
 {
-  "description": "Shared canonicalization test vectors. Both the Go proxy and the Python verifier must produce byte-identical output for these inputs. Seed set: object key sorting, nesting, arrays, unicode passthrough, and number literals that round-trip identically in both languages. Exponent-form numbers are deliberately excluded until full RFC 8785 number normalization lands (see docs/design.md section 7). A vector with \"rejected\": true has no canonical form: both implementations must refuse the input, because canonicalizing it would change what the receiver saw.",
+  "description": "Shared test vectors for vouch canonical JSON v1 (docs/canonical-json.md). The Go proxy and the Python verifier must produce byte-identical output for every input, and must both refuse every input marked \"rejected\": true.",
   "vectors": [
     {
       "name": "key_sorting_flat",
@@ -70,6 +70,16 @@
       "name": "duplicate_keys_after_unescape_rejected",
       "input": "{\"a\": 1, \"\\u0061\": 2}",
       "rejected": true
+    },
+    {
+      "name": "number_literals_preserved_exactly",
+      "input": "{\"a\": 1.50, \"b\": 1E+2, \"c\": -0, \"d\": 12345678901234567890, \"e\": 0.1000000000000000055511151231257827}",
+      "canonical": "{\"a\":1.50,\"b\":1E+2,\"c\":-0,\"d\":12345678901234567890,\"e\":0.1000000000000000055511151231257827}"
+    },
+    {
+      "name": "keys_sorted_by_code_point_not_utf16",
+      "input": "{\"\\ud83d\\ude00\": 2, \"\\ue000\": 1, \"z\": 3}",
+      "canonical": "{\"z\":3,\"\":1,\"😀\":2}"
     }
   ]
 }

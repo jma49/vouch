@@ -88,15 +88,18 @@ remembering. The 2026-09-27 audit filed #8-#48; all are closed.
 
 ## Canonicalization and signing
 
-### P-010 Canonical JSON is not RFC 8785
+### P-010 Canonical JSON is not RFC 8785, by design
 - **Symptom:** `62.30` and `62.3` in an upstream result produce
-  different digests and signatures.
-- **Cause:** both implementations preserve number literals verbatim
-  rather than applying JCS number serialization. Consistent across
-  languages, but not the standard the design doc names.
-- **Fix / workaround:** do not assume semantic equality of numbers
-  implies equal digests. Roadmap Phase 4.
-- **Status:** open. Code reading (`proxy/internal/receipt/canonical.go`).
+  different digests and signatures; an off-the-shelf JCS library does
+  not reproduce vouch digests.
+- **Cause:** vouch canonical JSON v1 copies number literals exactly
+  (docs/canonical-json.md), because a receipt must record what the tool
+  returned. JCS would rewrite them as doubles.
+- **Fix / workaround:** do not assume numerically equal payloads share
+  a digest; normalize before canonicalizing where semantic equality is
+  the point (fixture keys). Verify signatures over envelope bytes, not
+  by re-canonicalizing (Phase 3).
+- **Status:** by design (issue #52). Was "open" until 2026-09-27.
 
 ### P-011 HMAC does not provide third-party verifiability
 - **Symptom:** none at runtime; this is a false security claim in

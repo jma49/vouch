@@ -128,13 +128,29 @@ rewritten to match.
 
 ---
 
-## Phase 4 — Canonicalization done properly
+## Phase 4 — Canonicalization done properly — contract specified; fuzzing todo
 
-Goal: the "RFC 8785" claim is true, and cross-language equality is
-proven by fuzzing rather than by a handful of vectors.
+Goal: the canonical form is precisely specified, and cross-language
+equality is proven by fuzzing rather than by a handful of vectors.
+
+Decision (2026-09-27): **no RFC 8785 (JCS).** JCS rewrites numbers as
+doubles, which contradicts recording what a tool returned; third-party
+verification moves to signatures over exact bytes (Phase 3) and no
+longer needs a standard canonicalization. Trade-off recorded in
+handoff.md.
 
 | Item | Status |
 |---|---|
+| Specify "vouch canonical JSON v1" and remove the RFC 8785 claim | done (issue #52) |
+| Go and Python agree on strings: U+2028/U+2029 escaped; duplicate keys and lone surrogates rejected on both sides, pinned by shared vectors (including "rejected" vectors) | done (#40, #46; issues #9, #27) |
+| Vectors pin number literals and code-point key order | done (issue #52) |
+| Differential fuzzing: `go test -fuzz` corpus replayed through Python; Hypothesis-generated JSON replayed through Go; outputs byte-equal | todo |
+| Fuzz corpus committed; CI runs a short fuzz pass | todo |
+| Fixture replay keys normalize numbers in arguments (`5` vs `5.0`) | todo |
+
+Exit criteria: differential fuzz runs clean for a fixed budget in CI.
+
+---|---|
 | Implement JCS number serialization in Go and Python (or drop the claim and document the literal-preserving contract) | todo |
 | Pass the published JCS test vectors | todo |
 | Differential fuzzing: `go test -fuzz` corpus replayed through Python; Hypothesis-generated JSON replayed through Go; outputs byte-equal | todo |
