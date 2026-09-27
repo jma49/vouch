@@ -1,1 +1,1 @@
-NVDA's RSI(14) is 62 [[r:golden-0#/rsi_14]], and the stock closed at 181.52. AMD is down 1.35% on the day. AMD last traded at 172.40. NVDA volume was 41,200,000 shares. AMD's P/E sits near 48.
+NVDA's RSI(14) is 62 [[r:golden-0#/rsi_14]], and the stock closed at 181.52 on July 24. AMD is down 1.35% on the day and is trading at 172.40. NVDA volume was 41.2 million shares. AMD's P/E sits near 48, roughly 3x its sector.

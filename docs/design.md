@@ -160,7 +160,13 @@ NVDA's RSI(14) is 62.3 [[r:a1b2#/indicators/rsi_14]]
 
 Cited claims are trivially and deterministically matchable. Highest reliability.
 
-**Tier 2 — deterministic candidate scan (fallback).** Regex over the answer for numeric spans + nearby entity/metric keywords, producing *candidate* claims.
+**Tier 2 — deterministic candidate scan (fallback).** Three stages, all deterministic:
+
+1. *Tokenize* (`tokens.py`). Mask structure that is numeric but not a claim, such as dates, clock times, fiscal periods, ordinals, period lengths (*"50-day"*), and chart timeframes. Then classify each remaining span as a point, a multiplier (*"3x"*), or a range (*"60-65"*). Parse magnitude words and suffixes, percent, and currency, and record the resolution of the last displayed digit, which the tolerance policy uses (§6.3). Only points can be judged.
+2. *Resolve* (`claims.py`). Bind each point to an entity, a metric, a date, and a timeframe within its clause. Semicolons separate independent clauses, and commas and coordinating words separate phrases. The entity is the nearest preceding mention in the phrase, widening outward. A metric keyword may come from an earlier clause but never a later one. A metric must agree with the claim's unit: a percentage is never a price. A sentence that opens with a pronoun inherits the previous subject.
+3. *Match* (`matcher.py`). Compare against facts in the claim's time window: the stated date, or the latest receipted day. A value that matches only outside the window is `STALE`.
+
+Behavior on hand-written prose is pinned by an adversarial corpus (`verifier/tests/corpus/claims.yaml`) and by property-based tests.
 
 **Tier 3 — LLM structured extraction (last resort).** Candidates that Tier 2 cannot resolve are passed to a small model with a strict JSON-schema output contract, converting spans into Claims.
 
@@ -292,7 +298,7 @@ Status: all six items are implemented. The SQLite index is built in memory by th
 ### Later (explicitly optional)
 
 - `DERIVED` recomputation engine
-- `STALE` verdicts and look-ahead detection
+- Look-ahead detection (the `STALE` verdict itself is implemented; see §5)
 - Tier 3 LLM fallback extraction
 - HTML report with span highlighting
 - gRPC streaming verification (verify-as-you-stream)

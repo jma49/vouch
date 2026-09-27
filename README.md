@@ -24,7 +24,7 @@ An agent answer, audited against the receipts its tool calls produced
 
 <!-- BEGIN GENERATED example-report: do not edit; run `make readme` -->
 ```text
-NVDA's RSI(14) is 62 [[r:golden-0#/rsi_14]], and the stock closed at 181.52. AMD is down 1.35% on the day. AMD last traded at 172.40. NVDA volume was 41,200,000 shares. AMD's P/E sits near 48.
+NVDA's RSI(14) is 62 [[r:golden-0#/rsi_14]], and the stock closed at 181.52 on July 24. AMD is down 1.35% on the day and is trading at 172.40. NVDA volume was 41.2 million shares. AMD's P/E sits near 48, roughly 3x its sector.
 ```
 
 | Claim | Verdict | Receipted value | Receipt | Note |
@@ -33,11 +33,12 @@ NVDA's RSI(14) is 62 [[r:golden-0#/rsi_14]], and the stock closed at 181.52. AMD
 | `181.52` | **SUPPORTED** | 181.52 | golden-0 |  |
 | `1.35%` | **SUPPORTED** | -1.35 | golden-1 |  |
 | `172.40` | **CONTRADICTED** | 172.04 | golden-1 | closest receipted value is 172.04 |
-| `41,200,000` | **UNSUPPORTED** |  |  | no receipt covers (NVDA, volume) |
+| `41.2 million` | **UNSUPPORTED** |  |  | no receipt covers (NVDA, volume) |
 | `48` | **UNVERIFIABLE** |  |  | no entity/metric resolution (Tier 3 not enabled) |
+| `3x` | **UNVERIFIABLE** |  |  | a multiplier is not a point value |
 <!-- END GENERATED example-report -->
 
-Rounding `62.3` to `62` is not a hallucination, and neither is writing a negative change as *"down 1.35%"*. Swapping two digits of a price is. A volume figure no tool returned is flagged as fabricated, and a claim outside the verifier's scope is reported as such rather than guessed at.
+Rounding `62.3` to `62` is not a hallucination, and neither is writing a negative change as *"down 1.35%"*. Swapping two digits of a price is. The date is recognized as a date and not as a claim. The percentage is judged as a day change even though *"trading at"* sits right next to it, because a percentage cannot be a price. *"41.2 million"* is read at its own precision and flagged as fabricated, since no tool returned it. A P/E and a multiplier are out of scope, and the report says so rather than guessing.
 
 ## How it works
 
@@ -140,7 +141,8 @@ A Docker image carrying the whole pipeline is available via `docker compose run 
 
 vouch is an MVP. The most consequential gaps, each tracked with a reproduction in [`docs/pitfalls.md`](docs/pitfalls.md):
 
-- **Free-text extraction is shallow.** The deterministic scan can misread dates as values, ignores magnitude words (*"12 million"*), and attributes claims to the nearest entity by character distance.
+- **Extraction is deterministic, English-only, and keyword-driven.** It handles dates, magnitudes, units, clause structure, and pronouns that open a sentence, measured by a 130-case adversarial corpus. It does not do general coreference, it reads a threshold (*"below the 70 overbought line"*) as a claim, and a ticker that no tool returned is left unjudged rather than flagged. The LLM fallback (Tier 3) is not built yet.
+- **The headline metrics are synthetic.** See the note under [Measured results](#measured-results); the real evaluation is Phase 2.
 - **Signatures are symmetric.** HMAC gives tamper evidence to key holders, not public verifiability, and the log has no hash chain yet, so deleted lines go undetected.
 - **Canonicalization is literal-preserving, not RFC 8785.** It is consistent across Go and Python, but `62.30` and `62.3` digest differently.
 - **The proxy serves one request at a time** and does not yet forward server-to-client requests or cancellation.
@@ -152,8 +154,8 @@ Measurement before features. Full plan with exit criteria in [`docs/roadmap.md`]
 | Phase | Focus | Status |
 |---|---|---|
 | 0 | Hygiene: lint, strict typing, race detector, generated metrics | done |
-| 1 | Verifier correctness on real prose | next |
-| 2 | Real evaluation: human-labeled claims from multiple models | planned |
+| 1 | Verifier correctness on real prose | done |
+| 2 | Real evaluation: human-labeled claims from multiple models | next |
 | 3 | Integrity: Ed25519, hash-chained log, tamper suite | planned |
 | 4 | RFC 8785 canonicalization with cross-language differential fuzzing | planned |
 | 5 | Proxy protocol completeness and latency benchmarks | planned |

@@ -44,7 +44,7 @@ The workflow has not yet run on GitHub; confirm on first push.
 
 ---
 
-## Phase 1 — Verifier correctness on real prose
+## Phase 1 — Verifier correctness on real prose — done
 
 Goal: Tier 2 extraction and matching stop producing the false
 verdicts reproduced in the audit, so a real eval (Phase 2) measures the
@@ -52,18 +52,27 @@ agent and not our extractor's blind spots.
 
 | Item | Status |
 |---|---|
-| Dates, years, times, and ordinals are not numeric claims (`2026-07-24`, `Q3`, `50-day`) | todo |
-| A number's unit constrains its metric (`1.35%` never matches a price; P-034) | todo |
-| Magnitude words and suffixes scale values (`12 million`, `$1.2B`, `3.4K`) | todo |
-| Multipliers (`3x`) and ranges (`60–65`) are handled or explicitly `UNVERIFIABLE` | todo |
-| Entity attribution by clause structure, not character distance (`NVDA's RSI is 62, versus AMD's 48`) | todo |
-| Tier 2 claims carry timeframe and as-of when the text states them | todo |
-| Multiple candidate facts: no longer "any candidate within tolerance wins"; ambiguous matches get a distinct outcome instead of `SUPPORTED` | todo |
-| Regression corpus: hand-written adversarial sentences with expected verdicts, kept separate from the synthetic gold set | todo |
-| Property-based tests (Hypothesis) for number parsing and span integrity | todo |
+| Dates, years, times, and ordinals are not numeric claims (`2026-07-24`, `Q3`, `50-day`) | done (f045c03) |
+| A number's unit constrains its metric (`1.35%` never matches a price; P-034) | done (ea370d2) |
+| Magnitude words and suffixes scale values (`12 million`, `$1.2B`, `3.4K`) | done (1fa7bbe) |
+| Multipliers (`3x`) and ranges (`60–65`) are handled or explicitly `UNVERIFIABLE` | done (f045c03) |
+| Entity attribution by clause structure, not character distance (`NVDA's RSI is 62, versus AMD's 48`) | done (919ebd3) |
+| Tier 2 claims carry timeframe and as-of when the text states them | done (e493c92) |
+| Multiple candidate facts: no longer "any candidate within tolerance wins"; ambiguous matches get a distinct outcome instead of `SUPPORTED` | done (e493c92) |
+| Regression corpus: hand-written adversarial sentences with expected verdicts, kept separate from the synthetic gold set | done (af368c4) |
+| Property-based tests (Hypothesis) for number parsing and span integrity | done (b596944) |
 
 Exit criteria: every probe in `docs/pitfalls.md` under "Verifier" is
 fixed and pinned by a test; regression corpus >= 100 sentences.
+
+Result: P-030 to P-037 fixed, each flipping strict-xfail corpus cases
+in the commit that fixed it. The corpus has 130 cases; one xfail
+remains, a documented out-of-scope gap (threshold mentions). The
+property tests found one more bug on their first run, a float epsilon
+wide enough to hide a whole-unit error, fixed in b596944. The
+harness gold set is unchanged (0.89 detection), which is expected: its
+answers were already extractor-shaped (P-040), and Phase 2 is what
+replaces it.
 
 ---
 
