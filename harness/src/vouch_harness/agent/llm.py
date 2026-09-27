@@ -18,6 +18,7 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -85,10 +86,26 @@ def cache_identity(config: ModelConfig) -> str:
     return identity
 
 
+_SEGMENT_RE = re.compile(r"[A-Za-z0-9_.-]+")
+
+
+def check_path_segment(kind: str, value: object) -> str:
+    """A config name that becomes one directory level of a run path
+    (runs/<model>/<task>/s<n>). A "/" would add a level that discover()
+    never globs, so the runs would silently vanish from labeling and
+    scoring; "." and ".." would escape the level."""
+    if not isinstance(value, str) or not _SEGMENT_RE.fullmatch(value) or value in {".", ".."}:
+        raise ValueError(f"{kind} {value!r}: use letters, digits, '_', '.', '-' only")
+    return value
+
+
 def load_models(path: str | Path) -> dict[str, ModelConfig]:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     out = {}
     for name, spec in raw.items():
+        # Only the config key is restricted; the provider's model id
+        # ("vendor/model" on OpenRouter) is free-form.
+        check_path_segment("model name", name)
         unknown = set(spec) - {"base_url", "model", "api_key_env", "rpm", "params"}
         if unknown:
             raise ValueError(f"model {name}: unknown keys {sorted(unknown)}")

@@ -415,6 +415,31 @@ def test_missing_key_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
         OpenAICompatClient(ModelConfig("t", "http://x/", "m", "NO_SUCH_KEY"))
 
 
+@pytest.mark.parametrize("name", ["openrouter/llama-3", "a b", "..", "", "x\\y", "gpt\n"])
+def test_model_names_must_be_one_path_segment(tmp_path: Path, name: str) -> None:
+    path = tmp_path / "models.yaml"
+    path.write_text(
+        json.dumps({name: {"base_url": "http://x/", "model": "v/m", "api_key_env": "K"}})
+    )
+    with pytest.raises(ValueError, match="model name"):
+        load_models(path)
+
+
+def test_model_ids_may_contain_slashes(tmp_path: Path) -> None:
+    path = tmp_path / "models.yaml"
+    spec = {"base_url": "http://x/", "model": "meta/llama-3", "api_key_env": "K"}
+    path.write_text(json.dumps({"openrouter-llama-3.1_8b": spec}))
+    assert load_models(path)["openrouter-llama-3.1_8b"].model == "meta/llama-3"
+
+
+@pytest.mark.parametrize("task_id", ["a/b", "..", ""])
+def test_task_ids_must_be_one_path_segment(tmp_path: Path, task_id: str) -> None:
+    path = tmp_path / "tasks.yaml"
+    path.write_text(json.dumps([{"id": task_id, "prompt": "q"}]))
+    with pytest.raises(ValueError, match="task id"):
+        runner.load_tasks(path)
+
+
 def test_repo_configs_load() -> None:
     models = load_models(ROOT / "eval" / "models.yaml")
     assert "gemini-flash" in models

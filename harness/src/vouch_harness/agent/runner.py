@@ -19,7 +19,7 @@ from typing import Any
 
 import yaml
 
-from vouch_harness.agent.llm import ChatClient, Message
+from vouch_harness.agent.llm import ChatClient, Message, check_path_segment
 from vouch_harness.agent.mcp_client import RPCError, StdioMCPClient, ToolHost
 from vouch_harness.signing import key_id
 
@@ -55,7 +55,14 @@ class Task:
 
 def load_tasks(path: str | Path) -> list[Task]:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    tasks = [Task(id=t["id"], prompt=t["prompt"], tags=tuple(t.get("tags", ()))) for t in raw]
+    tasks = [
+        Task(
+            id=check_path_segment("task id", t["id"]),
+            prompt=t["prompt"],
+            tags=tuple(t.get("tags", ())),
+        )
+        for t in raw
+    ]
     ids = [t.id for t in tasks]
     if len(ids) != len(set(ids)):
         raise ValueError("duplicate task ids")
