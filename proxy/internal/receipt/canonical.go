@@ -40,7 +40,9 @@ func Canonicalize(raw []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if dec.More() {
+	// Only whitespace may follow the value. dec.More() is not enough:
+	// it reports false before a stray '}' or ']', so "0}" would pass.
+	if rest := bytes.TrimLeft(raw[dec.InputOffset():], " \t\r\n"); len(rest) > 0 {
 		return nil, fmt.Errorf("canonicalize: trailing data after JSON value")
 	}
 

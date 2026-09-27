@@ -80,6 +80,16 @@
       "name": "keys_sorted_by_code_point_not_utf16",
       "input": "{\"\\ud83d\\ude00\": 2, \"\\ue000\": 1, \"z\": 3}",
       "canonical": "{\"z\":3,\"\":1,\"😀\":2}"
+    },
+    {
+      "name": "trailing_close_brace_rejected",
+      "input": "0}",
+      "rejected": true
+    },
+    {
+      "name": "trailing_close_bracket_rejected",
+      "input": "{}]",
+      "rejected": true
     }
   ]
 }
