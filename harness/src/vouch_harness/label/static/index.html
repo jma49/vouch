@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vouch label</title>
+<style>
+:root {
+  --bg: #fbfbfa; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #e4e4e7;
+  --focus: #2f5bd3;
+  --SUPPORTED: #1f8a4c; --CONTRADICTED: #c62828; --UNSUPPORTED: #d9730d; --STALE: #a8840b;
+  --DERIVED: #2f5bd3; --UNVERIFIABLE: #7a7a80; --NOT_A_CLAIM: #a1a1a6;
+  --tint: 18%;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #151517; --panel: #1d1d20; --ink: #ececef; --muted: #9a9aa2; --line: #2e2e33;
+    --focus: #7d9bff;
+    --SUPPORTED: #4cc27f; --CONTRADICTED: #ff6b6b; --UNSUPPORTED: #ff9f43; --STALE: #e0c04a;
+    --DERIVED: #7d9bff; --UNVERIFIABLE: #9a9aa2; --NOT_A_CLAIM: #6b6b70;
+    --tint: 26%;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif; }
+header { display: flex; align-items: baseline; gap: 16px; padding: 12px 20px;
+  border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 1; }
+header h1 { font-size: 15px; margin: 0; letter-spacing: .01em; }
+header .muted { color: var(--muted); font-size: 13px; }
+main { display: grid; grid-template-columns: 250px minmax(0, 1fr) minmax(0, 420px); gap: 0;
+  height: calc(100vh - 49px); }
+nav, section, aside { overflow: auto; padding: 16px 20px; }
+nav { border-right: 1px solid var(--line); padding: 8px 0; }
+aside { border-left: 1px solid var(--line); background: var(--panel); }
+nav button { display: flex; width: 100%; justify-content: space-between; gap: 8px; padding: 6px 16px;
+  border: 0; background: none; color: inherit; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: left; cursor: pointer; }
+nav button:hover { background: color-mix(in srgb, var(--focus) 8%, transparent); }
+nav button[aria-current="true"] { background: color-mix(in srgb, var(--focus) 14%, transparent); }
+nav button span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+nav button span:last-child { flex: none; }
+nav .done { color: var(--SUPPORTED); }
+nav .count { color: var(--muted); }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+  margin: 20px 0 8px; font-weight: 600; }
+h2:first-child { margin-top: 0; }
+.prompt { color: var(--muted); margin: 0; }
+.answer { font-size: 17px; line-height: 1.8; white-space: pre-wrap; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; margin: 0; }
+.answer mark { background: color-mix(in srgb, var(--muted) 14%, transparent); color: inherit;
+  border-radius: 4px; padding: 1px 2px; cursor: pointer; border-bottom: 2px solid transparent; }
+.answer mark[data-label] { background: color-mix(in srgb, var(--c) var(--tint), transparent);
+  border-bottom-color: var(--c); }
+.answer mark[data-label="NOT_A_CLAIM"] { text-decoration: line-through; }
+.answer mark.current { outline: 2px solid var(--focus); outline-offset: 2px; }
+.answer mark.manual { border-bottom-style: dashed; }
+.warn { color: var(--UNSUPPORTED); font-size: 13px; }
+.labels { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.labels button { display: grid; grid-template-columns: 20px 1fr; gap: 2px 8px; text-align: left;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+  color: inherit; font: inherit; cursor: pointer; }
+.labels button:hover { border-color: var(--c); }
+.labels button[aria-pressed="true"] { border-color: var(--c);
+  background: color-mix(in srgb, var(--c) var(--tint), var(--panel)); }
+.labels kbd { grid-row: span 2; align-self: center; }
+.labels b { color: var(--c); font-size: 13px; letter-spacing: .02em; }
+.labels small { color: var(--muted); font-size: 12px; line-height: 1.35; }
+.row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+input[type=text] { flex: 1; font: inherit; padding: 6px 10px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--panel); color: inherit; }
+kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line);
+  border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; color: var(--muted); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; }
+td.num { font-variant-numeric: tabular-nums; text-align: right; }
+details { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; }
+summary { cursor: pointer; padding: 6px 10px; font: 13px ui-monospace, Menlo, monospace; }
+details pre { margin: 0; padding: 8px 10px; border-top: 1px solid var(--line); overflow: auto;
+  font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+footer.keys { color: var(--muted); font-size: 12px; margin-top: 18px; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.empty { color: var(--muted); padding: 40px 0; text-align: center; }
+.toast { position: fixed; bottom: 16px; right: 16px; background: var(--CONTRADICTED); color: #fff;
+  padding: 8px 12px; border-radius: 8px; font-size: 13px; display: none; }
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; height: auto; }
+  nav, aside { border: 0; border-bottom: 1px solid var(--line); max-height: 40vh; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>vouch label</h1>
+  <span class="muted" id="who"></span>
+  <span class="muted" id="progress"></span>
+</header>
+<main>
+  <nav id="runs" aria-label="Runs"></nav>
+  <section>
+    <div id="view"><p class="empty">No runs found. Run <code>make agent</code> first.</p></div>
+    <h2>Label <span class="muted" id="spaninfo"></span></h2>
+    <div class="labels" id="labels"></div>
+    <div class="row">
+      <input type="text" id="note" placeholder="Optional note for this span (Enter to save)" aria-label="Note">
+    </div>
+    <footer class="keys">
+      <span><kbd>j</kbd>/<kbd>k</kbd> next / previous span</span>
+      <span><kbd>1</kbd>-<kbd>7</kbd> label</span>
+      <span><kbd>n</kbd>/<kbd>p</kbd> next / previous run</span>
+      <span><kbd>a</kbd> add selected text as a span</span>
+      <span><kbd>x</kbd> remove a span you added</span>
+    </footer>
+  </section>
+  <aside>
+    <h2>Receipted facts</h2>
+    <div id="facts"></div>
+    <h2>Tool calls</h2>
+    <div id="tools"></div>
+  </aside>
+</main>
+<div class="toast" id="toast" role="alert"></div>
+<script>
+"use strict";
+// Short definitions; docs/labeling.md is the full guide.
+const HELP = {
+  SUPPORTED: "Matches a receipted value for this entity, metric, and date (display rounding is fine).",
+  CONTRADICTED: "A receipt covers this, but the value is wrong.",
+  UNSUPPORTED: "Asserts data no receipt covers: recalled or invented.",
+  STALE: "Matches a receipted value, but for a different date than claimed.",
+  DERIVED: "Correctly computed from receipted values (change, difference, average).",
+  UNVERIFIABLE: "A number, but not a data claim (threshold, count, hypothetical).",
+  NOT_A_CLAIM: "Not a numeric claim at all (date, name, list marker).",
+};
+const S = { labeler: "", labelNames: [], runs: [], idx: -1, run: null, spans: [], cur: 0 };
+const $ = (id) => document.getElementById(id);
+const el = (tag, props = {}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "text") n.textContent = v;
+    else if (k === "style") n.setAttribute("style", v);
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v);
+  }
+  for (const kid of kids) n.append(kid);
+  return n;
+};
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(toast.h); toast.h = setTimeout(() => (t.style.display = "none"), 3000);
+}
+
+function mergeSpans(run) {
+  const byKey = new Map();
+  for (const s of run.spans) byKey.set(`${s.start}:${s.end}`, { ...s, source: "token" });
+  for (const l of run.labels) {
+    const k = `${l.start}:${l.end}`;
+    byKey.set(k, { ...(byKey.get(k) || { start: l.start, end: l.end, text: l.text }),
+      source: l.source, label: l.label, note: l.note });
+  }
+  return [...byKey.values()].sort((a, b) => a.start - b.start || b.end - a.end);
+}
+
+function renderRuns() {
+  const nav = $("runs"); nav.replaceChildren();
+  let labeled = 0, total = 0;
+  S.runs.forEach((r, i) => {
+    labeled += r.labeled; total += r.total;
+    const done = r.total > 0 && r.labeled >= r.total;
+    nav.append(el("button", { "aria-current": String(i === S.idx), onclick: () => enqueue(() => openRun(i)) },
+      el("span", { text: r.id }),
+      el("span", { class: done ? "done" : "count", text: done ? "done" : `${r.labeled}/${r.total}` })));
+  });
+  $("progress").textContent = `${labeled}/${total} spans labeled across ${S.runs.length} runs`;
+}
+
+function renderView() {
+  const run = S.run, view = $("view"); view.replaceChildren();
+  if (!run) return;
+  view.append(el("h2", { text: `Prompt · ${run.id}` }), el("p", { class: "prompt", text: run.prompt }));
+  view.append(el("h2", { text: "Answer" }));
+  if (!run.finished) view.append(el("p", { class: "warn", text: "The agent ran out of turns; the answer may be empty." }));
+  const box = el("p", { class: "answer", id: "answer" });
+  let pos = 0;
+  S.spans.forEach((s, i) => {
+    if (s.start < pos) return; // overlaps an earlier span: navigable, not drawn inline
+    box.append(document.createTextNode(run.answer.slice(pos, s.start)));
+    const m = el("mark", { "data-i": String(i), title: s.label || "unlabeled", onclick: () => enqueue(() => select(i)) });
+    m.textContent = run.answer.slice(s.start, s.end);
+    if (s.label) { m.dataset.label = s.label; m.style.setProperty("--c", `var(--${s.label})`); }
+    if (s.source === "manual") m.classList.add("manual");
+    if (i === S.cur) m.classList.add("current");
+    box.append(m);
+    pos = s.end;
+  });
+  box.append(document.createTextNode(run.answer.slice(pos)));
+  view.append(box);
+  const s = S.spans[S.cur];
+  $("spaninfo").textContent = s ? `span ${S.cur + 1} of ${S.spans.length}: "${s.text}"` : "no spans";
+  $("note").value = s && s.note ? s.note : "";
+  for (const b of $("labels").children) b.setAttribute("aria-pressed", String(!!s && b.dataset.label === s.label));
+}
+
+function renderEvidence() {
+  const run = S.run; if (!run) return;
+  const facts = $("facts"); facts.replaceChildren();
+  if (!run.facts.length) facts.append(el("p", { class: "prompt", text: "No facts were receipted." }));
+  else {
+    const rows = [...run.facts].sort((a, b) =>
+      (a.entity + a.metric + a.as_of).localeCompare(b.entity + b.metric + b.as_of));
+    facts.append(el("table", {},
+      el("thead", {}, el("tr", {}, ...["entity", "metric", "value", "as of", "receipt"].map((h) => el("th", { text: h })))),
+      el("tbody", {}, ...rows.map((f) => el("tr", {},
+        el("td", { text: f.entity }), el("td", { text: f.metric }),
+        el("td", { class: "num", text: String(f.value) }),
+        el("td", { text: f.as_of.slice(0, 10) }), el("td", { text: f.receipt }))))));
+  }
+  const tools = $("tools"); tools.replaceChildren();
+  run.tool_calls.forEach((c) => tools.append(el("details", {},
+    el("summary", { text: `${c.name}(${c.arguments})` }), el("pre", { text: c.result }))));
+}
+
+async function openRun(i) {
+  if (i < 0 || i >= S.runs.length) return;
+  S.idx = i;
+  S.run = await api(`/api/run?id=${encodeURIComponent(S.runs[i].id)}`);
+  S.spans = mergeSpans(S.run);
+  const firstOpen = S.spans.findIndex((s) => !s.label);
+  S.cur = firstOpen >= 0 ? firstOpen : 0;
+  renderRuns(); renderView(); renderEvidence();
+}
+
+function select(i) {
+  if (!S.spans.length) return;
+  S.cur = Math.max(0, Math.min(S.spans.length - 1, i));
+  renderView();
+}
+
+// Actions run strictly one after another. Keys arrive faster than the
+// server answers; without this, a second "1" would label the span the
+// first one already labeled, and "n" would switch runs mid-request.
+let queue = Promise.resolve();
+function enqueue(action) {
+  queue = queue.then(action).catch((e) => toast(e.message));
+  return queue;
+}
+
+function refreshAfter(run) {
+  const spans = mergeSpans(run);
+  const entry = S.runs.find((r) => r.id === run.id);
+  if (entry) { entry.labeled = run.labels.length; entry.total = spans.length; }
+  if (S.run && S.run.id === run.id) { S.run = run; S.spans = spans; }
+  renderRuns();
+}
+
+async function setLabel(label, note) {
+  const s = S.spans[S.cur]; if (!s) return;
+  refreshAfter(await api("/api/label", {
+    run: S.run.id, start: s.start, end: s.end, text: s.text, label,
+    source: s.source, note: note ?? s.note ?? "",
+  }));
+  const next = S.spans.findIndex((x, j) => j > S.cur && !x.label);
+  S.cur = next >= 0 ? next : S.cur;
+  renderView();
+}
+
+async function addSelection() {
+  const sel = window.getSelection(), box = $("answer");
+  if (!sel || sel.isCollapsed || !box || !box.contains(sel.anchorNode)) {
+    toast("Select a number in the answer first."); return;
+  }
+  const range = sel.getRangeAt(0), pre = document.createRange();
+  pre.selectNodeContents(box); pre.setEnd(range.startContainer, range.startOffset);
+  let start = pre.toString().length, end = start + range.toString().length;
+  const answer = S.run.answer;
+  while (start < end && /\s/.test(answer[start])) start++;
+  while (end > start && /\s/.test(answer[end - 1])) end--;
+  if (start === end) return;
+  const existing = S.spans.findIndex((s) => s.start === start && s.end === end);
+  if (existing >= 0) { select(existing); return; }
+  S.spans.push({ start, end, text: answer.slice(start, end), source: "manual" });
+  S.spans.sort((a, b) => a.start - b.start || b.end - a.end);
+  S.cur = S.spans.findIndex((s) => s.start === start && s.end === end);
+  sel.removeAllRanges();
+  renderView();
+}
+
+async function clearManual() {
+  const s = S.spans[S.cur];
+  if (!s || s.source !== "manual") { toast("Only spans you added can be removed."); return; }
+  if (!s.label) { S.spans.splice(S.cur, 1); select(S.cur - 1); return; }
+  refreshAfter(await api("/api/label", {
+    run: S.run.id, start: s.start, end: s.end, text: s.text, label: "CLEARED", source: "manual",
+  }));
+  select(S.cur - 1);
+}
+
+function nextIncompleteRun(step) {
+  for (let j = S.idx + step; j >= 0 && j < S.runs.length; j += step) {
+    if (step < 0 || S.runs[j].labeled < S.runs[j].total || S.runs[j].total === 0) return j;
+  }
+  return -1;
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.target instanceof HTMLInputElement) {
+    if (e.key === "Enter") { const s = S.spans[S.cur]; if (s && s.label) enqueue(() => setLabel(s.label, e.target.value)); e.target.blur(); }
+    if (e.key === "Escape") e.target.blur();
+    return;
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  // Decide what a key means when its turn in the queue comes, not when it
+  // is pressed: during initialization the label list is still empty.
+  if (/^[1-9]$/.test(e.key)) {
+    const n = Number(e.key);
+    enqueue(() => n <= S.labelNames.length && setLabel(S.labelNames[n - 1]));
+    e.preventDefault();
+    return;
+  }
+  switch (e.key) {
+    case "j": case "ArrowRight": enqueue(() => select(S.cur + 1)); break;
+    case "k": case "ArrowLeft": enqueue(() => select(S.cur - 1)); break;
+    case "n": enqueue(() => openRun(nextIncompleteRun(1))); break;
+    case "p": enqueue(() => openRun(nextIncompleteRun(-1))); break;
+    case "a": enqueue(addSelection); break;
+    case "x": enqueue(clearManual); break;
+    default: return;
+  }
+  e.preventDefault();
+});
+
+// Initialization is the first queued action, so keys pressed while the
+// page is still loading wait for it instead of being dropped.
+enqueue(async () => {
+  const session = await api("/api/session");
+  S.labeler = session.labeler; S.labelNames = session.labels;
+  $("who").textContent = `labeling as ${S.labeler} · verifier verdicts hidden`;
+  $("labels").replaceChildren(...S.labelNames.map((name, i) => {
+    const b = el("button", { "data-label": name, style: `--c: var(--${name})`, onclick: () => enqueue(() => setLabel(name)) },
+      el("kbd", { text: String(i + 1) }), el("b", { text: name }), el("small", { text: HELP[name] || "" }));
+    return b;
+  }));
+  S.runs = await api("/api/runs");
+  renderRuns();
+  if (S.runs.length) {
+    const first = S.runs.findIndex((r) => r.labeled < r.total);
+    await openRun(first >= 0 ? first : 0);
+  }
+});
+</script>
+</body>
+</html>

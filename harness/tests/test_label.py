@@ -1,0 +1,164 @@
+"""Labeling tool: label store, run loading, validation, agreement, HTTP."""
+
+from __future__ import annotations
+
+import json
+import threading
+import urllib.error
+import urllib.request
+from collections.abc import Iterator
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from vouch_harness.label import store
+from vouch_harness.label.agreement import agreement, cohen_kappa
+from vouch_harness.label.runs import discover, load_run
+from vouch_harness.label.server import LabelApp, _handler
+
+ANSWER = "NVDA is trading at 160.36, up 1.15% on July 24."
+
+
+def make_run(runs: Path, run_id: str = "m/t01/s0", answer: str = ANSWER) -> Path:
+    d = runs / run_id
+    d.mkdir(parents=True)
+    (d / "answer.txt").write_text(answer + "\n")
+    (d / "meta.json").write_text(json.dumps({"prompt": "How is NVDA?", "finished": True}))
+    transcript = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "get_quote", "arguments": '{"symbol":"NVDA"}'}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": '{"last": 160.36}'},
+    ]
+    (d / "transcript.json").write_text(json.dumps(transcript))
+    return d
+
+
+def record(label: str, start: int = 19, end: int = 25, run: str = "m/t01/s0") -> store.LabelRecord:
+    return store.LabelRecord(
+        run=run,
+        start=start,
+        end=end,
+        text=ANSWER[start:end],
+        label=label,
+        labeler="a",
+        at="2026-09-27T00:00:00+00:00",
+    )
+
+
+def test_store_latest_record_wins_and_cleared_drops(tmp_path: Path) -> None:
+    path = tmp_path / "a.jsonl"
+    store.append(path, record("CONTRADICTED"))
+    store.append(path, record("SUPPORTED"))
+    store.append(path, record("UNSUPPORTED", start=0, end=4))
+    store.append(path, record("CLEARED", start=0, end=4))
+    current = store.load(path)
+    assert [r.label for r in current.values()] == ["SUPPORTED"]
+    assert len(path.read_text().splitlines()) == 4  # history is kept
+
+
+def test_store_rejects_unknown_labels_and_bad_spans(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="unknown label"):
+        store.append(tmp_path / "a.jsonl", record("MAYBE"))
+    with pytest.raises(ValueError, match="bad span"):
+        store.append(tmp_path / "a.jsonl", record("SUPPORTED", start=5, end=5))
+
+
+def test_load_run_offers_tokenizer_spans_and_tool_evidence(tmp_path: Path) -> None:
+    make_run(tmp_path)
+    assert discover(tmp_path) == ["m/t01/s0"]
+    view = load_run(tmp_path, "m/t01/s0")
+    assert [s["text"] for s in view.spans] == ["160.36", "1.15%"]  # the date is not offered
+    assert view.tool_calls == [
+        {"name": "get_quote", "arguments": '{"symbol":"NVDA"}', "result": '{"last": 160.36}'}
+    ]
+
+
+@pytest.mark.parametrize("bad", ["../x/y/z", "m/t01", "m/t01/s0/../../..", "/etc/passwd"])
+def test_load_run_rejects_paths_outside_the_runs_dir(tmp_path: Path, bad: str) -> None:
+    make_run(tmp_path)
+    with pytest.raises((ValueError, FileNotFoundError)):
+        load_run(tmp_path, bad)
+
+
+def test_app_validates_span_text_before_writing(tmp_path: Path) -> None:
+    make_run(tmp_path / "runs")
+    app = LabelApp(tmp_path / "runs", tmp_path / "labels", "alice")
+    view = app.label(
+        {"run": "m/t01/s0", "start": 19, "end": 25, "text": "160.36", "label": "SUPPORTED"}
+    )
+    assert view["labels"][0]["label"] == "SUPPORTED"
+    with pytest.raises(ValueError, match="does not match"):
+        app.label(
+            {"run": "m/t01/s0", "start": 19, "end": 25, "text": "999.99", "label": "SUPPORTED"}
+        )
+    assert app.runs() == [{"id": "m/t01/s0", "total": 2, "labeled": 1}]
+
+
+def test_labeler_names_are_restricted(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        LabelApp(tmp_path, tmp_path, "../evil")
+
+
+def test_kappa() -> None:
+    assert cohen_kappa([("A", "A"), ("B", "B")]) == 1.0
+    # Classic example: 20 items, observed 0.7, expected 0.5 -> kappa 0.4.
+    pairs = [("Y", "Y")] * 7 + [("Y", "N")] * 3 + [("N", "Y")] * 3 + [("N", "N")] * 7
+    assert cohen_kappa(pairs) == pytest.approx(0.4)
+
+
+def test_agreement_over_shared_spans() -> None:
+    a = {r.key: r for r in [record("SUPPORTED"), record("UNSUPPORTED", 0, 4)]}
+    b = {r.key: r for r in [record("CONTRADICTED"), record("SUPPORTED", 27, 32)]}
+    result = agreement(a, b)
+    assert (result.shared, result.only_a, result.only_b) == (1, 1, 1)
+    assert result.confusion == {("SUPPORTED", "CONTRADICTED"): 1}
+
+
+@pytest.fixture
+def server(tmp_path: Path) -> Iterator[str]:
+    make_run(tmp_path / "runs")
+    app = LabelApp(tmp_path / "runs", tmp_path / "labels", "alice")
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _handler(app))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{httpd.server_port}"
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def _get(url: str) -> Any:
+    with urllib.request.urlopen(url) as resp:
+        return resp.read()
+
+
+def test_http_api_round_trip(server: str) -> None:
+    assert b"vouch label" in _get(server + "/")
+    assert json.loads(_get(server + "/api/session"))["labeler"] == "alice"
+    run = json.loads(_get(server + "/api/run?id=m/t01/s0"))
+    assert "verdict" not in json.dumps(run).lower()  # blind: no verifier output
+    start = ANSWER.index("1.15%")
+    body = json.dumps(
+        {"run": "m/t01/s0", "start": start, "end": start + 5, "text": "1.15%", "label": "SUPPORTED"}
+    ).encode()
+    req = urllib.request.Request(
+        server + "/api/label",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req) as resp:
+        assert json.loads(resp.read())["labels"][0]["text"] == "1.15%"
+
+
+def test_http_api_rejects_bad_requests(server: str) -> None:
+    for path in ("/api/run?id=../../x", "/api/run", "/nope"):
+        with pytest.raises(urllib.error.HTTPError) as err:
+            _get(server + path)
+        assert err.value.code in (400, 404)
+        err.value.close()
