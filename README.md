@@ -64,7 +64,7 @@ flowchart LR
 | `CONTRADICTED` | A matching fact exists and the value is outside tolerance: *the deadly class* | ✅ |
 | `UNSUPPORTED` | No receipt covers the claim: fabricated from parametric memory | ✅ |
 | `UNVERIFIABLE` | Out of scope or unresolvable, and counted rather than guessed | ✅ |
-| `STALE` | Matches only a fact from outside the claim's time window: true once, not for the date claimed | ✅ |
+| `STALE` | Matches only a fact from outside the claim's time window: true once, not for the date claimed, or, in a backtest (`--as-of`), data the agent could not yet have had | ✅ |
 | `DERIVED` | Recomputable from receipts via whitelisted operations only | planned |
 
 Fabrication and contradiction are different failures with different fixes, so vouch never collapses them into a single "hallucination" bit.

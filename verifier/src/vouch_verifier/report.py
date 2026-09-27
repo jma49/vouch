@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass
 
 from vouch_verifier.claims import Extraction
+from vouch_verifier.lookahead import LookAhead
 from vouch_verifier.matcher import MatchedClaim
 from vouch_verifier.verdict import Tolerance, Verdict
 
@@ -19,6 +20,10 @@ from vouch_verifier.verdict import Tolerance, Verdict
 class Report:
     matched: tuple[MatchedClaim, ...]
     tolerances: dict[str, Tolerance]
+    # Set when verifying a backtest (--as-of): the simulated moment and
+    # every receipt carrying data from after it (design section 8.4).
+    as_of: str | None = None
+    lookahead: tuple[LookAhead, ...] = ()
 
     @property
     def counts(self) -> dict[str, int]:
@@ -45,9 +50,16 @@ def build_report(
     extraction: Extraction,
     matched: list[MatchedClaim],
     tolerances: dict[str, Tolerance],
+    as_of: str | None = None,
+    lookahead: list[LookAhead] | None = None,
 ) -> Report:
     del extraction  # all spans, resolved or not, are present in matched
-    return Report(matched=tuple(matched), tolerances=tolerances)
+    return Report(
+        matched=tuple(matched),
+        tolerances=tolerances,
+        as_of=as_of,
+        lookahead=tuple(lookahead or ()),
+    )
 
 
 def to_json(report: Report) -> str:
@@ -76,6 +88,14 @@ def to_json(report: Report) -> str:
         },
         "tolerance_policy": {name: t.as_dict() for name, t in sorted(report.tolerances.items())},
     }
+    if report.as_of is not None:
+        payload["lookahead"] = {
+            "as_of": report.as_of,
+            "receipts": [
+                {"receipt_id": la.receipt_id, "tool": la.tool_name, "latest_data": la.latest}
+                for la in report.lookahead
+            ],
+        }
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
@@ -108,6 +128,25 @@ def to_markdown(report: Report) -> str:
     lines.append(f"- Coverage (non-UNVERIFIABLE): {report.coverage:.0%}")
     lines.append(f"- Tier 1 (cited) share: {report.tier_share(1):.0%}")
     lines.append("")
+    if report.as_of is not None:
+        lines.append("## Look-ahead")
+        lines.append("")
+        if not report.lookahead:
+            lines.append(f"No receipt carries data from after {md_cell(report.as_of)}.")
+        else:
+            lines.append(
+                f"{len(report.lookahead)} receipt(s) carry data from after "
+                f"{md_cell(report.as_of)}: the agent saw the future."
+            )
+            lines.append("")
+            lines.append("| receipt | tool | latest data |")
+            lines.append("|---|---|---|")
+            for la in report.lookahead:
+                lines.append(
+                    f"| {md_cell(la.receipt_id[:8])} | {md_cell(la.tool_name)} "
+                    f"| {md_cell(la.latest)} |"
+                )
+        lines.append("")
     lines.append("## Claims")
     lines.append("")
     lines.append("| verdict | claim | entity | metric | receipted | receipt | note |")
