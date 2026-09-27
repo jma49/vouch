@@ -561,3 +561,47 @@ def test_end_to_end_malformed_calls_do_not_end_the_run(tmp_path: Path) -> None:
     assert json.loads(tool_msgs[2])["symbol"] == "NVDA"
     receipts = load_log(d / "receipts.jsonl", EVAL_KEYS)
     assert "NVDA" in {f.entity for r in receipts for f in r.facts}
+
+
+class CitingClient:
+    """Calls get_quote, then answers with the citation the proxy offered
+    for the last price, as a model following the protocol would."""
+
+    def __init__(self) -> None:
+        self.turn = 0
+
+    def complete(self, messages: list[Message], tools: list[dict[str, Any]], sample: int) -> Reply:
+        self.turn += 1
+        if self.turn == 1:
+            return Reply(tool_call("get_quote", '{"symbol": "NVDA"}'), "stop")
+        system = str(messages[0]["content"])
+        assert runner.CITE_INSTRUCTIONS.strip() in system
+        block = str(messages[-1]["content"])
+        line = next(ln for ln in block.splitlines() if ln.startswith("last_price = "))
+        value, citation = line.removeprefix("last_price = ").split("  -> ")
+        return Reply(answer(f"NVDA last traded at {value} {citation}."), "stop")
+
+
+@pytest.mark.skipif(not PROXY.exists(), reason="proxy binary not built (make build)")
+def test_end_to_end_citation_condition(tmp_path: Path) -> None:
+    """P-044 end to end: with --cite the proxy offers citations, a model
+    that uses one gets a Tier 1 SUPPORTED verdict from the verifier, and
+    the run is kept apart from the plain condition."""
+    from vouch_verifier.claims import extract_claims
+    from vouch_verifier.matcher import DEFAULT_TOLERANCES, match_claims
+    from vouch_verifier.verdict import Verdict
+
+    spec = runner.RunSpec("fake", runner.Task("t01", "How is NVDA?"), sample=0, cite=True)
+    d = runner.execute(spec, CitingClient(), tmp_path, PROXY, ROOT / "schemas", proxy_env(tmp_path))
+    assert d == tmp_path / "fake+cite" / "t01" / "s0"
+    meta = json.loads((d / "meta.json").read_text())
+    assert meta["cite"] is True and meta["session"] == "fake+cite.t01.s0"
+    receipts = load_log(d / "receipts.jsonl", EVAL_KEYS)
+    answer_text = (d / "answer.txt").read_text()
+    [claim] = [
+        mc
+        for mc in match_claims(extract_claims(answer_text), receipts, DEFAULT_TOLERANCES)
+        if mc.claim.citation is not None
+    ]
+    assert claim.verdict is Verdict.SUPPORTED
+    assert claim.receipt_id == receipts[0].receipt_id

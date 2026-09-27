@@ -87,13 +87,14 @@ func startProxy(t *testing.T) (*mcp.Client, func(), string) {
 	return s.agent, s.shutdown, s.logPath
 }
 
-func startSession(t *testing.T) *session {
+func startSession(t *testing.T, opts ...func(*Server)) *session {
 	t.Helper()
-	return startSessionAt(t, filepath.Join(t.TempDir(), "receipts.jsonl"))
+	return startSessionAt(t, filepath.Join(t.TempDir(), "receipts.jsonl"), opts...)
 }
 
 // startSessionAt is startSession on an existing log, as session s-test.
-func startSessionAt(t *testing.T, logPath string) *session {
+// opts adjust the server before it runs.
+func startSessionAt(t *testing.T, logPath string, opts ...func(*Server)) *session {
 	t.Helper()
 
 	upIn, proxyToUp := io.Pipe()   // proxy writes -> upstream reads
@@ -120,6 +121,9 @@ func startSessionAt(t *testing.T, logPath string) *session {
 		SessionID: "s-test",
 		Clock:     &clock.Wall{},
 		Logf:      t.Logf,
+	}
+	for _, opt := range opts {
+		opt(srv)
 	}
 	done := make(chan error, 1)
 	go func() { done <- srv.Run() }()
@@ -265,7 +269,7 @@ func TestReceiptBindsTheResponse(t *testing.T) {
 	s, logPath := recordingServer(t)
 	result := json.RawMessage(`{"content":[{"type":"text","text":"NVDA RSI is 12.0"}],` +
 		`"structuredContent":{"symbol":"NVDA","rsi_14":62.3}}`)
-	if err := s.record("get_indicators", json.RawMessage(`{"symbol":"NVDA"}`), result, 0); err != nil {
+	if _, err := s.record("get_indicators", json.RawMessage(`{"symbol":"NVDA"}`), result, 0); err != nil {
 		t.Fatalf("record: %v", err)
 	}
 	receipts, err := store.Scan(logPath)
@@ -363,7 +367,7 @@ func TestRecordFactsByResultKind(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, logPath := recordingServer(t)
 			args := json.RawMessage(`{"symbol":"NVDA"}`)
-			if err := s.record("get_indicators", args, json.RawMessage(tc.result), 0); err != nil {
+			if _, err := s.record("get_indicators", args, json.RawMessage(tc.result), 0); err != nil {
 				t.Fatalf("record: %v", err)
 			}
 			receipts, err := store.Scan(logPath)
@@ -422,4 +426,54 @@ func (s *session) rawCall(t *testing.T, id, method string, params any) *mcp.Mess
 		t.Fatal(err)
 	}
 	return m
+}
+
+// TestCiteModeNamesTheReceiptAndItsFacts pins the citation channel
+// (P-044): in cite mode the agent's result gains one block naming the
+// receipt and a citation per fact, the upstream's own blocks are kept,
+// and the receipt signs the upstream's result without that block.
+func TestCiteModeNamesTheReceiptAndItsFacts(t *testing.T) {
+	s := startSession(t, func(srv *Server) { srv.Cite = true })
+	if _, err := s.agent.Call("initialize", map[string]any{"protocolVersion": "2025-06-18"}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.agent.Call("tools/call", map[string]any{"name": "get_indicators", "arguments": map[string]any{"symbol": "NVDA"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.shutdown()
+	receipts, err := store.ScanVerified(s.logPath, signtest.Keyring(signer))
+	if err != nil || len(receipts) != 1 {
+		t.Fatalf("receipts: %d, %v", len(receipts), err)
+	}
+	r := receipts[0]
+	var got struct {
+		Content []struct{ Type, Text string } `json:"content"`
+	}
+	if err := json.Unmarshal(res, &got); err != nil || len(got.Content) != 2 || got.Content[0].Text != "ok" {
+		t.Fatalf("result the agent saw: %s", res)
+	}
+	block := got.Content[1].Text
+	for _, want := range []string{"[[r:" + r.ReceiptID[:12] + "#/rsi_14]]", "rsi_14 = 62.3", "close_price = 181.52"} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("citation block lacks %q:\n%s", want, block)
+		}
+	}
+	if strings.Contains(string(r.ResponseCanonical), "[vouch]") {
+		t.Fatal("the receipt signs the proxy's block, not the upstream's result")
+	}
+}
+
+func TestCiteModeLeavesFactlessResultsAlone(t *testing.T) {
+	result := json.RawMessage(`{"content":[{"type":"text","text":"x"}]}`)
+	if got := withCitations(result, &receipt.Receipt{ReceiptID: "abc"}); string(got) != string(result) {
+		t.Fatalf("changed a result with no facts: %s", got)
+	}
+	r := &receipt.Receipt{ReceiptID: "abc", Facts: []receipt.Fact{{Metric: "m", Value: 1, JSONPtr: "/m"}}}
+	if got := withCitations(json.RawMessage(`[1,2]`), r); string(got) != `[1,2]` {
+		t.Fatalf("changed a result that is not an object: %s", got)
+	}
+	if got := withCitations(json.RawMessage(`{"content":"not a list"}`), r); string(got) != `{"content":"not a list"}` {
+		t.Fatalf("changed a result whose content is not a list: %s", got)
+	}
 }

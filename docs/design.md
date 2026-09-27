@@ -178,6 +178,8 @@ NVDA's RSI(14) is 62.3 [[r:a1b2#/indicators/rsi_14]]
 
 Cited claims are trivially and deterministically matchable. Highest reliability.
 
+A model can cite only what it can see, and the proxy returns results unchanged, so the citation channel is opt-in: with `vouch proxy --cite`, each receipted result gains one text block, after the receipt is written, listing the receipt's facts with a ready-made citation (`rsi_14 = 62.3  -> [[r:3f9a1c2e7b40#/rsi_14]]`, a unique 12-digit prefix of the receipt id). The block is derived entirely from the signed receipt; the receipt's `response_canonical` is the upstream's result without it. The harness runs this as its own condition (`vouch-agent --cite`, runs under `<model>+cite`), and the real-eval report states each condition's citation adherence.
+
 **Tier 2 — deterministic candidate scan (fallback).** Three stages, all deterministic:
 
 1. *Tokenize* (`tokens.py`). Mask structure that is numeric but not a claim, such as dates, clock times, fiscal periods, ordinals, period lengths (*"50-day"*), and chart timeframes. Then classify each remaining span as a point, a multiplier (*"3x"*), or a range (*"60-65"*). Parse magnitude words and suffixes, percent, and currency, and record the resolution of the last displayed digit, which the tolerance policy uses (§6.3). Only points can be judged.

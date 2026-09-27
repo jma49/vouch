@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -58,6 +59,9 @@ type Server struct {
 	SessionID string
 	Clock     clock.Clock
 	Logf      func(format string, args ...any)
+	// Cite adds a block to each receipted result naming the receipt and
+	// its facts, so the model can cite them (design section 5, P-044).
+	Cite bool
 
 	mu       sync.RWMutex
 	routes   map[string]*Upstream
@@ -538,29 +542,80 @@ func (s *Server) handleToolsCall(ctx context.Context, m *mcp.Message) error {
 
 	// The receipt is the product: if it cannot be written, the call
 	// fails rather than passing unverifiable data through.
-	if err := s.record(params.Name, params.Arguments, result, latency); err != nil {
+	r, err := s.record(params.Name, params.Arguments, result, latency)
+	if err != nil {
 		return s.replyError(m, mcp.CodeInternalError, fmt.Sprintf("receipt: %v", err))
+	}
+	if s.Cite {
+		result = withCitations(result, r)
 	}
 	return s.reply(m, result)
 }
 
+// citeIDLen is how much of a receipt id a citation carries. The
+// verifier accepts a unique prefix, and a model copies twelve hex digits
+// more reliably than thirty-two; a prefix shared by two receipts in one
+// log makes the citation ambiguous and UNSUPPORTED, never wrong.
+const citeIDLen = 12
+
+// withCitations appends a text block to a tools/call result telling the
+// model how to cite each fact the receipt holds (design section 5,
+// P-044). Everything in the block comes from the signed receipt, so the
+// agent learns nothing the receipt does not attest. The receipt itself
+// covers the upstream's result without the block: it records what the
+// tool returned, and the block is the proxy's, derived from it. A result
+// with no facts, or one whose content cannot be extended, is returned
+// unchanged.
+func withCitations(result json.RawMessage, r *receipt.Receipt) json.RawMessage {
+	if len(r.Facts) == 0 {
+		return result
+	}
+	var res map[string]json.RawMessage
+	if json.Unmarshal(result, &res) != nil {
+		return result
+	}
+	var content []json.RawMessage
+	if raw, ok := res["content"]; ok && json.Unmarshal(raw, &content) != nil {
+		return result
+	}
+	id := r.ReceiptID[:min(citeIDLen, len(r.ReceiptID))]
+	var b strings.Builder
+	fmt.Fprintf(&b, "[vouch] These values are receipted. When you state one, cite it right after the number as [[r:%s#<pointer>]]:", id)
+	for _, f := range r.Facts {
+		fmt.Fprintf(&b, "\n%s = %s  -> [[r:%s#%s]]", f.Metric, strconv.FormatFloat(f.Value, 'g', -1, 64), id, f.JSONPtr)
+	}
+	block, err := json.Marshal(map[string]string{"type": "text", "text": b.String()})
+	if err != nil {
+		return result
+	}
+	res["content"], err = json.Marshal(append(content, block))
+	if err != nil {
+		return result
+	}
+	out, err := json.Marshal(res)
+	if err != nil {
+		return result
+	}
+	return out
+}
+
 // record writes one signed receipt for a completed tools/call.
-func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int64) error {
+func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int64) (*receipt.Receipt, error) {
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
 	argsCanon, err := receipt.Canonicalize(args)
 	if err != nil {
-		return fmt.Errorf("canonicalize args: %w", err)
+		return nil, fmt.Errorf("canonicalize args: %w", err)
 	}
 	responseCanon, err := receipt.Canonicalize(result)
 	if err != nil {
-		return fmt.Errorf("canonicalize response: %w", err)
+		return nil, fmt.Errorf("canonicalize response: %w", err)
 	}
 	payload, source := resultPayload(result)
 	resultCanon, err := receipt.Canonicalize(payload)
 	if err != nil {
-		return fmt.Errorf("canonicalize result: %w", err)
+		return nil, fmt.Errorf("canonicalize result: %w", err)
 	}
 
 	// A tool error is receipted, because the agent saw it, but it is not
@@ -571,7 +626,7 @@ func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int
 	if schema, ok := s.Schemas[tool]; ok && !isToolError(result) {
 		facts, err = schema.Extract(resultCanon)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		dataAsOf = schema.ResultAsOf(resultCanon)
 	}
@@ -595,7 +650,10 @@ func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int
 	// The log signs (the envelope's signature covers the exact bytes it
 	// writes, package sign) and assigns the turn, continuing a session
 	// already in the log (#69).
-	return s.Log.AppendNextTurn(r)
+	if err := s.Log.AppendNextTurn(r); err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 // isToolError reports whether an MCP tools/call result is flagged as a

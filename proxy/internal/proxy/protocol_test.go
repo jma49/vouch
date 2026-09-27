@@ -131,7 +131,7 @@ func TestAmbiguousToolsCallParamsRejected(t *testing.T) {
 func TestAmbiguousResultFailsCall(t *testing.T) {
 	s, _ := recordingServer(t)
 	result := json.RawMessage(`{"content":[{"type":"text","text":"{\"rsi_14\":99,\"rsi_14\":10}"}]}`)
-	err := s.record("get_indicators", json.RawMessage(`{"symbol":"NVDA"}`), result, 0)
+	_, err := s.record("get_indicators", json.RawMessage(`{"symbol":"NVDA"}`), result, 0)
 	if err == nil || !strings.Contains(err.Error(), "duplicate key") {
 		t.Fatalf("got %v, want duplicate key error", err)
 	}
