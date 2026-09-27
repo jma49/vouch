@@ -89,8 +89,8 @@ _MASKS = [
     re.compile(r"(?m)^[ \t]*(?P<m>\d+)[.)](?=[ \t])"),
     # Ordinals: 3rd, 52nd
     re.compile(r"\b\d+(?:st|nd|rd|th)\b", re.IGNORECASE),
-    # Period lengths: 50-day, 52-week, 5 sessions, 14 days
-    re.compile(rf"\b\d+(?:\.\d+)?[-\s]{_PERIOD_UNIT}\b", re.IGNORECASE),
+    # Period lengths: 50-day, 52-week, 5 sessions, 14 days, 3 trading days
+    re.compile(rf"\b\d+(?:\.\d+)?[-\s](?:trading\s+)?{_PERIOD_UNIT}\b", re.IGNORECASE),
     # Chart timeframes: 1d, 4h, 1w; and minute charts, "15m chart", only
     # when a chart word follows, since "52.4m shares" is 52.4 million
     re.compile(r"\b\d+[hdw]\b"),
