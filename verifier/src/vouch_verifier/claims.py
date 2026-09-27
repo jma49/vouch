@@ -43,6 +43,7 @@ class Claim:
     timeframe: str | None = None
     citation: Citation | None = None
     kind: Kind = "point"  # "multiple" and "range" are never judged as points
+    resolution: float = 0.0  # unit of the last displayed digit (see tokens)
 
 
 @dataclass(frozen=True)
@@ -157,6 +158,7 @@ def _resolve(
         metric=metric,
         unit=unit,
         kind=m.kind,
+        resolution=m.resolution,
     )
 
 
@@ -198,6 +200,7 @@ def extract_claims(
                 text=m.text,
                 tier=1,
                 unit=m.unit,
+                resolution=m.resolution,
                 citation=Citation(receipt_id=cit.group(1), json_ptr=cit.group(2) or "/"),
             )
         )

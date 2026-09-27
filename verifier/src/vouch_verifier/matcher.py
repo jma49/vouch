@@ -19,10 +19,10 @@ from vouch_verifier.receipts import Fact, Receipt
 from vouch_verifier.verdict import Tolerance, Verdict, compare
 
 DEFAULT_TOLERANCES: dict[str, Tolerance] = {
-    "price": Tolerance(abs=0.01),
-    "indicator": Tolerance(rel=1.0e-6, display_rel=0.005),
-    "percentage": Tolerance(abs=0.05),
-    "count": Tolerance(abs=0),
+    "price": Tolerance(abs=0.01, display_round=True),
+    "indicator": Tolerance(rel=1.0e-6, display_rel=0.005, display_round=True),
+    "percentage": Tolerance(abs=0.05, display_round=True),
+    "count": Tolerance(abs=0, display_round=True),
 }
 
 
@@ -34,9 +34,11 @@ def load_tolerances(path: str | Path) -> dict[str, Tolerance]:
     for name, spec in raw.items():
         if not isinstance(spec, dict):
             raise ValueError(f"tolerance {name}: expected a mapping, got {spec!r}")
-        unknown = set(spec) - {"abs", "rel", "display_rel"}
+        unknown = set(spec) - {"abs", "rel", "display_rel", "display_round"}
         if unknown:
             raise ValueError(f"tolerance {name}: unknown keys {sorted(unknown)}")
+        if not isinstance(spec.get("display_round", False), bool):
+            raise ValueError(f"tolerance {name}: display_round must be true or false")
         out[name] = Tolerance(**spec)
     return out
 
@@ -56,6 +58,10 @@ def _tolerance_for(fact: Fact, tolerances: dict[str, Tolerance]) -> Tolerance:
     # Unknown tolerance class means exact comparison — the conservative
     # default; a typo in a schema must not loosen verification.
     return tolerances.get(fact.tol_class, Tolerance())
+
+
+def _judge(claim: Claim, fact: Fact, tolerances: dict[str, Tolerance]) -> Verdict:
+    return compare(claim.value, fact.value, _tolerance_for(fact, tolerances), claim.resolution)
 
 
 def _match_cited(
@@ -78,7 +84,7 @@ def _match_cited(
     receipt = matching[0]
     for fact in receipt.facts:
         if fact.json_ptr == claim.citation.json_ptr:
-            verdict = compare(claim.value, fact.value, _tolerance_for(fact, tolerances))
+            verdict = _judge(claim, fact, tolerances)
             return MatchedClaim(claim, verdict, fact=fact, receipt_id=receipt.receipt_id)
     return MatchedClaim(
         claim,
@@ -136,7 +142,7 @@ def match_claims(
 
             best: tuple[float, str, Fact] | None = None
             for receipt_id, fact in candidates:
-                if compare(claim.value, fact.value, _tolerance_for(fact, tol)) is Verdict.SUPPORTED:
+                if _judge(claim, fact, tol) is Verdict.SUPPORTED:
                     out.append(
                         MatchedClaim(claim, Verdict.SUPPORTED, fact=fact, receipt_id=receipt_id)
                     )

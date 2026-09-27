@@ -189,13 +189,18 @@ Allowed operations: percentage change, difference, ratio, and min/max/count over
 
 ```yaml
 # tolerance.yaml
-price:      { abs: 0.01 }
-indicator:  { rel: 1.0e-6, display_rel: 0.005 }   # display-layer rounding allowed
-percentage: { abs: 0.05 }                          # unit: percentage points
-count:      { abs: 0 }
+price:      { abs: 0.01, display_round: true }
+indicator:  { rel: 1.0e-6, display_rel: 0.005, display_round: true }
+percentage: { abs: 0.05, display_round: true }   # unit: percentage points
+count:      { abs: 0, display_round: true }
 ```
 
-`62.3` reported as "62" is legitimate display rounding (`display_rel`); reported as "68" is a contradiction. Without this two-level distinction the false-positive rate makes the tool unusable. Tolerance policy is config, versioned with the eval, and printed in every report.
+`62.3` reported as "62" is legitimate display rounding; reported as "68" is a contradiction. Without this distinction the false-positive rate makes the tool unusable. Two mechanisms carry it:
+
+- `display_rel`: relative slack for a class, independent of how the claim is written.
+- `display_round`: half a unit of the claim's *own* last displayed digit. "182" asserts a value in 181.5–182.5 and is consistent with 181.52, "181" is not, and "52.4 million" asserts 52.35M–52.45M. Digit swaps and magnitude shifts stay contradictions, because they move the value rather than its precision. The flag is opt-in per class, so an unknown class (a schema typo) gets exact comparison and no slack.
+
+Tolerance policy is config, versioned with the eval, and printed in every report.
 
 ---
 

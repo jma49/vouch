@@ -90,6 +90,7 @@ class NumberToken:
     value: float
     unit: str | None  # "pct" or None
     kind: Kind
+    resolution: float  # unit of the last displayed digit: 0.1 for "62.3"
 
 
 def _merge(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -121,6 +122,11 @@ def _value(num: str) -> float:
     return float(num.replace(",", ""))
 
 
+def _resolution(num: str) -> float:
+    _, dot, decimals = num.partition(".")
+    return 10.0 ** -len(decimals) if dot else 1.0
+
+
 def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberToken]:
     """Return candidate numeric claims in text order.
 
@@ -148,7 +154,17 @@ def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberT
                 continue
             ranges.append(m.span())
             for g in ("a", "b"):
-                tokens.append(NumberToken(m.start(g), m.end(g), m[g], _value(m[g]), None, "range"))
+                tokens.append(
+                    NumberToken(
+                        start=m.start(g),
+                        end=m.end(g),
+                        text=m[g],
+                        value=_value(m[g]),
+                        unit=None,
+                        kind="range",
+                        resolution=_resolution(m[g]),
+                    )
+                )
     masked = _merge([*masked, *ranges])
 
     for m in _TOKEN_RE.finditer(text):
@@ -159,7 +175,15 @@ def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberT
             value = -value
         kind: Kind = "multiple" if m["mult"] else "point"
         tokens.append(
-            NumberToken(m.start(), m.end(), m.group(), value, "pct" if m["pct"] else None, kind)
+            NumberToken(
+                start=m.start(),
+                end=m.end(),
+                text=m.group(),
+                value=value,
+                unit="pct" if m["pct"] else None,
+                kind=kind,
+                resolution=_resolution(m["num"]),
+            )
         )
 
     tokens.sort(key=lambda t: t.start)

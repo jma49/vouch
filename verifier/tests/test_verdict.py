@@ -37,3 +37,40 @@ def test_count_must_be_exact() -> None:
 @pytest.mark.parametrize("claimed,actual", [(0.0, 0.0), (-3.2, -3.2)])
 def test_zero_and_negative(claimed: float, actual: float) -> None:
     assert compare(claimed, actual, INDICATOR) is Verdict.SUPPORTED
+
+
+ROUNDING_PRICE = Tolerance(abs=0.01, display_round=True)
+
+
+@pytest.mark.parametrize(
+    ("claimed", "resolution", "verdict"),
+    [
+        (182.0, 1.0, Verdict.SUPPORTED),  # "182" asserts 181.5-182.5
+        (181.0, 1.0, Verdict.CONTRADICTED),  # "181" asserts 180.5-181.5
+        (181.5, 0.1, Verdict.SUPPORTED),
+        (181.25, 0.01, Verdict.CONTRADICTED),  # digit swap keeps precision
+        (1815.2, 0.1, Verdict.CONTRADICTED),  # magnitude shift
+    ],
+)
+def test_display_round_uses_claim_precision(
+    claimed: float, resolution: float, verdict: Verdict
+) -> None:
+    assert compare(claimed, 181.52, ROUNDING_PRICE, resolution) is verdict
+
+
+def test_display_round_is_opt_in() -> None:
+    # An unknown tolerance class falls back to Tolerance(); it must not
+    # gain rounding slack from the claim's precision.
+    assert compare(182.0, 181.52, Tolerance(), 1.0) is Verdict.CONTRADICTED
+    assert compare(182.0, 181.52, PRICE, 1.0) is Verdict.CONTRADICTED
+
+
+def test_exact_boundary_is_inclusive_despite_float_error() -> None:
+    # 181.53 - 181.52 is 0.010000000000019 in binary floating point.
+    assert compare(181.53, 181.52, PRICE) is Verdict.SUPPORTED
+    assert compare(181.54, 181.52, PRICE) is Verdict.CONTRADICTED
+
+
+def test_policy_is_printable() -> None:
+    assert ROUNDING_PRICE.describe() == "abs=0.01 rel=0.0 display_rel=0.0 display_round=true"
+    assert ROUNDING_PRICE.as_dict()["display_round"] is True

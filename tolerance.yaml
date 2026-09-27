@@ -1,8 +1,12 @@
 # Tolerance policy (docs/design.md section 6.3). Versioned with the
 # eval and printed in every report. Rounding is not hallucination:
-# display_rel is the display-layer slack that keeps "62.3 reported as
-# 62" legitimate while "62.3 reported as 68" stays CONTRADICTED.
-price:      { abs: 0.01 }
-indicator:  { rel: 1.0e-6, display_rel: 0.005 }
-percentage: { abs: 0.05 }   # unit: percentage points
-count:      { abs: 0 }
+#   display_rel    relative display-layer slack ("62.3 reported as 62")
+#   display_round  half a unit of the claim's own last displayed digit:
+#                  "182" asserts 181.5-182.5, so it is consistent with
+#                  181.52 and "181" is not. Digit swaps and magnitude
+#                  errors stay CONTRADICTED because they move the value,
+#                  not the precision.
+price:      { abs: 0.01, display_round: true }
+indicator:  { rel: 1.0e-6, display_rel: 0.005, display_round: true }
+percentage: { abs: 0.05, display_round: true }   # unit: percentage points
+count:      { abs: 0, display_round: true }

@@ -262,15 +262,12 @@ cases:
   # --- display rounding against the claim's own precision ---
   - text: NVDA closed at 182.
     expect: ["182 -> SUPPORTED"]
-    xfail: P-036
   - text: NVDA closed at 181.
     expect: ["181 -> CONTRADICTED"]
   - text: NVDA closed at 181.5.
     expect: ["181.5 -> SUPPORTED"]
-    xfail: P-036
   - text: NVDA's MACD histogram is -0.4.
     expect: ["-0.4 -> SUPPORTED"]
-    xfail: P-036
   - text: NVDA's MACD histogram is -0.5.
     expect: ["-0.5 -> CONTRADICTED"]
 

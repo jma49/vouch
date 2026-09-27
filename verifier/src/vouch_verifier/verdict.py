@@ -28,25 +28,53 @@ class Tolerance:
     abs: absolute tolerance (same unit as the value)
     rel: relative tolerance
     display_rel: additional relative slack for display-layer rounding
+    display_round: allow half a unit of the claim's last displayed
+        digit, so "182" is consistent with 181.52 and "181" is not.
+        Off by default: an unknown class must not gain slack.
     """
 
     abs: float = 0.0
     rel: float = 0.0
     display_rel: float = 0.0
+    display_round: bool = False
 
-    def _within(self, claimed: float, actual: float, extra_rel: float) -> bool:
-        diff = abs(claimed - actual)
-        allowed = max(self.abs, (self.rel + extra_rel) * abs(actual))
-        return diff <= allowed
+    def allowed(self, actual: float, resolution: float = 0.0) -> float:
+        """Largest |claimed - actual| this policy accepts."""
+        slack = max(self.abs, (self.rel + self.display_rel) * abs(actual))
+        if self.display_round:
+            slack = max(slack, resolution / 2)
+        return slack
+
+    def describe(self) -> str:
+        return (
+            f"abs={self.abs} rel={self.rel} display_rel={self.display_rel} "
+            f"display_round={str(self.display_round).lower()}"
+        )
+
+    def as_dict(self) -> dict[str, float | bool]:
+        return {
+            "abs": self.abs,
+            "rel": self.rel,
+            "display_rel": self.display_rel,
+            "display_round": self.display_round,
+        }
 
 
-def compare(claimed: float, actual: float, tol: Tolerance) -> Verdict:
+# Absorbs binary floating-point error at exact tolerance boundaries
+# (181.53 vs 181.52 under abs=0.01), far below any displayed precision.
+_EPSILON = 1e-9
+
+
+def compare(claimed: float, actual: float, tol: Tolerance, resolution: float = 0.0) -> Verdict:
     """Compare a claimed value against a receipted fact value.
 
-    Returns SUPPORTED when within (exact + display) tolerance,
-    CONTRADICTED otherwise. Matching (which fact to compare against)
-    and the remaining verdicts are handled by the matcher, not here.
+    `resolution` is the unit of the claim's last displayed digit (0.1
+    for "62.3"); it only matters under a display_round policy.
+    Returns SUPPORTED within tolerance, CONTRADICTED otherwise. Which
+    fact to compare against, and the remaining verdicts, are the
+    matcher's job.
     """
-    if tol._within(claimed, actual, tol.display_rel):
+    bound = tol.allowed(actual, resolution) + _EPSILON * max(1.0, abs(actual))
+    if abs(claimed - actual) <= bound:
         return Verdict.SUPPORTED
     return Verdict.CONTRADICTED

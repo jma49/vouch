@@ -190,7 +190,7 @@ Reproduced 2026-09-27 against `testdata/receipts_golden.jsonl`.
   `display_rel`). A claim's own displayed precision — "182" asserts
   181.5-182.5 — is never considered, so legitimate rounding outside
   `display_rel` reads as a contradiction.
-- **Status:** open. Reproduced 2026-09-27.
+- **Status:** fixed in `feat(verifier): judge display rounding against the claim's own precision`. Reproduced 2026-09-27.
 
 ### P-037 Multipliers and ranges are judged as point values
 - **Symptom:** `NVDA volume was 3x its 50-day average.` yields
