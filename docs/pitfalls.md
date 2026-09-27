@@ -148,9 +148,9 @@ remembering. The 2026-09-27 audit filed #8-#48; all are closed.
   every `tools/call` returns a `receipt:` internal error.
 - **Cause:** `Server.turn` starts at 0 each process; `store.Log`
   rejects the `(session_id, turn_index)` pairs already in the log.
-- **Fix / workaround:** omit `--session` (random id) or use a new one.
-  Roadmap Phase 5.
-- **Status:** open. Code reading (`proxy/internal/proxy/proxy.go`).
+- **Fix / workaround:** the log now assigns turns
+  (`store.Log.AppendNextTurn`), one past the session's highest.
+- **Status:** fixed (#69). Reproduced by `TestReusedSessionContinuesItsTurns`.
 
 ### P-021 One slow upstream call blocks everything
 - **Symptom:** `ping` and unrelated calls stall while one `tools/call`
@@ -172,9 +172,11 @@ remembering. The 2026-09-27 audit filed #8-#48; all are closed.
 ### P-023 `--upstream` is split on whitespace
 - **Symptom:** upstream commands with quoted arguments or spaces in
   paths start with wrong argv.
-- **Cause:** `proxy.Spawn` uses `strings.Fields`, no shell quoting.
-- **Fix / workaround:** wrap complex invocations in a script.
-- **Status:** open. Documented in code.
+- **Cause:** `proxy.Spawn` used `strings.Fields`, no shell quoting.
+- **Fix / workaround:** POSIX-style word splitting without a shell:
+  quotes and backslashes work, expansions (`$VAR`, globs, `~`, `|`) do
+  not. Anything needing a shell still belongs in a script.
+- **Status:** fixed (#70). Reproduced by `TestParseUpstreams`.
 
 ### P-024 Schema extraction errors fail the agent's call
 - **Symptom:** an upstream response shape change turns a working tool

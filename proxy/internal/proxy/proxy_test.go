@@ -89,6 +89,12 @@ func startProxy(t *testing.T) (*mcp.Client, func(), string) {
 
 func startSession(t *testing.T) *session {
 	t.Helper()
+	return startSessionAt(t, filepath.Join(t.TempDir(), "receipts.jsonl"))
+}
+
+// startSessionAt is startSession on an existing log, as session s-test.
+func startSessionAt(t *testing.T, logPath string) *session {
+	t.Helper()
 
 	upIn, proxyToUp := io.Pipe()   // proxy writes -> upstream reads
 	upOut, upToProxy := io.Pipe()  // upstream writes -> proxy reads
@@ -101,7 +107,6 @@ func startSession(t *testing.T) *session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	logPath := filepath.Join(t.TempDir(), "receipts.jsonl")
 	rlog, err := store.Open(logPath, signer)
 	if err != nil {
 		t.Fatal(err)
@@ -372,5 +377,31 @@ func TestRecordFactsByResultKind(t *testing.T) {
 				t.Fatalf("got %d facts, want %d: %+v", got, tc.facts, receipts[0].Facts)
 			}
 		})
+	}
+}
+
+// TestReusedSessionContinuesItsTurns is #69 end to end: a proxy
+// restarted with the same --session on the same log keeps receipting
+// instead of failing every call on a duplicate (session, turn).
+func TestReusedSessionContinuesItsTurns(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "receipts.jsonl")
+	for run := 0; run < 2; run++ {
+		s := startSessionAt(t, logPath)
+		if _, err := s.agent.Call("initialize", map[string]any{"protocolVersion": "2025-06-18"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.agent.Call("tools/call", map[string]any{
+			"name": "get_indicators", "arguments": map[string]any{"symbol": "NVDA"},
+		}); err != nil {
+			t.Fatalf("run %d: %v", run, err)
+		}
+		s.shutdown()
+	}
+	receipts, err := store.ScanVerified(logPath, signtest.Keyring(signer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipts) != 2 || receipts[0].TurnIndex != 0 || receipts[1].TurnIndex != 1 {
+		t.Fatalf("got %d receipts, want turns 0 and 1", len(receipts))
 	}
 }

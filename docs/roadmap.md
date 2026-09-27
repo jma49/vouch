@@ -164,9 +164,9 @@ measured overhead.
 | `notifications/cancelled` and progress forwarding | todo |
 | Server-to-client requests (sampling, roots, elicitation) forwarded, not treated as protocol errors | partial: no longer break calls (#46), not yet forwarded |
 | Protocol version negotiation with upstreams; `tools/list_changed` handling | todo |
-| Session resume: continue `turn_index` from the log when `--session` is reused | todo |
+| Session resume: continue `turn_index` from the log when `--session` is reused | done (#69) |
 | Streamable HTTP transport | todo |
-| Upstream command parsing with proper quoting | todo |
+| Upstream command parsing with proper quoting | done (#70) |
 | Integration tests against official MCP reference servers in CI | todo |
 | Benchmarks: added latency p50/p99 per `tools/call`, published in README | todo |
 

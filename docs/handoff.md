@@ -98,6 +98,24 @@ entry whenever a choice closes off an alternative (AGENTS.md).
 - Revisit when: a tool treats `5` and `5.0` differently (then the key
   must be per-tool configurable).
 
+**The log, not the proxy, numbers a session's turns** (#69)
+- Chosen: `store.Log.AppendNextTurn` assigns `turn_index` inside the
+  append lock, one past the session's highest in the log.
+- Rejected: a counter in the proxy seeded from the log at startup (two
+  sources of truth, and racy once calls run concurrently).
+- Why: the log already indexes every (session, turn) for replay
+  protection, and it is the one place appends are serialized.
+- Cost: `turn_index` is the order receipts were written, not the order
+  requests arrived; under concurrency (#67) the two can differ.
+
+**Upstream commands are split like a shell, not run by one** (#70)
+- Chosen: POSIX quoting and backslashes; no expansion of any kind.
+- Rejected: `sh -c` (expansions make the argv, and so the default
+  upstream name that keys fixtures, depend on the environment); a JSON
+  argv flag (awkward to type, and unquoted commands already work).
+- Cost: pipes, redirects, and `$VAR` in `--upstream` are literal
+  characters; such upstreams need a wrapper script.
+
 **Differential fuzzing runs through a CLI, not a shared library** (#63)
 - Chosen: `vouch canon --lines` (base64 in, base64 or `!error` out);
   the Python test batches documents through it. The Go fuzz target
