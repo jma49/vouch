@@ -300,6 +300,19 @@ entry whenever a choice closes off an alternative (AGENTS.md).
 - Revisit when: agents cite reliably enough to make Tier 1 the default.
 
 
+**Proxy lifecycle and limits** (#100)
+- Chosen: the tool catalog follows every upstream page and is built on
+  first use (after the agent's `initialized`), served to the agent in
+  one page (an agent cursor is refused); calls the proxy makes itself
+  get 30 s; upstream notifications go through one ordered queue of 256
+  and are dropped past it; the HTTP endpoint allows 64 requests in
+  flight, checks Host when on loopback, reads within a minute, and
+  follows no redirects; SSE lines are capped at the frame limit.
+- Rejected: proxying upstream cursors (meaningless across upstreams);
+  blocking the upstream's reader on a slow agent.
+- Cost: an agent that cannot keep up loses progress notifications; a
+  very large tool catalog is sent whole.
+
 **Streamable HTTP: one session per process, simple stream routing** (#79)
 - Chosen: `--listen` serves exactly one session; DELETE or a signal
   ends it and seals the log, as EOF does on stdio. Every POSTed request

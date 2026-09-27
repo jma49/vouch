@@ -26,6 +26,10 @@ func newSSEReader(r io.Reader) *sseReader {
 func (s *sseReader) Next() (*Message, error) {
 	for {
 		line, err := s.readLine()
+		if errors.Is(err, errLineTooLong) {
+			s.data.Reset()
+			return nil, &FrameError{Code: CodeInvalidRequest, Err: fmt.Errorf("%w of %d bytes", ErrFrameTooLarge, MaxFrame)}
+		}
 		if err != nil {
 			if errors.Is(err, io.EOF) && s.data.Len() > 0 {
 				return s.dispatch() // a final event without its blank line
@@ -62,14 +66,37 @@ func (s *sseReader) dispatch() (*Message, error) {
 }
 
 // readLine returns one line without its terminator (LF, CRLF, or CR
-// before LF, per the SSE spec's common forms).
+// before LF, per the SSE spec's common forms). A line longer than
+// MaxFrame is read through and discarded, never held: an upstream must
+// not be able to exhaust memory with one endless line (#100).
 func (s *sseReader) readLine() ([]byte, error) {
-	line, err := s.r.ReadBytes('\n')
-	if err != nil && (len(line) == 0 || !errors.Is(err, io.EOF)) {
-		return nil, err
+	var line []byte
+	for {
+		chunk, err := s.r.ReadSlice('\n')
+		if len(line)+len(chunk) > MaxFrame+2 {
+			for errors.Is(err, bufio.ErrBufferFull) {
+				_, err = s.r.ReadSlice('\n')
+			}
+			if err != nil && !errors.Is(err, io.EOF) {
+				return nil, err
+			}
+			return nil, errLineTooLong
+		}
+		line = append(line, chunk...)
+		switch {
+		case err == nil:
+			return bytes.TrimRight(line, "\r\n"), nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case errors.Is(err, io.EOF) && len(line) > 0:
+			return bytes.TrimRight(line, "\r\n"), nil
+		default:
+			return nil, err
+		}
 	}
-	return bytes.TrimRight(line, "\r\n"), nil
 }
+
+var errLineTooLong = errors.New("sse: line too long")
 
 // writeSSE writes one message as one event.
 func writeSSE(w io.Writer, raw []byte) error {

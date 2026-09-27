@@ -404,3 +404,44 @@ func TestAbsentParamsAreOmittedNotNull(t *testing.T) {
 		t.Fatalf("real params lost: %s", buf.String())
 	}
 }
+
+// TestClientSeesACancelRightBehindItsRequest pins #100: a cancellation
+// that arrives with its request is not lost to the handler goroutine
+// starting late.
+func TestClientSeesACancelRightBehindItsRequest(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		peerIn, clientToPeer := io.Pipe()
+		clientIn, peerToClient := io.Pipe()
+		c := NewClient(NewConn(clientIn, clientToPeer))
+		cancelled := make(chan struct{})
+		c.Handle(&recordingHandler{notes: make(chan *Message, 8), requests: make(chan *Message, 8),
+			answer: func(ctx context.Context, _ *Message) (json.RawMessage, error) {
+				<-ctx.Done()
+				close(cancelled)
+				return nil, ctx.Err()
+			}})
+		c.Start()
+		go io.Copy(io.Discard, peerIn)
+		_, _ = io.WriteString(peerToClient, `{"jsonrpc":"2.0","id":7,"method":"roots/list"}`+"\n"+
+			`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7}}`+"\n")
+		select {
+		case <-cancelled:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("run %d: the cancellation was lost", i)
+		}
+		peerToClient.Close()
+		clientToPeer.Close()
+	}
+}
+
+func TestSSEOversizedLineIsSkipped(t *testing.T) {
+	huge := "data: " + strings.Repeat("x", MaxFrame+10) + "\n\n"
+	r := newSSEReader(strings.NewReader(huge + "data: {\"jsonrpc\":\"2.0\",\"method\":\"ok\"}\n\n"))
+	var fe *FrameError
+	if _, err := r.Next(); !errors.As(err, &fe) || !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("oversized line: %v", err)
+	}
+	if m, err := r.Next(); err != nil || m.Method != "ok" {
+		t.Fatalf("after an oversized line: %+v, %v", m, err)
+	}
+}

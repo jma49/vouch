@@ -265,3 +265,10 @@ func TestUpstreamEnvDropsVouchVariables(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+func TestConnectRefusesCredentialsInTheURL(t *testing.T) {
+	_, err := Connect(UpstreamSpec{Name: "https://user:pw@example.test/mcp", Command: "https://user:pw@example.test/mcp"}, nil)
+	if err == nil || strings.Contains(err.Error(), "pw") {
+		t.Fatalf("got %v, want a refusal that does not echo the password", err)
+	}
+}

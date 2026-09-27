@@ -48,7 +48,13 @@ func NewHTTPClient(url string, header http.Header, logf func(format string, args
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &HTTPClient{
-		url: url, header: header, http: &http.Client{}, logf: logf,
+		url: url, header: header, logf: logf,
+		// Redirects are not followed: Go would carry custom headers
+		// (X-API-Key and the like) to wherever the upstream points, even
+		// from https to http (#100). A redirect is reported instead.
+		http: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}},
 		in: make(chan *Message, 64), ctx: ctx, cancel: cancel,
 	}
 }
@@ -78,7 +84,11 @@ func (h *HTTPClient) Write(m *Message) error {
 		return fmt.Errorf("mcp: marshal frame: %w", err)
 	}
 	if m.Method == "" || len(m.ID) == 0 {
-		resp, err := h.post(body)
+		// Sent synchronously, so bounded: a hung upstream must not stall
+		// whoever is forwarding a notification to it (#100).
+		ctx, cancel := context.WithTimeout(h.ctx, notifyTimeout)
+		defer cancel()
+		resp, err := h.post(ctx, body)
 		if err != nil {
 			return err
 		}
@@ -93,8 +103,11 @@ func (h *HTTPClient) Write(m *Message) error {
 	return nil
 }
 
-func (h *HTTPClient) post(body []byte) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(h.ctx, http.MethodPost, h.url, bytes.NewReader(body))
+// notifyTimeout bounds a notification or response POST.
+var notifyTimeout = 30 * time.Second
+
+func (h *HTTPClient) post(ctx context.Context, body []byte) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("mcp: %w", err)
 	}
@@ -126,7 +139,7 @@ func (h *HTTPClient) decorate(req *http.Request) {
 }
 
 func (h *HTTPClient) request(m *Message, body []byte) {
-	resp, err := h.post(body)
+	resp, err := h.post(h.ctx, body)
 	if err != nil {
 		h.fail(m.ID, err)
 		return

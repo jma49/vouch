@@ -348,7 +348,18 @@ func (c *Client) readLoop() {
 		case m.Method != "" && len(m.ID) == 0:
 			c.notification(m)
 		case m.Method != "":
-			go c.request(m)
+			// Registered here, before the next message is read, so a
+			// notifications/cancelled right behind the request finds it
+			// (#100).
+			ctx, cancel := context.WithCancel(context.Background())
+			c.mu.Lock()
+			if c.closeErr != nil {
+				cancel()
+			} else {
+				c.inbound[string(bytes.TrimSpace(m.ID))] = cancel
+			}
+			c.mu.Unlock()
+			go c.request(ctx, cancel, m)
 		default:
 			c.response(m)
 		}
@@ -428,13 +439,11 @@ func (c *Client) notification(m *Message) {
 	}
 }
 
-func (c *Client) request(m *Message) {
+func (c *Client) request(ctx context.Context, cancel context.CancelFunc, m *Message) {
 	key := string(bytes.TrimSpace(m.ID))
-	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c.mu.Lock()
 	h := c.handler
-	c.inbound[key] = cancel
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()

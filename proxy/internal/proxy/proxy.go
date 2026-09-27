@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jma49/vouch/proxy/internal/clock"
 	"github.com/jma49/vouch/proxy/internal/extract"
@@ -64,7 +65,7 @@ type Server struct {
 	Cite bool
 
 	mu       sync.RWMutex
-	routes   map[string]*Upstream
+	catalog  *catalog
 	inflight map[string]context.CancelFunc // downstream request id -> cancel
 	writeErr error                         // first failed write to the agent
 	wg       sync.WaitGroup                // requests being served
@@ -74,7 +75,18 @@ type Server struct {
 	downPending map[string]chan *mcp.Message
 	downNext    int64
 	downClosed  bool
+
+	// Notifications from upstreams wait here for one writer, so an
+	// upstream's reader never blocks on a slow agent (#100) and their
+	// order is kept.
+	notes     chan *mcp.Message
+	notesDone chan struct{}
 }
+
+// noteQueue bounds notifications waiting for a slow agent; past it,
+// they are dropped (they are progress and logs, and the agent can ask
+// for tools/list again).
+const noteQueue = 256
 
 // SupportedVersions are the MCP protocol versions the proxy can speak,
 // newest first. The proxy forwards messages it does not interpret, so
@@ -98,6 +110,8 @@ func (s *Server) logf(format string, args ...any) {
 func (s *Server) Run() error {
 	s.inflight = make(map[string]context.CancelFunc)
 	s.downPending = make(map[string]chan *mcp.Message)
+	s.notes, s.notesDone = make(chan *mcp.Message, noteQueue), make(chan struct{})
+	go s.pumpNotes(s.notes, s.notesDone)
 	for _, u := range s.Upstreams {
 		if l, ok := u.Client.(interface{ Handle(mcp.Handler) }); ok {
 			l.Handle(&upstreamHandler{s: s, u: u})
@@ -109,6 +123,11 @@ func (s *Server) Run() error {
 	// hold Wait forever.
 	s.closeDown()
 	s.wg.Wait()
+	s.mu.Lock()
+	close(s.notes)
+	s.notes = nil
+	s.mu.Unlock()
+	<-s.notesDone
 	if err == nil {
 		s.mu.Lock()
 		err = s.writeErr
@@ -279,9 +298,26 @@ func (h *upstreamHandler) HandleNotification(m *mcp.Message) {
 	}
 }
 
+// forwardNote queues a notification for the agent without blocking.
 func (s *Server) forwardNote(m *mcp.Message, u *Upstream) {
-	if err := s.Down.Write(&mcp.Message{Method: m.Method, Params: m.Params}); err != nil {
-		s.logf("proxy: forward %s from %s: %v", m.Method, u.Name, err)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.notes == nil {
+		return // the session is over
+	}
+	select {
+	case s.notes <- &mcp.Message{Method: m.Method, Params: m.Params}:
+	default:
+		s.logf("proxy: agent is not reading; dropped %s from %s", m.Method, u.Name)
+	}
+}
+
+func (s *Server) pumpNotes(notes <-chan *mcp.Message, done chan<- struct{}) {
+	defer close(done)
+	for m := range notes {
+		if err := s.Down.Write(m); err != nil {
+			s.logf("proxy: forward %s: %v", m.Method, err)
+		}
 	}
 }
 
@@ -389,8 +425,12 @@ func cancelled(ctx context.Context, err error) bool {
 // support, initialize fails and says why rather than guessing (#68).
 func (s *Server) handleInitialize(m *mcp.Message) error {
 	versions := make([]string, len(s.Upstreams))
+	// Bounded: initialize is served before the next agent message is
+	// read, so a hung upstream would otherwise hold the session (#100).
+	ctx, cancel := context.WithTimeout(context.Background(), upstreamTimeout)
+	defer cancel()
 	for i, u := range s.Upstreams {
-		raw, err := u.Client.CallContext(context.Background(), "initialize", json.RawMessage(m.Params))
+		raw, err := u.Client.CallContext(ctx, "initialize", json.RawMessage(m.Params))
 		if err != nil {
 			return s.replyError(m, mcp.CodeInternalError, fmt.Sprintf("upstream %s initialize: %v", u.Name, err))
 		}
@@ -402,9 +442,6 @@ func (s *Server) handleInitialize(m *mcp.Message) error {
 	}
 	version, err := s.negotiate(m.Params, versions)
 	if err != nil {
-		return s.replyError(m, mcp.CodeInternalError, err.Error())
-	}
-	if err := s.refreshRoutes(); err != nil {
 		return s.replyError(m, mcp.CodeInternalError, err.Error())
 	}
 	result := map[string]any{
@@ -448,56 +485,130 @@ func (s *Server) negotiate(params json.RawMessage, versions []string) (string, e
 		chosen, strings.Join(SupportedVersions, ", "))
 }
 
-// refreshRoutes rebuilds the tool -> upstream routing table from every
-// upstream's tools/list. Name collisions are an error: silently picking
-// a winner would attribute receipts to the wrong upstream.
-func (s *Server) refreshRoutes() error {
-	routes := make(map[string]*Upstream)
+// catalog is the merged tool list the agent sees and the routing table
+// built from it, rebuilt on demand and on tools/list_changed.
+type catalog struct {
+	tools  []json.RawMessage
+	routes map[string]*Upstream
+}
+
+// maxToolPages bounds how many pages one upstream's tools/list may take.
+const maxToolPages = 100
+
+// upstreamTimeout bounds a call the proxy makes on its own behalf
+// (initialize, tools/list, notifications): an upstream that never
+// answers must not hold the session open (#100). A variable so tests
+// can shorten it.
+var upstreamTimeout = 30 * time.Second
+
+// loadCatalog lists every upstream's tools, following nextCursor to the
+// last page (#100), and builds the routes. Name collisions are an
+// error: silently picking a winner would attribute receipts to the
+// wrong upstream.
+func (s *Server) loadCatalog(ctx context.Context) (*catalog, error) {
+	c := &catalog{routes: make(map[string]*Upstream)}
 	for _, u := range s.Upstreams {
-		raw, err := u.Client.CallContext(context.Background(), "tools/list", nil)
-		if err != nil {
-			return fmt.Errorf("upstream %s tools/list: %w", u.Name, err)
-		}
-		var res struct {
-			Tools []struct {
-				Name string `json:"name"`
-			} `json:"tools"`
-		}
-		if err := json.Unmarshal(raw, &res); err != nil {
-			return fmt.Errorf("upstream %s tools/list: %w", u.Name, err)
-		}
-		for _, tool := range res.Tools {
-			if prev, dup := routes[tool.Name]; dup {
-				return fmt.Errorf("tool %q served by both %s and %s", tool.Name, prev.Name, u.Name)
+		cursor := ""
+		for page := 0; ; page++ {
+			if page == maxToolPages {
+				return nil, fmt.Errorf("upstream %s tools/list: more than %d pages", u.Name, maxToolPages)
 			}
-			routes[tool.Name] = u
+			var params any
+			if cursor != "" {
+				params = map[string]string{"cursor": cursor}
+			}
+			raw, err := u.Client.CallContext(ctx, "tools/list", params)
+			if err != nil {
+				return nil, fmt.Errorf("upstream %s tools/list: %w", u.Name, err)
+			}
+			var res struct {
+				Tools      []json.RawMessage `json:"tools"`
+				NextCursor string            `json:"nextCursor"`
+			}
+			if err := receipt.DecodeStrict(raw, &res); err != nil {
+				return nil, fmt.Errorf("upstream %s tools/list: %w", u.Name, err)
+			}
+			for _, tool := range res.Tools {
+				var t struct {
+					Name string `json:"name"`
+				}
+				if err := receipt.DecodeStrict(tool, &t); err != nil || t.Name == "" {
+					return nil, fmt.Errorf("upstream %s tools/list: a tool without a readable name", u.Name)
+				}
+				if prev, dup := c.routes[t.Name]; dup {
+					return nil, fmt.Errorf("tool %q served by both %s and %s", t.Name, prev.Name, u.Name)
+				}
+				c.routes[t.Name] = u
+				c.tools = append(c.tools, tool)
+			}
+			if res.NextCursor == "" {
+				break
+			}
+			cursor = res.NextCursor
 		}
 	}
+	return c, nil
+}
+
+// refreshRoutes reloads the catalog, as after tools/list_changed.
+func (s *Server) refreshRoutes() error {
+	ctx, cancel := context.WithTimeout(context.Background(), upstreamTimeout)
+	defer cancel()
+	c, err := s.loadCatalog(ctx)
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
-	s.routes = routes
+	s.catalog = c
 	s.mu.Unlock()
 	return nil
 }
 
-func (s *Server) handleToolsList(ctx context.Context, m *mcp.Message) error {
-	var merged []json.RawMessage
-	for _, u := range s.Upstreams {
-		raw, err := u.Client.CallContext(ctx, "tools/list", json.RawMessage(m.Params))
-		if cancelled(ctx, err) {
-			return nil
+// routes returns the current routing table, loading the catalog on first
+// use. Routes are built lazily rather than during initialize: MCP
+// expects no requests to an upstream before the agent's
+// notifications/initialized has reached it (#100).
+func (s *Server) route(ctx context.Context, tool string) (*Upstream, error) {
+	s.mu.RLock()
+	c := s.catalog
+	s.mu.RUnlock()
+	if c == nil {
+		if err := s.refreshRoutes(); err != nil {
+			return nil, err
 		}
-		if err != nil {
-			return s.replyError(m, mcp.CodeInternalError, fmt.Sprintf("upstream %s tools/list: %v", u.Name, err))
-		}
-		var res struct {
-			Tools []json.RawMessage `json:"tools"`
-		}
-		if err := json.Unmarshal(raw, &res); err != nil {
-			return s.replyError(m, mcp.CodeInternalError, fmt.Sprintf("upstream %s tools/list: %v", u.Name, err))
-		}
-		merged = append(merged, res.Tools...)
+		s.mu.RLock()
+		c = s.catalog
+		s.mu.RUnlock()
 	}
-	raw, err := json.Marshal(map[string]any{"tools": merged})
+	return c.routes[tool], nil
+}
+
+// handleToolsList serves the merged tool list in one page. Upstream
+// pages are the proxy's business: an agent's cursor would mean nothing
+// across several upstreams, so none is accepted (#100).
+func (s *Server) handleToolsList(ctx context.Context, m *mcp.Message) error {
+	var params struct {
+		Cursor string `json:"cursor"`
+	}
+	if len(m.Params) > 0 {
+		if err := receipt.DecodeStrict(m.Params, &params); err != nil {
+			return s.replyError(m, mcp.CodeInvalidParams, fmt.Sprintf("tools/list: params: %v", err))
+		}
+	}
+	if params.Cursor != "" {
+		return s.replyError(m, mcp.CodeInvalidParams, "tools/list: vouch proxy lists every tool in one page; no cursor")
+	}
+	c, err := s.loadCatalog(ctx)
+	if cancelled(ctx, err) {
+		return nil
+	}
+	if err != nil {
+		return s.replyError(m, mcp.CodeInternalError, err.Error())
+	}
+	s.mu.Lock()
+	s.catalog = c
+	s.mu.Unlock()
+	raw, err := json.Marshal(map[string]any{"tools": c.tools})
 	if err != nil {
 		return err
 	}
@@ -523,10 +634,11 @@ func (s *Server) handleToolsCall(ctx context.Context, m *mcp.Message) error {
 	if params.Name == "" {
 		return s.replyError(m, mcp.CodeInvalidParams, "tools/call: missing tool name")
 	}
-	s.mu.RLock()
-	u, ok := s.routes[params.Name]
-	s.mu.RUnlock()
-	if !ok {
+	u, err := s.route(ctx, params.Name)
+	if err != nil {
+		return s.replyError(m, mcp.CodeInternalError, err.Error())
+	}
+	if u == nil {
 		return s.replyError(m, mcp.CodeInvalidParams, fmt.Sprintf("tools/call: unknown tool %q", params.Name))
 	}
 
