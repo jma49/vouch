@@ -409,6 +409,17 @@ def _resolve(
     )
 
 
+def _citation_runs(answer: str, citations: list[re.Match[str]]) -> list[list[re.Match[str]]]:
+    """Group citation markers separated only by whitespace."""
+    runs: list[list[re.Match[str]]] = []
+    for cit in citations:
+        if runs and not answer[runs[-1][-1].end() : cit.start()].strip():
+            runs[-1].append(cit)
+        else:
+            runs.append([cit])
+    return runs
+
+
 def extract_claims(
     answer: str,
     known_entities: set[str] | frozenset[str] = frozenset(),
@@ -425,34 +436,37 @@ def extract_claims(
     claims: list[Claim] = []
     unresolved: list[Claim] = []
 
-    # Tier 1: each citation binds to the nearest preceding number in the
-    # same sentence.
-    for cit in citations:
-        sent_start, _ = _sentence_bounds(answer, cit.start())
+    # Tier 1: a run of adjacent citations binds, left to right, to the same
+    # number of preceding numbers in the sentence, so "62.3 and -0.42
+    # [[rsi]][[macd]]" pairs 62.3 with rsi (issue #12). A single citation
+    # is the one-element case: the nearest preceding number. A run with
+    # more citations than numbers is ambiguous and binds nothing.
+    for group in _citation_runs(answer, citations):
+        sent_start, _ = _sentence_bounds(answer, group[0].start())
         candidates = [
             i
             for i, m in enumerate(numbers)
             if i not in consumed
             and m.kind == "point"
             and sent_start <= m.start
-            and m.end <= cit.start()
+            and m.end <= group[0].start()
         ]
-        if not candidates:
-            continue  # dangling citation; the matcher flags it via coverage
-        i = candidates[-1]
-        m = numbers[i]
-        consumed.add(i)
-        claims.append(
-            Claim(
-                value=m.value,
-                span=(m.start, m.end),
-                text=m.text,
-                tier=1,
-                unit=m.unit,
-                resolution=m.resolution,
-                citation=Citation(receipt_id=cit.group(1), json_ptr=cit.group(2) or "/"),
+        if len(candidates) < len(group):
+            continue  # dangling or ambiguous; the matcher flags it via coverage
+        for i, cit in zip(candidates[-len(group) :], group, strict=True):
+            m = numbers[i]
+            consumed.add(i)
+            claims.append(
+                Claim(
+                    value=m.value,
+                    span=(m.start, m.end),
+                    text=m.text,
+                    tier=1,
+                    unit=m.unit,
+                    resolution=m.resolution,
+                    citation=Citation(receipt_id=cit.group(1), json_ptr=cit.group(2) or "/"),
+                )
             )
-        )
 
     # Tier 2: remaining numbers need an entity and a metric in-sentence.
     for i, m in enumerate(numbers):

@@ -264,6 +264,14 @@ cases:
       AMD RSI is 48.1
     expect: ["62.3 -> SUPPORTED (NVDA)", "48.1 -> SUPPORTED (AMD)"]
 
+  # --- stacked citations bind left to right (#12) ---
+  - text: NVDA RSI is 62.3 and MACD is -0.42 [[r:r-nvda-ind#/rsi_14]][[r:r-nvda-ind#/macd_hist]].
+    expect: ["62.3 -> SUPPORTED", "-0.42 -> SUPPORTED"]
+  - text: NVDA RSI is 62.3 and MACD is -0.42 [[r:r-nvda-ind#/rsi_14]] [[r:r-nvda-ind#/macd_hist]].
+    expect: ["62.3 -> SUPPORTED", "-0.42 -> SUPPORTED"]
+  - text: NVDA MACD histogram is -0.42 [[r:r-nvda-ind#/rsi_14]][[r:r-nvda-ind#/macd_hist]].
+    expect: ["-0.42 -> SUPPORTED (NVDA macd_hist)"]
+
   # --- dates, times, quarters, ordinals, periods are not claims ---
   - text: As of 2026-07-24, NVDA closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]
