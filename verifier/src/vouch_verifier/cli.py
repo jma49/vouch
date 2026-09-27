@@ -115,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         as_of=args.as_of if as_of else None,
         lookahead=lookahead,
         answer=answer,
+        signatures_verified=keys is not None,
     )
 
     render = {"json": to_json, "html": to_html}.get(args.format, to_markdown)

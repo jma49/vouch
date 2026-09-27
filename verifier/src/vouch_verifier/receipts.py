@@ -116,6 +116,17 @@ def _check_case(obj: dict[str, object], known: frozenset[str], where: str) -> No
             )
 
 
+def _check_fact_types(f: dict[str, object], lineno: int) -> None:
+    """Fact fields of the wrong type are a malformed log, reported as
+    such, not a TypeError deep in matching (#96)."""
+    for key in ("entity", "metric", "json_ptr", "tol_class"):
+        if not isinstance(f.get(key, ""), str):
+            raise ReceiptError(f"line {lineno}: fact {key} is not a string")
+    for key in ("unit", "as_of", "timeframe"):
+        if f.get(key) is not None and not isinstance(f.get(key), str):
+            raise ReceiptError(f"line {lineno}: fact {key} is not a string")
+
+
 def _parse_receipt(line: str, lineno: int) -> Receipt:
     tree = parse_preserving(line)
     if not isinstance(tree, dict):
@@ -149,6 +160,7 @@ def _parse_receipt(line: str, lineno: int) -> Receipt:
             if not isinstance(f, dict):
                 raise ReceiptError(f"line {lineno}: fact is not an object: {f!r:.60}")
             _check_case(f, FACT_KEYS, f"line {lineno}: fact")
+            _check_fact_types(f, lineno)
             facts.append(
                 Fact(
                     entity=f.get("entity", ""),

@@ -79,7 +79,10 @@ def load_vocabulary(path: str | Path) -> Vocabulary:
     """Read a vocabulary YAML file. Unknown keys and units are errors: a
     typo must tighten verification (fewer resolved claims), never loosen
     it silently (AGENTS.md invariant 3)."""
-    raw: Any = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    try:
+        raw: Any = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as e:
+        raise ValueError(f"vocabulary {path}: {e}") from e
     if not isinstance(raw, dict):
         raise ValueError(f"vocabulary {path}: expected a mapping")
     unknown = set(raw) - {"synonyms", "units", "signed", "pct_fallback", "move_target", "series"}

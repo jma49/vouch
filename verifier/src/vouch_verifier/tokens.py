@@ -285,13 +285,22 @@ def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberT
             value = -value
         kind: Kind = "multiple" if m["mult"] else "point"
         unit = "pct" if m["pct"] else None
-        if unit is None and (
+        # Where the number's prefix starts: before a currency mark, so
+        # "-$1,200" and "($1,200)" keep their sign (#96).
+        lead = m.start()
+        currency = _CURRENCY_BEFORE_RE.search(text, max(0, m.start() - 4), m.start())
+        if unit is None and (currency or _CURRENCY_AFTER_RE.match(text[m.end() :])):
             # Only the few characters before the number can be "$" or "USD ";
             # searching the whole prefix made tokenization quadratic (#19).
-            _CURRENCY_BEFORE_RE.search(text, max(0, m.start() - 4), m.start())
-            or _CURRENCY_AFTER_RE.match(text[m.end() :])
-        ):
             unit = "USD"
+        signed = m["sign"] is not None
+        if currency is not None and not signed:
+            lead = currency.start()
+            if lead > 0 and text[lead - 1] in MINUS_SIGNS:
+                value, signed = -value, True
+        closing = text[m.end() : m.end() + 1] == ")"
+        if unit is None and closing and text[m.end() + 1 : m.end() + 2] == "%":
+            unit = "pct"  # "(1.35)%"
         tokens.append(
             NumberToken(
                 start=m.start(),
@@ -301,10 +310,8 @@ def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberT
                 unit=unit,
                 kind=kind,
                 resolution=_resolution(m["num"]) * scale,
-                signed=m["sign"] is not None,
-                parenthesized=m.start() > 0
-                and text[m.start() - 1] == "("
-                and text[m.end() : m.end() + 1] == ")",
+                signed=signed,
+                parenthesized=lead > 0 and text[lead - 1] == "(" and closing,
             )
         )
 

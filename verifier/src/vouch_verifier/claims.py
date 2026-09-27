@@ -123,7 +123,18 @@ _MOVE_TARGET_RE = re.compile(r"(?:%|\d)\s+(?:to|at)\s+\$?$", re.IGNORECASE)
 
 # "down 1.35%" claims -1.35, not 1.35 — without this, sign flips are
 # invisible to the matcher.
-_NEGATION_RE = re.compile(r"\b(down|fell|dropped|declined|lost|slid)\b", re.IGNORECASE)
+_NEGATION_RE = re.compile(
+    r"\b(down|fell|falls?|dropped|drops?|declined|declines?|decline of|lost|loss of|slid|dipped"
+    r"|dips?|slipped|decreased|decrease of)\b",
+    re.IGNORECASE,
+)
+# "didn't fall 1.35%", "was not down 2%": a direction the sentence
+# denies. Signing the number either way would be a guess, so the claim
+# is left unresolved (#96).
+_DENIED_DIRECTION_RE = re.compile(
+    r"(?:\bnot\b|n't\b|\bnever\b|\bno longer\b)[^.;,]{0,20}?" + _NEGATION_RE.pattern,
+    re.IGNORECASE,
+)
 
 
 # Scope boundaries inside a sentence (P-032). Independent clauses split
@@ -529,6 +540,8 @@ def _resolve(
         _negated_by_direction(answer, m, scope)
     ):
         value = -value
+    if m.unit == "pct" and _DENIED_DIRECTION_RE.search(answer, scope.phrase[0], m.start):
+        metric = None
     derivation = None if cell is not None else _derivation(answer, m, scope, vocab)
     if derivation == _AMBIGUOUS_PERIOD:
         # Unresolved rather than guessed: the claim becomes UNVERIFIABLE.

@@ -9,6 +9,7 @@ section 6.2), and UNVERIFIABLE for spans extraction could not resolve.
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass, replace
@@ -34,8 +35,16 @@ DEFAULT_TOLERANCES: dict[str, Tolerance] = {
 
 def load_tolerances(path: str | Path) -> dict[str, Tolerance]:
     """Load a tolerance policy file (design section 6.3)."""
+    # Every way the file can be wrong is a ValueError, which the CLIs
+    # report with exit 2; a traceback would exit 1, which means "the
+    # answer misreports its tools" (#96).
     with open(path, encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
+        try:
+            raw = yaml.safe_load(f) or {}
+        except yaml.YAMLError as e:
+            raise ValueError(f"tolerance policy {path}: {e}") from e
+    if not isinstance(raw, dict):
+        raise ValueError(f"tolerance policy {path}: expected a mapping of classes")
     out: dict[str, Tolerance] = {}
     for name, spec in raw.items():
         if not isinstance(spec, dict):
@@ -45,6 +54,15 @@ def load_tolerances(path: str | Path) -> dict[str, Tolerance]:
             raise ValueError(f"tolerance {name}: unknown keys {sorted(unknown)}")
         if not isinstance(spec.get("display_round", False), bool):
             raise ValueError(f"tolerance {name}: display_round must be true or false")
+        for key in ("abs", "rel", "display_rel"):
+            v = spec.get(key, 0.0)
+            if (
+                isinstance(v, bool)
+                or not isinstance(v, int | float)
+                or not math.isfinite(v)
+                or v < 0
+            ):
+                raise ValueError(f"tolerance {name}: {key} must be a finite, non-negative number")
         out[name] = Tolerance(**spec)
     return out
 
