@@ -16,8 +16,10 @@ state the tier mix (design: "Tier 1 covered N% of numeric claims").
 from __future__ import annotations
 
 import re
+from bisect import bisect_left, bisect_right
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import lru_cache
 
 from vouch_verifier.tokens import MINUTE_TIMEFRAME, Kind, NumberToken, find_dates, tokenize
 
@@ -172,12 +174,23 @@ class _Scope:
     phrase: _Bounds
 
 
+@lru_cache(maxsize=16)
+def _sentence_breaks(answer: str) -> tuple[list[int], list[int]]:
+    """Every sentence break in the answer, found once: (break starts,
+    the offsets just past each break). Looking bounds up per number used
+    to rescan from the start, which made extraction quadratic (#19)."""
+    matches = list(_SENTENCE_SPLIT_RE.finditer(answer))
+    return [m.start() for m in matches], [m.end() for m in matches]
+
+
 def _sentence_bounds(answer: str, pos: int) -> _Bounds:
-    start = 0
-    for m in _SENTENCE_SPLIT_RE.finditer(answer, 0, pos):
-        start = m.end()
-    end = _SENTENCE_SPLIT_RE.search(answer, pos)
-    return start, end.start() + 1 if end else len(answer)
+    starts, ends = _sentence_breaks(answer)
+    # The last break that ends at or before pos opens the sentence ...
+    i = bisect_right(ends, pos) - 1
+    start = ends[i] if i >= 0 else 0
+    # ... and the first break starting at or after pos closes it.
+    j = bisect_left(starts, pos)
+    return start, starts[j] + 1 if j < len(starts) else len(answer)
 
 
 def _segment(answer: str, bounds: _Bounds, pos: int, splitter: re.Pattern[str]) -> _Bounds:

@@ -23,6 +23,7 @@ from vouch_harness.report import overall_stats, per_mutation_stats
 from vouch_verifier.claims import extract_claims
 from vouch_verifier.matcher import load_tolerances, match_claims
 from vouch_verifier.receipts import Receipt, load_log
+from vouch_verifier.report import md_cell
 from vouch_verifier.verdict import Tolerance
 
 EVAL_RUNS = 10
@@ -85,8 +86,8 @@ def render_example(answer: str, receipts: list[Receipt], tolerances: dict[str, T
     for mc in matched:
         receipted = "" if mc.fact is None else f"{mc.fact.value:g}"
         lines.append(
-            f"| `{mc.claim.text.strip()}` | **{mc.verdict.value}** | {receipted} "
-            f"| {mc.receipt_id or ''} | {mc.note} |"
+            f"| `{md_cell(mc.claim.text.strip())}` | **{mc.verdict.value}** | {receipted} "
+            f"| {md_cell(mc.receipt_id or '')} | {md_cell(mc.note)} |"
         )
     return "\n".join(lines) + "\n"
 
