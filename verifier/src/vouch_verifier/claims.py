@@ -280,7 +280,7 @@ def _resolve(
     if (
         unit == "pct"
         and value > 0
-        and not m.text.startswith(("+", "-"))
+        and not m.signed
         and _NEGATION_RE.search(answer, scope.phrase[0], m.start)
     ):
         value = -value

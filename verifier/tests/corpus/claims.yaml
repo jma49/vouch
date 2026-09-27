@@ -173,6 +173,18 @@ cases:
   - text: AMD RSI is 71.2, MSFT RSI is 48.1.
     expect: ["71.2 -> CONTRADICTED (AMD)", "48.1 -> CONTRADICTED (MSFT)"]
 
+  # --- signs as agents and renderers write them (issue #8) ---
+  - text: NVDA RSI is −62.3.
+    expect: ["−62.3 -> CONTRADICTED (NVDA rsi_14)"]
+  - text: NVDA MACD histogram is −0.42.
+    expect: ["−0.42 -> SUPPORTED (NVDA macd_hist)"]
+  - text: "AMD's change: −1.35%."
+    expect: ["−1.35% -> SUPPORTED (AMD change_pct)"]
+  - text: AMD fell −1.35%.
+    expect: ["−1.35% -> SUPPORTED"]
+  - text: NVDA MACD histogram is －0.42.
+    expect: ["－0.42 -> SUPPORTED"]
+
   # --- dates, times, quarters, ordinals, periods are not claims ---
   - text: As of 2026-07-24, NVDA closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]

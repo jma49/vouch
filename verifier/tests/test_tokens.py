@@ -2,7 +2,7 @@
 
 import pytest
 
-from vouch_verifier.tokens import find_dates, tokenize
+from vouch_verifier.tokens import MINUS_SIGNS, find_dates, tokenize
 
 
 def texts(s: str) -> list[str]:
@@ -145,3 +145,13 @@ def test_find_dates_rejects_impossible_and_bounds() -> None:
     assert find_dates("13/45") == []
     s = "July 22 then July 23"
     assert [d for _, d in find_dates(s, 8)] == ["--07-23"]
+
+
+@pytest.mark.parametrize("minus", list(MINUS_SIGNS))
+def test_every_minus_sign_negates(minus: str) -> None:
+    (tok,) = tokenize(f"MACD is {minus}0.42 today")
+    assert (tok.text, tok.value, tok.signed) == (f"{minus}0.42", -0.42, True)
+
+
+def test_minus_family_includes_the_unicode_minus_sign() -> None:
+    assert "\u2212" in MINUS_SIGNS and "\uff0d" in MINUS_SIGNS

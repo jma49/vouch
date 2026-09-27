@@ -113,8 +113,17 @@ _MAGNITUDES = {
     "t": 1e12,
 }
 
+# Minus signs agents and renderers actually emit, besides the ASCII
+# hyphen: U+2212 MINUS SIGN, U+2012 FIGURE DASH, U+2013 EN DASH, U+FE63
+# SMALL HYPHEN-MINUS, U+FF0D FULLWIDTH HYPHEN-MINUS. Dropping one reads
+# a negative value as positive (issue #8).
+MINUS_SIGNS = "-\u2212\u2012\u2013\ufe63\uff0d"
+# Inside a character class the ASCII hyphen must be escaped, or it
+# forms a range with its neighbors.
+_MINUS_CLASS = "\\-" + MINUS_SIGNS[1:]
+
 _TOKEN_RE = re.compile(
-    rf"(?<![\w.\-+/:])(?P<sign>[-+])?(?P<num>{_NUM})"
+    rf"(?<![\w.+/:{_MINUS_CLASS}])(?P<sign>[+{_MINUS_CLASS}])?(?P<num>{_NUM})"
     r"(?P<mag>\s(?:thousand|million|mln|mn|billion|bn|trillion)\b|(?:bn|[kKmMbBtT])(?!\w))?"
     r"(?P<pct>\s?%|\s(?:percent|per cent|pct)\b)?(?P<mult>[x\u00d7](?!\w))?"
 )
@@ -135,6 +144,7 @@ class NumberToken:
     unit: str | None  # "pct", "USD", or None
     kind: Kind
     resolution: float  # unit of the last displayed digit: 0.1 for "62.3"
+    signed: bool = False  # written with an explicit + or minus sign
 
 
 def _merge(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -250,7 +260,7 @@ def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberT
         value = _value(m["num"])
         scale = _MAGNITUDES[m["mag"].strip().lower()] if m["mag"] else 1.0
         value *= scale
-        if m["sign"] == "-":
+        if m["sign"] and m["sign"] != "+":
             value = -value
         kind: Kind = "multiple" if m["mult"] else "point"
         unit = "pct" if m["pct"] else None
@@ -268,6 +278,7 @@ def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberT
                 unit=unit,
                 kind=kind,
                 resolution=_resolution(m["num"]) * scale,
+                signed=m["sign"] is not None,
             )
         )
 
