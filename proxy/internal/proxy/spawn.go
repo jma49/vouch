@@ -179,6 +179,7 @@ func Spawn(spec UpstreamSpec) (*Upstream, error) {
 		name = joinCommand(fields)
 	}
 	cmd := exec.Command(fields[0], fields[1:]...)
+	cmd.Env = upstreamEnv(os.Environ())
 	cmd.Stderr = os.Stderr
 
 	stdin, err := cmd.StdinPipe()
@@ -213,6 +214,21 @@ func Spawn(spec UpstreamSpec) (*Upstream, error) {
 			}
 		},
 	}, nil
+}
+
+// upstreamEnv is the environment a spawned upstream gets: the proxy's,
+// minus every VOUCH_ variable. An upstream is trusted for nothing
+// (docs/threat-model.md); it must not learn where the signing key is
+// (#101). The CLI also drops the key path and env: credentials from its
+// own environment once read; this filter is the backstop.
+func upstreamEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "VOUCH_") {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // closeTimeout bounds how long Upstream.Close waits for a graceful exit

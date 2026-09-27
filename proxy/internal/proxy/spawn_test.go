@@ -16,7 +16,7 @@ import (
 
 // helperEnv selects a behavior when the test binary re-executes itself
 // as an upstream process (the os/exec TestHelperProcess pattern).
-const helperEnv = "VOUCH_TEST_UPSTREAM"
+const helperEnv = "PROXY_TEST_UPSTREAM" // not VOUCH_: upstreams never see those (#101)
 
 func TestHelperProcess(t *testing.T) {
 	mode := os.Getenv(helperEnv)
@@ -256,5 +256,12 @@ func TestConnectChoosesTheTransport(t *testing.T) {
 	}
 	if _, err := Connect(UpstreamSpec{Name: "local", Command: "python3 srv.py"}, http.Header{"A": {"b"}}); err == nil || !strings.Contains(err.Error(), "only to HTTP") {
 		t.Fatalf("headers on a spawned upstream: %v", err)
+	}
+}
+
+func TestUpstreamEnvDropsVouchVariables(t *testing.T) {
+	got := upstreamEnv([]string{"PATH=/bin", "VOUCH_SIGNING_KEY=/k.pem", "VOUCH_PUBLIC_KEY=/p", "HOME=/h"})
+	if strings.Join(got, " ") != "PATH=/bin HOME=/h" {
+		t.Fatalf("got %v", got)
 	}
 }
