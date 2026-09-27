@@ -74,3 +74,10 @@ def test_exact_boundary_is_inclusive_despite_float_error() -> None:
 def test_policy_is_printable() -> None:
     assert ROUNDING_PRICE.describe() == "abs=0.01 rel=0.0 display_rel=0.0 display_round=true"
     assert ROUNDING_PRICE.as_dict()["display_round"] is True
+
+
+def test_float_epsilon_cannot_hide_a_displayed_unit() -> None:
+    # Found by Hypothesis: a size-relative epsilon (1e-9 * 50,000 = 5e-5)
+    # swallowed a one-unit error in a four-decimal claim.
+    rounding = Tolerance(display_round=True)
+    assert compare(50000.0001, 50000.0, rounding, 1e-4) is Verdict.CONTRADICTED

@@ -8,6 +8,7 @@ not hallucination: the two-level tolerance (exact + display) separates
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -66,8 +67,11 @@ class Tolerance:
 
 
 # Absorbs binary floating-point error at exact tolerance boundaries
-# (181.53 vs 181.52 under abs=0.01), far below any displayed precision.
-_EPSILON = 1e-9
+# (181.53 vs 181.52 under abs=0.01). Measured in units in the last
+# place of the operands, not relative to their size: a relative epsilon
+# of 1e-9 at 50,000 is 5e-5, wide enough to hide a whole-unit error in
+# a four-decimal claim (found by tests/test_properties.py).
+_EPSILON_ULPS = 8
 
 
 def compare(claimed: float, actual: float, tol: Tolerance, resolution: float = 0.0) -> Verdict:
@@ -79,7 +83,9 @@ def compare(claimed: float, actual: float, tol: Tolerance, resolution: float = 0
     fact to compare against, and the remaining verdicts, are the
     matcher's job.
     """
-    bound = tol.allowed(actual, resolution) + _EPSILON * max(1.0, abs(actual))
+    bound = tol.allowed(actual, resolution) + _EPSILON_ULPS * math.ulp(
+        max(abs(claimed), abs(actual), 1.0)
+    )
     if abs(claimed - actual) <= bound:
         return Verdict.SUPPORTED
     return Verdict.CONTRADICTED
