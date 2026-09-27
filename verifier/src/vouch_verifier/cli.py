@@ -3,7 +3,7 @@
     vouch-verify --answer answer.txt --receipts receipts/receipts.jsonl \
         --public-key vouch.pub.pem [--public-key ...] \
         [--require-sealed] [--expect-head sha256:...] \
-        [--tolerances tolerance.yaml] [--format md|json] \
+        [--tolerances tolerance.yaml] [--format md|json|html] \
         [--as-of 2026-07-20T15:00:00Z]
 
 Trusted Ed25519 public keys come from --public-key (repeatable, for key
@@ -39,7 +39,7 @@ from vouch_verifier.claims import extract_claims
 from vouch_verifier.lookahead import find_lookahead, parse_moment
 from vouch_verifier.matcher import DEFAULT_TOLERANCES, load_tolerances, match_claims
 from vouch_verifier.receipts import ReceiptError, audit_log
-from vouch_verifier.report import build_report, to_json, to_markdown
+from vouch_verifier.report import build_report, to_html, to_json, to_markdown
 from vouch_verifier.signing import load_keyring
 from vouch_verifier.verdict import FAILURES
 
@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--answer", required=True, help="file containing the agent's final answer")
     p.add_argument("--receipts", required=True, help="receipt log (JSONL)")
     p.add_argument("--tolerances", help="tolerance policy YAML (default: built-in policy)")
-    p.add_argument("--format", choices=["md", "json"], default="md")
+    p.add_argument("--format", choices=["md", "json", "html"], default="md")
     p.add_argument(
         "--public-key",
         action="append",
@@ -102,10 +102,16 @@ def main(argv: list[str] | None = None) -> int:
     matched = match_claims(extraction, receipts, tolerances, as_of=as_of)
     lookahead = find_lookahead(receipts, as_of) if as_of is not None else []
     report = build_report(
-        extraction, matched, tolerances, as_of=args.as_of if as_of else None, lookahead=lookahead
+        extraction,
+        matched,
+        tolerances,
+        as_of=args.as_of if as_of else None,
+        lookahead=lookahead,
+        answer=answer,
     )
 
-    print(to_json(report) if args.format == "json" else to_markdown(report))
+    render = {"json": to_json, "html": to_html}.get(args.format, to_markdown)
+    print(render(report))
 
     bad = sum(1 for mc in matched if mc.verdict in FAILURES)
     return 1 if bad or lookahead else 0
