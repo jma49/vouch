@@ -8,7 +8,7 @@ STAMP := $(VENV)/.installed
 VENV_OK := $(PY) -c 'import sys, vouch_verifier, vouch_harness; \
 	sys.exit(not vouch_verifier.__file__.startswith("$(CURDIR)/"))'
 
-.PHONY: test test-go test-py test-harness lint lint-go lint-py fmt cover build install-py eval golden readme readme-check agent clean
+.PHONY: test test-go test-py test-harness lint lint-go lint-py fmt cover build install-py eval golden readme readme-check agent eval-real clean
 
 test: test-go test-py test-harness
 
@@ -75,6 +75,12 @@ eval: install-py
 MODEL ?= gemini-flash
 agent: build install-py
 	$(VENV)/bin/vouch-agent --model $(MODEL) $(ARGS)
+
+# Score real runs against human labels (docs/labeling.md). LABELER is
+# whose labels count as ground truth.
+LABELER ?= $(shell ls eval/labels 2>/dev/null | head -1 | sed 's/\.jsonl$$//')
+eval-real: install-py
+	$(VENV)/bin/vouch-eval-real --labeler $(or $(LABELER),none)
 
 # README metrics and the example report are generated, never hand-edited
 # (AGENTS.md invariant 7). readme-check is what CI runs.

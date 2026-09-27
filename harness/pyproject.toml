@@ -14,6 +14,7 @@ dev = ["pytest>=8", "ruff>=0.16", "mypy>=1.10", "types-PyYAML", "pytest-cov>=5"]
 vouch-eval = "vouch_harness.cli:main"
 vouch-agent = "vouch_harness.agent.cli:main"
 vouch-label = "vouch_harness.label.server:main"
+vouch-eval-real = "vouch_harness.real_eval:main"
 
 [build-system]
 requires = ["setuptools>=68"]
