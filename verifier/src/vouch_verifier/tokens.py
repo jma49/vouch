@@ -29,6 +29,36 @@ _MONTH = (
     r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|"
     r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?"
 )
+_MONTH_NAMED = _MONTH.replace("(?:jan", "(?P<mon>jan", 1)
+_MONTH_NUMBERS = {
+    name: i + 1
+    for i, name in enumerate(
+        ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+    )
+}
+
+# Calendar dates, with named groups (y, mo or mon, d) so the same
+# patterns both mask dates out of the claim stream and parse them for
+# date-scoped matching.
+_DATE_RES = [
+    # ISO dates and timestamps: 2026-07-24, 2026-07-24T20:00:00Z
+    re.compile(
+        r"\b(?P<y>\d{4})-(?P<mo>\d{2})-(?P<d>\d{2})"
+        r"(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?\b"
+    ),
+    # Numeric dates: 7/24, 7/24/2026
+    re.compile(r"\b(?P<mo>\d{1,2})/(?P<d>\d{1,2})(?:/(?P<y>\d{2,4}))?\b"),
+    # Month-name dates: July 24, Jul 24th, July 24, 2026; 24 July 2026
+    re.compile(
+        rf"\b{_MONTH_NAMED}\s+(?P<d>\d{{1,2}})(?:st|nd|rd|th)?\b(?:,?\s+(?P<y>\d{{4}})\b)?",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"\b(?P<d>\d{{1,2}})(?:st|nd|rd|th)?\s+{_MONTH_NAMED}(?:,?\s+(?P<y>\d{{4}})\b)?",
+        re.IGNORECASE,
+    ),
+]
+
 _PERIOD_UNIT = (
     r"(?:days?|weeks?|months?|years?|sessions?|hours?|minutes?|mins?|quarters?|periods?|bars?)"
 )
@@ -36,15 +66,8 @@ _PERIOD_UNIT = (
 # Spans that are structure, not claims. A pattern with a group named
 # "m" masks only that group. Order does not matter; overlaps are merged.
 _MASKS = [
-    # ISO dates and timestamps: 2026-07-24, 2026-07-24T20:00:00Z
-    re.compile(
-        r"\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?\b"
-    ),
-    # Numeric dates: 7/24, 7/24/2026
-    re.compile(r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b"),
-    # Month-name dates: July 24, Jul 24th, July 24, 2026; 24 July 2026; July 2026
-    re.compile(rf"\b{_MONTH}\s+\d{{1,2}}(?:st|nd|rd|th)?\b(?:,?\s+\d{{4}}\b)?", re.IGNORECASE),
-    re.compile(rf"\b\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTH}(?:,?\s+\d{{4}}\b)?", re.IGNORECASE),
+    *_DATE_RES,
+    # Month and year without a day: July 2026
     re.compile(rf"\b{_MONTH}\s+\d{{4}}\b", re.IGNORECASE),
     # Clock times: 4:00 pm, 16:00, 4pm
     re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]\.?m\.?)?", re.IGNORECASE),
@@ -146,6 +169,39 @@ def _value(num: str) -> float:
 def _resolution(num: str) -> float:
     _, dot, decimals = num.partition(".")
     return 10.0 ** -len(decimals) if dot else 1.0
+
+
+def find_dates(text: str, start: int = 0, end: int | None = None) -> list[tuple[int, str]]:
+    """Calendar dates in text[start:end] as (position, date), in order.
+
+    A date with a year is "YYYY-MM-DD"; without one it is "--MM-DD"
+    (the ISO 8601 form for a recurring day), and callers match it
+    against any year.
+    """
+    stop = len(text) if end is None else end
+    found: dict[int, tuple[int, str]] = {}
+    for rx in _DATE_RES:
+        for m in rx.finditer(text, start, stop):
+            groups = m.groupdict()
+            month = (
+                _MONTH_NUMBERS[groups["mon"][:3].lower()]
+                if groups.get("mon")
+                else int(groups["mo"])
+            )
+            day = int(groups["d"])
+            if not (1 <= month <= 12 and 1 <= day <= 31):
+                continue
+            year = groups.get("y")
+            if year is None:
+                date = f"--{month:02d}-{day:02d}"
+            else:
+                full = int(year) + (2000 if len(year) == 2 else 0)
+                date = f"{full:04d}-{month:02d}-{day:02d}"
+            # Overlapping patterns: keep the longest match at a position.
+            prev = found.get(m.start())
+            if prev is None or m.end() > prev[0]:
+                found[m.start()] = (m.end(), date)
+    return [(pos, date) for pos, (_, date) in sorted(found.items())]
 
 
 def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberToken]:

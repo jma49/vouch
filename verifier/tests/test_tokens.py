@@ -2,7 +2,7 @@
 
 import pytest
 
-from vouch_verifier.tokens import tokenize
+from vouch_verifier.tokens import find_dates, tokenize
 
 
 def texts(s: str) -> list[str]:
@@ -121,3 +121,27 @@ def test_magnitude_needs_a_word_boundary() -> None:
 def test_units(s: str, text: str, unit: str | None) -> None:
     (tok,) = tokenize(s)
     assert (tok.text, tok.unit) == (text, unit)
+
+
+@pytest.mark.parametrize(
+    ("s", "date"),
+    [
+        ("as of 2026-07-24", "2026-07-24"),
+        ("at 2026-07-24T20:00:00Z", "2026-07-24"),
+        ("on 7/24/2026", "2026-07-24"),
+        ("on 7/24/26", "2026-07-24"),
+        ("on 7/24", "--07-24"),
+        ("On July 24, 2026,", "2026-07-24"),
+        ("on Jul. 24th", "--07-24"),
+        ("on 24 July 2026", "2026-07-24"),
+        ("on Sept 3", "--09-03"),
+    ],
+)
+def test_find_dates(s: str, date: str) -> None:
+    assert [d for _, d in find_dates(s)] == [date]
+
+
+def test_find_dates_rejects_impossible_and_bounds() -> None:
+    assert find_dates("13/45") == []
+    s = "July 22 then July 23"
+    assert [d for _, d in find_dates(s, 8)] == ["--07-23"]

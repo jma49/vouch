@@ -5,7 +5,7 @@
 
 The signing key is read from $VOUCH_HMAC_KEY; without it, signatures
 are not checked (structural and digest checks still run) and the report
-says so. Exit code 1 when any claim is CONTRADICTED or UNSUPPORTED.
+says so. Exit code 1 when any claim is CONTRADICTED, UNSUPPORTED, or STALE.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from vouch_verifier.claims import extract_claims
 from vouch_verifier.matcher import DEFAULT_TOLERANCES, load_tolerances, match_claims
 from vouch_verifier.receipts import load_log
 from vouch_verifier.report import build_report, to_json, to_markdown
-from vouch_verifier.verdict import Verdict
+from vouch_verifier.verdict import FAILURES
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(to_json(report) if args.format == "json" else to_markdown(report))
 
-    bad = sum(1 for mc in matched if mc.verdict in (Verdict.CONTRADICTED, Verdict.UNSUPPORTED))
+    bad = sum(1 for mc in matched if mc.verdict in FAILURES)
     return 1 if bad else 0
 
 

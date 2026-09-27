@@ -21,6 +21,11 @@ class Verdict(StrEnum):
     UNVERIFIABLE = "UNVERIFIABLE"
 
 
+# Verdicts that mean the answer misreports its tools. STALE belongs here:
+# the value was true once, but not for the time the claim is about.
+FAILURES = frozenset({Verdict.CONTRADICTED, Verdict.UNSUPPORTED, Verdict.STALE})
+
+
 @dataclass(frozen=True)
 class Tolerance:
     """Tolerance policy for one class of fact (price, indicator, ...).

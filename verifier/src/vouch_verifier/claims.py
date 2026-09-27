@@ -19,7 +19,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from vouch_verifier.tokens import Kind, NumberToken, tokenize
+from vouch_verifier.tokens import Kind, NumberToken, find_dates, tokenize
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,7 @@ class Claim:
     unit: str | None = None
     timeframe: str | None = None
     citation: Citation | None = None
+    as_of: str | None = None  # "YYYY-MM-DD", or "--MM-DD" when the text gives no year
     kind: Kind = "point"  # "multiple" and "range" are never judged as points
     resolution: float = 0.0  # unit of the last displayed digit (see tokens)
 
@@ -120,6 +121,10 @@ _CLAUSE_SPLIT_RE = re.compile(r";\s*")
 _PHRASE_SPLIT_RE = re.compile(
     r",\s+|\s+(?:and|but|while|whereas|versus|vs\.?|compared (?:with|to))\s+", re.IGNORECASE
 )
+
+# Chart timeframe named in the clause: "on the hourly chart", "1d RSI".
+_TIMEFRAME_RE = re.compile(r"\b(?:(?P<word>hourly|daily|weekly)|(?P<n>\d+)(?P<u>[hdw]))\b", re.I)
+_TIMEFRAME_WORDS = {"hourly": "1h", "daily": "1d", "weekly": "1w"}
 
 # A sentence that opens with one of these, and names no entity itself,
 # continues the previous sentence's subject: "AMD last traded at 172.04.
@@ -208,6 +213,25 @@ def _entity(answer: str, pos: int, scope: _Scope, entities: set[str]) -> str | N
     return None
 
 
+def _date(answer: str, pos: int, scope: _Scope) -> str | None:
+    """The date a claim is about: the nearest one in its own clause.
+
+    Dates never cross a semicolon: in "NVDA reports Q2 earnings on
+    August 27; it closed at 181.52" the date belongs to the earnings.
+    """
+    dates = find_dates(answer, *scope.clause)
+    return min(dates, key=lambda d: abs(d[0] - pos))[1] if dates else None
+
+
+def _timeframe(answer: str, scope: _Scope) -> str | None:
+    m = _TIMEFRAME_RE.search(answer, *scope.clause)
+    if m is None:
+        return None
+    if m["word"]:
+        return _TIMEFRAME_WORDS[m["word"].lower()]
+    return f"{m['n']}{m['u'].lower()}"
+
+
 def _keyword_hits(answer: str, pos: int, scope: _Scope, table: dict[str, str]) -> list[str]:
     """Metrics named around the number, in the order they should be tried:
     the phrase by distance, then the rest of the clause before and after
@@ -270,6 +294,8 @@ def _resolve(
         entity=entity,
         metric=metric,
         unit=unit,
+        timeframe=_timeframe(answer, scope),
+        as_of=_date(answer, m.start, scope),
         kind=m.kind,
         resolution=m.resolution,
     )

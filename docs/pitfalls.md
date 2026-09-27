@@ -165,7 +165,7 @@ Reproduced 2026-09-27 against `testdata/receipts_golden.jsonl`.
 - **Cause:** Tier 2 claims carry no timeframe or as-of, and
   `match_claims` returns `SUPPORTED` on the first candidate within
   tolerance. False negatives grow with receipt count.
-- **Status:** open. Code reading (`verifier/src/vouch_verifier/matcher.py`).
+- **Status:** fixed in `feat(verifier): scope matching to the claim's date and report STALE values`. Code reading; pinned by corpus cases.
 
 ### P-034 A percentage can be attributed to a price metric
 - **Symptom:** `AMD is down 1.35% on the day and is trading at 172.40.`

@@ -63,7 +63,7 @@ flowchart LR
 | `CONTRADICTED` | A matching fact exists and the value is outside tolerance: *the deadly class* | ✅ |
 | `UNSUPPORTED` | No receipt covers the claim: fabricated from parametric memory | ✅ |
 | `UNVERIFIABLE` | Out of scope or unresolvable, and counted rather than guessed | ✅ |
-| `STALE` | Matches a fact whose `as_of` falls outside the claim's time window | planned |
+| `STALE` | Matches only a fact from outside the claim's time window: true once, not for the date claimed | ✅ |
 | `DERIVED` | Recomputable from receipts via whitelisted operations only | planned |
 
 Fabrication and contradiction are different failures with different fixes, so vouch never collapses them into a single "hallucination" bit.
@@ -119,7 +119,7 @@ export VOUCH_HMAC_KEY="$(openssl rand -hex 32)"
     --receipts ./receipts --schemas ./schemas
 
 # 2. Audit the agent's final answer against the receipts it produced.
-#    Exits 1 if any claim is CONTRADICTED or UNSUPPORTED.
+#    Exits 1 if any claim is CONTRADICTED, UNSUPPORTED, or STALE.
 vouch-verify --answer answer.txt \
     --receipts ./receipts/receipts.jsonl --tolerances tolerance.yaml
 
