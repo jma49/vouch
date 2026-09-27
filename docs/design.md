@@ -340,7 +340,7 @@ Status: all six items are implemented. The SQLite index is built in memory by th
 **Open questions:**
 - ~~Go MCP SDK maturity~~ — resolved: stdlib implementation (see table above)
 - Whether fixture files containing upstream market data can be redistributed in a public repo — **check each data source's ToS; default plan is to ship the recorder + schemas and let users generate fixtures with their own API keys**
-- MCP protocol details for transparent federation (capability merging, notification forwarding, server-to-client requests, cancellation) — partially open; see roadmap Phase 5 and pitfalls P-021, P-022
+- MCP protocol details for transparent federation — resolved for tools: concurrency and cancellation (#67), server-to-client requests, `tools/list_changed`, and version negotiation (#68). Open: resources and prompts are not federated, and capabilities are not merged (the proxy advertises tools only)
 
 ---
 

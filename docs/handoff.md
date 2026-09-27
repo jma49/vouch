@@ -128,6 +128,33 @@ entry whenever a choice closes off an alternative (AGENTS.md).
   from upstreams; the rest wait for #68.
 - Revisit when: an agent floods the proxy; add a per-session limit.
 
+**One protocol version per session, chosen by the upstreams** (#68)
+- Chosen: the agent's `initialize` goes to every upstream unchanged;
+  the proxy answers with the version they all chose, if it is in
+  `SupportedVersions`, and fails `initialize` otherwise, naming each
+  upstream's version.
+- Rejected: echoing the agent's version whatever the upstreams said
+  (the old behavior, which silently mixed versions); translating
+  between versions (a protocol implementation vouch does not need).
+- Cost: federating upstreams that speak different versions fails
+  loudly instead of mostly working.
+- Revisit when: a real deployment needs mixed versions.
+
+**Server-to-client requests: an allowlist, forwarded under proxy ids** (#68)
+- Chosen: `sampling/createMessage`, `roots/list`, and
+  `elicitation/create` go to the agent under ids `"vouch-N"`; the
+  answer goes back under the upstream's id. `ping` is answered by the
+  proxy. Upstream cancellation is forwarded. When the agent leaves,
+  forwarded requests fail before `Run` waits for in-flight calls, so a
+  call blocked on sampling cannot hold the proxy open.
+- Rejected: forwarding any method (an upstream could ask the agent
+  things it never offered); rewriting ids per upstream only (collides
+  across upstreams).
+- Cost: sampling results are not receipted. They are the agent's own
+  output, not tool data; the tool result that uses them is.
+- `tools/list_changed` refreshes routes before the agent is told; a
+  refresh that finds a name collision keeps the old routes and logs.
+
 **Upstream commands are split like a shell, not run by one** (#70)
 - Chosen: POSIX quoting and backslashes; no expansion of any kind.
 - Rejected: `sh -c` (expansions make the argv, and so the default

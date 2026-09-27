@@ -240,6 +240,13 @@ func (c *Client) Handle(h Handler) {
 	c.handler = h
 }
 
+// Start begins reading from the peer without making a call first, for
+// a Client that serves the peer's requests (a server, in MCP terms).
+// Calls start it too; calling it again does nothing.
+func (c *Client) Start() {
+	c.startOnce.Do(func() { go c.readLoop() })
+}
+
 // Call is CallContext without cancellation.
 func (c *Client) Call(method string, params any) (json.RawMessage, error) {
 	return c.CallContext(context.Background(), method, params)
@@ -250,7 +257,7 @@ func (c *Client) Call(method string, params any) (json.RawMessage, error) {
 // sent notifications/cancelled for the request (MCP cancellation), a
 // late response is discarded, and ctx's error is returned.
 func (c *Client) CallContext(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	c.startOnce.Do(func() { go c.readLoop() })
+	c.Start()
 	req := &Message{Method: method}
 	if params != nil {
 		raw, err := json.Marshal(params)
