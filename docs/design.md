@@ -115,7 +115,7 @@ The signature covers DSSE's pre-authentication encoding of the exact payload byt
 
 **The chain.** Every entry's signed body carries `seq` (its position in the log) and `prev_digest` (the sha256 of the previous entry's payload bytes, or a genesis value of zeros), so deleting, inserting, or reordering entries breaks the chain for everything after them, whether or not signatures are checked (#54). When a session ends cleanly the proxy appends a **checkpoint**, a signed entry of its own payload type (`application/vnd.vouch.checkpoint+json; version=1`) that records the receipt count, and prints the resulting head digest. `--require-sealed` fails a log that does not end in a checkpoint.
 
-**What the chain cannot do.** A log cut back to an earlier checkpoint is still a valid, sealed chain. Detecting that needs the head digest from a copy kept outside the log: `--expect-head`, or, for evaluation runs, the head recorded in each run's committed `meta.json`. The threat model covers this in full (docs/threat-model.md).
+**What the chain cannot do.** A log cut back to an earlier checkpoint is still a valid, sealed chain. Detecting that needs the head digest from a copy kept outside the log: `--expect-head`, or, for evaluation runs, the head recorded in each run's committed `meta.json`. The threat model (docs/threat-model.md) lists every property with the test that pins it, and every limit, including a dishonest key holder.
 
 ### 3.2 Fact
 
