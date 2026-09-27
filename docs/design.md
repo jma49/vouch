@@ -113,7 +113,9 @@ The signature covers DSSE's pre-authentication encoding of the exact payload byt
 
 **On the signature: what it is for and what it is not for.** In a single-process setup the LLM cannot write to our storage anyway; the signature is *not* protecting against the model. Its actual value: (a) tamper-evidence when receipts cross process or machine boundaries or rest on disk; (b) third-party verification: anyone holding the public key can re-verify that a verdict report was computed against unmodified receipts, and cannot forge one; (c) replay protection via `(session_id, turn_index)` uniqueness. Ed25519 replaced the original HMAC scheme because HMAC could not give (b): whoever can verify an HMAC can also forge it (#53).
 
-**Current gap against that model.** Receipts are signed individually, with no hash chain or checkpoint binding them, so deleting, truncating, or reordering whole lines goes undetected (roadmap Phase 3, pitfall P-012, #54).
+**The chain.** Every entry's signed body carries `seq` (its position in the log) and `prev_digest` (the sha256 of the previous entry's payload bytes, or a genesis value of zeros), so deleting, inserting, or reordering entries breaks the chain for everything after them, whether or not signatures are checked (#54). When a session ends cleanly the proxy appends a **checkpoint**, a signed entry of its own payload type (`application/vnd.vouch.checkpoint+json; version=1`) that records the receipt count, and prints the resulting head digest. `--require-sealed` fails a log that does not end in a checkpoint.
+
+**What the chain cannot do.** A log cut back to an earlier checkpoint is still a valid, sealed chain. Detecting that needs the head digest from a copy kept outside the log: `--expect-head`, or, for evaluation runs, the head recorded in each run's committed `meta.json`. The threat model covers this in full (docs/threat-model.md).
 
 ### 3.2 Fact
 

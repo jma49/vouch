@@ -17,7 +17,13 @@ from pathlib import Path
 from typing import TextIO
 
 from vouch_verifier.canonical import number_value, parse_preserving, serialize
-from vouch_verifier.signing import RECEIPT_PAYLOAD_TYPE, Keyring, decode, open_envelope
+from vouch_verifier.signing import (
+    CHECKPOINT_PAYLOAD_TYPE,
+    RECEIPT_PAYLOAD_TYPE,
+    Keyring,
+    decode,
+    open_envelope,
+)
 
 
 @dataclass(frozen=True)
@@ -58,10 +64,26 @@ class Receipt:
     response_canonical: str | None = None
     response_digest: str | None = None
     keyid: str | None = None  # the trusted key that signed it, when verified
+    seq: int = 0  # position in the log (chain link, #54)
+    prev_digest: str = ""  # digest of the previous entry's payload
 
 
 class ReceiptError(ValueError):
-    """A receipt failed structural, digest, or signature checks."""
+    """A receipt failed structural, digest, signature, or chain checks."""
+
+
+# The prev_digest of the first entry in a log.
+GENESIS = "sha256:" + "0" * 64
+
+
+@dataclass(frozen=True)
+class LogAudit:
+    """What reading a log established."""
+
+    receipts: list[Receipt]
+    checkpoints: int
+    head: str  # digest of the last entry's payload, or GENESIS
+    sealed: bool  # the last entry is a checkpoint
 
 
 def _sha256_digest(canonical: str) -> str:
@@ -131,6 +153,8 @@ def _parse_receipt(line: str, lineno: int) -> Receipt:
         logical_time=integer("logical_time"),
         upstream_latency_ms=integer("upstream_latency_ms"),
         raw=tree,
+        seq=integer("seq"),
+        prev_digest=text("prev_digest"),
     )
 
 
@@ -143,20 +167,46 @@ def _numbered_lines(f: TextIO) -> Iterator[tuple[int, str]]:
         raise ReceiptError(f"line {lineno + 1}: not valid UTF-8: {e.reason}") from e
 
 
-def load_log(path: str | Path, keys: Keyring | None = None) -> list[Receipt]:
-    """Read a receipt log, enforcing the invariants the proxy promises.
+def _link(tree: object, lineno: int) -> tuple[int, str]:
+    if not isinstance(tree, dict):
+        raise ReceiptError(f"line {lineno}: entry is not an object")
+    seq, prev = tree.get("seq"), tree.get("prev_digest")
+    try:
+        seq_value = int(number_value(seq))
+    except (ValueError, OverflowError) as e:
+        raise ReceiptError(f"line {lineno}: seq: {e}") from e
+    if not isinstance(prev, str):
+        raise ReceiptError(f"line {lineno}: missing prev_digest")
+    return seq_value, prev
 
-    With keys, every line must carry a valid signature from one of them,
-    checked before the body is parsed. Without keys, only structure is
-    checked; callers must say so to their users. Always checked:
-    result_digest and response_digest match what they cover, and
-    receipt_id and (session_id, turn_index) are unique. Raises
-    ReceiptError on any violation: a partially trusted log is not a
-    thing.
+
+def audit_log(
+    path: str | Path,
+    keys: Keyring | None = None,
+    *,
+    require_sealed: bool = False,
+    expect_head: str | None = None,
+) -> LogAudit:
+    """Read a receipt log, enforcing every invariant the proxy promises.
+
+    With keys, every entry must carry a valid signature from one of them,
+    checked before its body is parsed; without keys, signatures are not
+    checked and callers must say so to their users. Always checked:
+    - the hash chain (#54): each entry's seq is its position and its
+      prev_digest is the digest of the previous entry's payload, so
+      deleting, reordering, or inserting entries is detected;
+    - each checkpoint's receipt count;
+    - result_digest and response_digest match what they cover;
+    - receipt_id and (session_id, turn_index) are unique.
+    Truncating the tail leaves a valid chain; require_sealed (the log
+    ends in a checkpoint) and expect_head (a head digest kept outside
+    the log) are how it is detected. Raises ReceiptError on any
+    violation: a partially trusted log is not a thing.
     """
     receipts: list[Receipt] = []
     seen: dict[tuple[str, int], str] = {}
     ids: set[str] = set()
+    head, seq, checkpoints, sealed = GENESIS, 0, 0, False
     # utf-8-sig: a byte-order mark from an editor is not a reason to reject
     # a log; a decoding error anywhere else is a ReceiptError (issue #16).
     with open(path, encoding="utf-8-sig") as f:
@@ -166,11 +216,51 @@ def load_log(path: str | Path, keys: Keyring | None = None) -> list[Receipt]:
                 continue
             try:
                 envelope = json.loads(line)
+                kind = envelope.get("payloadType") if isinstance(envelope, dict) else None
+                if kind not in (RECEIPT_PAYLOAD_TYPE, CHECKPOINT_PAYLOAD_TYPE):
+                    raise ReceiptError(f"line {lineno}: unknown payload type {kind!r}")
                 if keys is not None:
-                    payload, keyid = open_envelope(envelope, RECEIPT_PAYLOAD_TYPE, keys)
+                    payload, keyid = open_envelope(envelope, kind, keys)
                 else:
-                    payload, keyid = decode(envelope, RECEIPT_PAYLOAD_TYPE), None
-                r = replace(_parse_receipt(payload.decode("utf-8"), lineno), keyid=keyid)
+                    payload, keyid = decode(envelope, kind), None
+                body = payload.decode("utf-8")
+                tree = parse_preserving(body)
+                entry_seq, entry_prev = _link(tree, lineno)
+            except ReceiptError:
+                raise
+            except (ValueError, TypeError, AttributeError, OverflowError) as e:
+                raise ReceiptError(f"line {lineno}: {e}") from e
+
+            if entry_seq != seq:
+                raise ReceiptError(
+                    f"line {lineno}: chain broken: entry has seq {entry_seq}, want {seq} "
+                    "(an entry was removed, inserted, or reordered)"
+                )
+            if entry_prev != head:
+                raise ReceiptError(
+                    f"line {lineno}: chain broken: prev_digest {entry_prev}, want {head}"
+                )
+            head = "sha256:" + hashlib.sha256(payload).hexdigest()
+            seq += 1
+
+            if kind == CHECKPOINT_PAYLOAD_TYPE:
+                assert isinstance(tree, dict)
+                try:
+                    counted = int(number_value(tree.get("receipts")))
+                except (ValueError, OverflowError) as e:
+                    raise ReceiptError(f"line {lineno}: checkpoint receipts: {e}") from e
+                if counted != len(receipts):
+                    raise ReceiptError(
+                        f"line {lineno}: checkpoint {entry_seq} counts {counted} receipts, "
+                        f"the log has {len(receipts)}"
+                    )
+                checkpoints += 1
+                sealed = True
+                continue
+            sealed = False
+
+            try:
+                r = replace(_parse_receipt(body, lineno), keyid=keyid)
             except ReceiptError:
                 raise
             except (ValueError, TypeError, AttributeError, OverflowError) as e:
@@ -195,4 +285,16 @@ def load_log(path: str | Path, keys: Keyring | None = None) -> list[Receipt]:
                 )
             seen[(r.session_id, r.turn_index)] = r.receipt_id
             receipts.append(r)
-    return receipts
+
+    if require_sealed and not sealed:
+        raise ReceiptError("log does not end in a checkpoint: it may have been cut short")
+    if expect_head is not None and head != expect_head:
+        raise ReceiptError(
+            f"log head is {head}, expected {expect_head}: entries were removed or added"
+        )
+    return LogAudit(receipts=receipts, checkpoints=checkpoints, head=head, sealed=sealed)
+
+
+def load_log(path: str | Path, keys: Keyring | None = None) -> list[Receipt]:
+    """The receipts of a log, with every check of audit_log."""
+    return audit_log(path, keys).receipts

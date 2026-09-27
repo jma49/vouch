@@ -4,7 +4,8 @@
 //	vouch proxy --signing-key <key.pem> --upstream "[name=]cmd args" \
 //	    [--upstream ...] --receipts <dir> --schemas <dir> [--session <id>]
 //	vouch receipts cat <log>
-//	vouch receipts verify --public-key <key.pub.pem> [--public-key ...] <log>
+//	vouch receipts verify --public-key <key.pub.pem> [--public-key ...] \
+//	    [--require-sealed] [--expect-head <digest>] <log>
 //
 // An upstream's name defaults to its whole command; name= sets a short,
 // stable one. Names key record/replay fixtures and must be unique.
@@ -30,7 +31,6 @@ import (
 	"github.com/jma49/vouch/proxy/internal/fixture"
 	"github.com/jma49/vouch/proxy/internal/mcp"
 	"github.com/jma49/vouch/proxy/internal/proxy"
-	"github.com/jma49/vouch/proxy/internal/receipt"
 	"github.com/jma49/vouch/proxy/internal/sign"
 	"github.com/jma49/vouch/proxy/internal/store"
 )
@@ -70,7 +70,8 @@ func usage() {
   vouch proxy --signing-key <key.pem> --upstream "[name=]cmd args" [--upstream ...] \
       --receipts <dir> --schemas <dir> [--session <id>]
   vouch receipts cat <log>
-  vouch receipts verify --public-key <key.pub.pem> [--public-key ...] <log>
+  vouch receipts verify --public-key <key.pub.pem> [--public-key ...] \
+      [--require-sealed] [--expect-head <digest>] <log>
   vouch version`)
 }
 
@@ -168,7 +169,20 @@ func runProxy(args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "vouch proxy: mode %s, session %s, %d upstream(s), receipts in %s\n",
 		*mode, *session, len(ups), *receiptsDir)
-	return srv.Run()
+	if err := srv.Run(); err != nil {
+		// No checkpoint: a verifier with --require-sealed will see that
+		// this session did not end cleanly.
+		return err
+	}
+	// The session ended cleanly: seal it. The head digest is printed so
+	// it can be kept outside the log, the only way to later detect the
+	// log being cut back to an earlier point (#54).
+	head, err := rlog.Seal(*session, clk.Now())
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "vouch proxy: sealed session %s; head %s\n", *session, head)
+	return nil
 }
 
 // closeAll shuts upstreams down in parallel, so shutdown takes at most
@@ -222,22 +236,18 @@ func runReceipts(args []string) error {
 		if len(args) != 2 {
 			return fmt.Errorf("usage: vouch receipts cat <log>")
 		}
-		receipts, err := store.Scan(args[1])
-		if err != nil {
-			return err
-		}
-		for i := range receipts {
-			body, err := receipts[i].Body()
-			if err != nil {
-				return err
-			}
-			fmt.Println(string(body))
-		}
-		return nil
+		// Each entry's payload is its canonical JSON body: receipts and
+		// checkpoints alike, one per line.
+		return store.Walk(args[1], nil, func(e *store.Entry) error {
+			fmt.Println(string(e.Payload))
+			return nil
+		})
 	case "verify":
 		fs := flag.NewFlagSet("receipts verify", flag.ExitOnError)
 		var pubs stringSlice
 		fs.Var(&pubs, "public-key", "trusted Ed25519 public key PEM (repeatable)")
+		requireSealed := fs.Bool("require-sealed", false, "fail unless the log ends in a checkpoint")
+		expectHead := fs.String("expect-head", "", "fail unless the chain head is this digest (kept outside the log)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -252,11 +262,19 @@ func runReceipts(args []string) error {
 			}
 			keys.Add(pub)
 		}
-		receipts, err := store.ScanVerified(fs.Arg(0), keys)
+		audit, err := store.Verify(fs.Arg(0), keys)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%d receipts verified (%s)\n", len(receipts), receipt.PayloadType)
+		if *requireSealed && !audit.Sealed {
+			return fmt.Errorf("%s does not end in a checkpoint: it may have been cut short", fs.Arg(0))
+		}
+		if *expectHead != "" && audit.Head != *expectHead {
+			return fmt.Errorf("%s head is %s, expected %s: entries were removed or added after that head",
+				fs.Arg(0), audit.Head, *expectHead)
+		}
+		fmt.Printf("%d receipts and %d checkpoints verified; chain intact; sealed: %v\nhead %s\n",
+			len(audit.Receipts), audit.Checkpoints, audit.Sealed, audit.Head)
 		return nil
 	default:
 		return fmt.Errorf("receipts: unknown subcommand %q", args[0])

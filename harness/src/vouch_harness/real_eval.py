@@ -33,7 +33,7 @@ from vouch_harness.label.runs import discover
 from vouch_harness.signing import resolve_public_keys
 from vouch_verifier.claims import extract_claims
 from vouch_verifier.matcher import load_tolerances, match_claims
-from vouch_verifier.receipts import ReceiptError, load_log
+from vouch_verifier.receipts import ReceiptError, audit_log
 from vouch_verifier.signing import Keyring, load_keyring
 from vouch_verifier.verdict import FAILURES, Tolerance
 
@@ -85,7 +85,8 @@ def score_runs(
     scores = []
     for run_id in discover(runs_dir):
         d = runs_dir / run_id
-        signed_by = json.loads((d / "meta.json").read_text(encoding="utf-8")).get("key_id")
+        meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+        signed_by = meta.get("key_id")
         if keys is not None and signed_by and signed_by not in keys:
             raise ReceiptError(
                 f"{run_id}: signed with key id {signed_by}, but only "
@@ -94,8 +95,17 @@ def score_runs(
             )
         answer = (d / "answer.txt").read_text(encoding="utf-8").rstrip("\n")
         try:
+            # A run's log must be sealed and end at the head recorded when
+            # the run finished: anything else means it was cut or altered.
             receipts = (
-                load_log(d / "receipts.jsonl", keys) if (d / "receipts.jsonl").exists() else []
+                audit_log(
+                    d / "receipts.jsonl",
+                    keys,
+                    require_sealed=meta.get("head") is not None,
+                    expect_head=meta.get("head"),
+                ).receipts
+                if (d / "receipts.jsonl").exists()
+                else []
             )
         except ReceiptError as e:
             raise ReceiptError(f"{run_id}: {e}") from e

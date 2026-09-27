@@ -1,9 +1,10 @@
-// Package store implements the append-only receipt log: one canonical
-// JSON receipt per line (JSONL), fsynced per append, immutable after
-// write. Lookup indexes are rebuilt from the log on open; the SQLite
-// index used by the Python verifier is derived from the same file (see
-// docs/design.md section 12 — the log is the source of truth, indexes
-// are disposable).
+// Package store implements the append-only receipt log: one signed DSSE
+// envelope per line (JSONL), fsynced per append, immutable after write,
+// and hash-chained: every entry's signed body names its position and the
+// digest of the entry before it (#54). Lookup indexes are rebuilt from
+// the log on open; the SQLite index used by the Python verifier is
+// derived from the same file (docs/design.md section 12: the log is the
+// source of truth, indexes are disposable).
 package store
 
 import (
@@ -16,17 +17,18 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/jma49/vouch/proxy/internal/receipt"
 	"github.com/jma49/vouch/proxy/internal/sign"
 )
 
-// Log is an append-only receipt log backed by a single JSONL file, one
-// signed DSSE envelope per line. Appends are serialized and fsynced;
-// (session_id, turn_index) pairs are unique across the life of the log
-// (replay protection, design section 3.1). The log reads envelopes
-// structurally and never judges signatures: trust is the verifier's
-// decision, made with its own keyring.
+// Log is an append-only, hash-chained receipt log backed by one JSONL
+// file. Appends are serialized and fsynced; (session_id, turn_index)
+// pairs are unique across the life of the log (replay protection, design
+// section 3.1). The log checks the chain when it opens but never judges
+// signatures: trust is the verifier's decision, made with its own
+// keyring.
 type Log struct {
 	mu     sync.Mutex
 	signer *sign.Signer
@@ -35,6 +37,14 @@ type Log struct {
 	size   int64                  // bytes of complete, acknowledged lines
 	broken error                  // set when a failed append could not be rolled back
 	seen   map[sessionTurn]string // -> receipt_id
+	chain  chainState
+}
+
+// chainState is what the next entry links to.
+type chainState struct {
+	seq      int64  // the next entry's position
+	head     string // digest of the last entry's payload, or receipt.Genesis
+	receipts int64  // receipts so far (checkpoints excluded)
 }
 
 // logFile is the slice of *os.File the log uses; tests substitute a
@@ -55,10 +65,26 @@ type sessionTurn struct {
 	turn    int
 }
 
-// Open opens (or creates) the receipt log at path and rebuilds the
-// uniqueness index from existing entries. signer signs every appended
-// receipt; a log opened with a nil signer can be read but refuses
-// appends.
+// Entry is one decoded log line: a receipt or a checkpoint, with the
+// payload bytes its signature covers and the id of the key that signed
+// it (set only by verified reads).
+type Entry struct {
+	Receipt    *receipt.Receipt
+	Checkpoint *receipt.Checkpoint
+	Payload    []byte
+	KeyID      string
+}
+
+func (e *Entry) link() receipt.Link {
+	if e.Checkpoint != nil {
+		return e.Checkpoint.Link
+	}
+	return e.Receipt.Link
+}
+
+// Open opens (or creates) the receipt log at path, checks its chain, and
+// rebuilds the uniqueness index. signer signs every appended entry; a
+// log opened with a nil signer can be read but refuses appends.
 func Open(path string, signer *sign.Signer) (*Log, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("store: mkdir: %w", err)
@@ -67,7 +93,11 @@ func Open(path string, signer *sign.Signer) (*Log, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: open: %w", err)
 	}
-	l := &Log{f: f, path: path, signer: signer, seen: make(map[sessionTurn]string)}
+	l := &Log{
+		f: f, path: path, signer: signer,
+		seen:  make(map[sessionTurn]string),
+		chain: chainState{head: receipt.Genesis},
+	}
 	if err := l.rebuild(); err != nil {
 		f.Close()
 		return nil, err
@@ -75,13 +105,14 @@ func Open(path string, signer *sign.Signer) (*Log, error) {
 	return l, nil
 }
 
-// rebuild indexes the existing log and recovers from a crash during
-// the last append. Append acknowledges a receipt only after its whole
-// line, newline included, is written and fsynced, so an unterminated
-// final line was never acknowledged: when it does not parse it is
-// residue of that crash and is truncated with a warning, and when it
-// does parse only its newline is missing and is restored. Any other
-// unparsable line cannot come from a crash and stays a hard error.
+// rebuild indexes the existing log, checks its chain, and recovers from
+// a crash during the last append. Append acknowledges an entry only
+// after its whole line, newline included, is written and fsynced, so an
+// unterminated final line was never acknowledged: when it does not parse
+// it is residue of that crash and is truncated with a warning, and when
+// it does parse only its newline is missing and is restored. Any other
+// unparsable line, and any break in the chain, cannot come from a crash
+// and stays a hard error.
 func (l *Log) rebuild() error {
 	if _, err := l.f.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("store: seek: %w", err)
@@ -98,7 +129,7 @@ func (l *Log) rebuild() error {
 		}
 		terminated := raw[len(raw)-1] == '\n'
 		if body := bytes.TrimSpace(raw); len(body) > 0 {
-			r, err := decodeLine(body)
+			e, err := decodeEntry(body, nil)
 			if err != nil {
 				if terminated {
 					return fmt.Errorf("store: %s line %d: %w", l.path, line, err)
@@ -106,16 +137,21 @@ func (l *Log) rebuild() error {
 				if err := l.f.Truncate(off); err != nil {
 					return fmt.Errorf("store: truncate partial line %d of %s: %w", line, l.path, err)
 				}
-				fmt.Fprintf(stderr, "store: warning: %s line %d: dropped %d bytes of an unterminated, unparsable receipt left by an interrupted append (%v)\n",
+				fmt.Fprintf(stderr, "store: warning: %s line %d: dropped %d bytes of an unterminated, unparsable entry left by an interrupted append (%v)\n",
 					l.path, line, len(raw), err)
 				break
 			}
-			key := sessionTurn{r.SessionID, r.TurnIndex}
-			if prev, dup := l.seen[key]; dup {
-				return fmt.Errorf("store: %s line %d: duplicate (session_id=%s, turn_index=%d), first seen as receipt %s",
-					l.path, line, r.SessionID, r.TurnIndex, prev)
+			if err := l.chain.accept(e); err != nil {
+				return fmt.Errorf("store: %s line %d: %w", l.path, line, err)
 			}
-			l.seen[key] = r.ReceiptID
+			if r := e.Receipt; r != nil {
+				key := sessionTurn{r.SessionID, r.TurnIndex}
+				if prev, dup := l.seen[key]; dup {
+					return fmt.Errorf("store: %s line %d: duplicate (session_id=%s, turn_index=%d), first seen as receipt %s",
+						l.path, line, r.SessionID, r.TurnIndex, prev)
+				}
+				l.seen[key] = r.ReceiptID
+			}
 			if !terminated {
 				if _, err := l.f.Write([]byte{'\n'}); err != nil {
 					return fmt.Errorf("store: terminate line %d of %s: %w", line, l.path, err)
@@ -135,25 +171,30 @@ func (l *Log) rebuild() error {
 	return nil
 }
 
-// Append signs one receipt, then appends and fsyncs its envelope as a
-// single line. It rejects (session_id, turn_index) reuse.
-func (l *Log) Append(r *receipt.Receipt) error {
-	if l.signer == nil {
-		return fmt.Errorf("store: log %s was opened without a signing key", l.path)
+// accept checks that e links to the current head and advances the chain.
+func (c *chainState) accept(e *Entry) error {
+	link := e.link()
+	if link.Seq != c.seq {
+		return fmt.Errorf("chain broken: entry has seq %d, want %d (an entry was removed, inserted, or reordered)",
+			link.Seq, c.seq)
 	}
-	body, err := r.Body()
-	if err != nil {
-		return fmt.Errorf("store: %w", err)
+	if link.PrevDigest != c.head {
+		return fmt.Errorf("chain broken: entry %d names prev_digest %s, want %s", link.Seq, link.PrevDigest, c.head)
 	}
-	raw, err := json.Marshal(l.signer.Sign(receipt.PayloadType, body))
-	if err != nil {
-		return fmt.Errorf("store: marshal envelope for %s: %w", r.ReceiptID, err)
+	if cp := e.Checkpoint; cp != nil && cp.Receipts != c.receipts {
+		return fmt.Errorf("checkpoint %d counts %d receipts, the log has %d", link.Seq, cp.Receipts, c.receipts)
 	}
-	line, err := receipt.Canonicalize(raw)
-	if err != nil {
-		return fmt.Errorf("store: canonicalize envelope for %s: %w", r.ReceiptID, err)
+	c.seq++
+	c.head = receipt.Digest(e.Payload)
+	if e.Receipt != nil {
+		c.receipts++
 	}
+	return nil
+}
 
+// Append links, signs, appends, and fsyncs one receipt. It sets the
+// receipt's Link. It rejects (session_id, turn_index) reuse.
+func (l *Log) Append(r *receipt.Receipt) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	key := sessionTurn{r.SessionID, r.TurnIndex}
@@ -161,8 +202,64 @@ func (l *Log) Append(r *receipt.Receipt) error {
 		return fmt.Errorf("store: duplicate (session_id=%s, turn_index=%d), first seen as receipt %s",
 			r.SessionID, r.TurnIndex, prev)
 	}
+	r.Link = receipt.Link{Seq: l.chain.seq, PrevDigest: l.chain.head}
+	body, err := r.Body()
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	if err := l.appendEntry(receipt.PayloadType, body); err != nil {
+		return err
+	}
+	l.chain.receipts++
+	l.seen[key] = r.ReceiptID
+	return nil
+}
+
+// Seal appends a checkpoint for session and returns the new head digest:
+// the value to keep outside the log, since only an external copy can
+// show that the log was later cut back to an earlier point.
+func (l *Log) Seal(sessionID string, at time.Time) (string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cp := &receipt.Checkpoint{
+		Link:      receipt.Link{Seq: l.chain.seq, PrevDigest: l.chain.head},
+		Receipts:  l.chain.receipts,
+		SessionID: sessionID,
+		SealedAt:  at.UTC(),
+	}
+	body, err := cp.Body()
+	if err != nil {
+		return "", fmt.Errorf("store: %w", err)
+	}
+	if err := l.appendEntry(receipt.CheckpointType, body); err != nil {
+		return "", err
+	}
+	return l.chain.head, nil
+}
+
+// Head returns the digest of the last entry, or receipt.Genesis.
+func (l *Log) Head() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.chain.head
+}
+
+// appendEntry signs body and writes it as one fsynced line, advancing
+// the chain on success. The caller holds l.mu.
+func (l *Log) appendEntry(payloadType string, body []byte) error {
+	if l.signer == nil {
+		return fmt.Errorf("store: log %s was opened without a signing key", l.path)
+	}
 	if l.broken != nil {
 		return l.broken
+	}
+	raw, err := json.Marshal(l.signer.Sign(payloadType, body))
+	if err != nil {
+		return fmt.Errorf("store: marshal envelope: %w", err)
+	}
+	line, err := receipt.Canonicalize(raw)
+	if err != nil {
+		return fmt.Errorf("store: canonicalize envelope: %w", err)
 	}
 	line = append(line, '\n')
 	if _, err := l.f.Write(line); err != nil {
@@ -172,14 +269,15 @@ func (l *Log) Append(r *receipt.Receipt) error {
 		return l.rollback(fmt.Errorf("store: fsync: %w", err))
 	}
 	l.size += int64(len(line))
-	l.seen[key] = r.ReceiptID
+	l.chain.seq++
+	l.chain.head = receipt.Digest(body)
 	return nil
 }
 
 // rollback truncates the log back to its last acknowledged line after
 // a failed append. Leaving a partial line would make the next append
 // land on it, corrupting a line in the middle of the log. The failed
-// receipt was never acknowledged (the call fails, invariant 2), so
+// entry was never acknowledged (the call fails, invariant 2), so
 // removing it loses nothing. If the truncate fails too, the log can no
 // longer be appended to safely and refuses further appends.
 func (l *Log) rollback(cause error) error {
@@ -195,79 +293,135 @@ func (l *Log) Close() error {
 	return l.f.Close()
 }
 
-// decodeLine reads one log line: a DSSE envelope whose payload is a
-// receipt body. The signature is not checked (see Log).
-func decodeLine(line []byte) (*receipt.Receipt, error) {
+// decodeEntry reads one log line. With keys, it requires a valid
+// signature from one of them before trusting the payload; without, it
+// only decodes.
+func decodeEntry(line []byte, keys sign.Keyring) (*Entry, error) {
 	var env sign.Envelope
 	if err := json.Unmarshal(line, &env); err != nil {
 		return nil, fmt.Errorf("not an envelope: %w", err)
 	}
-	if env.PayloadType != receipt.PayloadType {
-		return nil, fmt.Errorf("payload type %q, want %q", env.PayloadType, receipt.PayloadType)
+	if env.PayloadType != receipt.PayloadType && env.PayloadType != receipt.CheckpointType {
+		return nil, fmt.Errorf("unknown payload type %q", env.PayloadType)
 	}
-	body, err := sign.Decode(env)
+	var payload []byte
+	var keyID string
+	var err error
+	if keys != nil {
+		payload, keyID, err = sign.Open(env, env.PayloadType, keys)
+	} else {
+		payload, err = sign.Decode(env)
+	}
 	if err != nil {
 		return nil, err
 	}
-	return receipt.ParseBody(body)
+	e := &Entry{Payload: payload, KeyID: keyID}
+	if env.PayloadType == receipt.CheckpointType {
+		var cp receipt.Checkpoint
+		if err := json.Unmarshal(payload, &cp); err != nil {
+			return nil, fmt.Errorf("parse checkpoint: %w", err)
+		}
+		e.Checkpoint = &cp
+		return e, nil
+	}
+	if e.Receipt, err = receipt.ParseBody(payload); err != nil {
+		return nil, err
+	}
+	return e, nil
 }
 
-// Scan reads every receipt in the log at path, in append order,
-// without verifying signatures.
+// Scan reads every receipt in the log at path, in append order, without
+// verifying signatures or the chain: a reader for tooling and tests.
 func Scan(path string) ([]receipt.Receipt, error) {
-	return scan(path, nil)
+	var out []receipt.Receipt
+	err := walk(path, nil, func(e *Entry) error {
+		if e.Receipt != nil {
+			out = append(out, *e.Receipt)
+		}
+		return nil
+	})
+	return out, err
 }
 
-// ScanVerified reads every receipt in the log at path and requires each
-// envelope to carry a valid signature from a key in keys. It is the Go
-// counterpart of the Python verifier's load_log.
-func ScanVerified(path string, keys sign.Keyring) ([]receipt.Receipt, error) {
+// Audit is what a verified read of a log establishes.
+type Audit struct {
+	Receipts    []receipt.Receipt
+	Checkpoints int
+	Head        string // digest of the last entry, or receipt.Genesis
+	Sealed      bool   // the last entry is a checkpoint
+}
+
+// Verify reads the log at path, requiring a valid signature from a key
+// in keys on every entry and an unbroken chain. It is the Go counterpart
+// of the Python verifier's load_log. Truncation of the tail cannot be
+// seen from inside the log; callers compare Audit.Head with a head
+// digest kept elsewhere, or require Sealed.
+func Verify(path string, keys sign.Keyring) (*Audit, error) {
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("store: no trusted keys to verify %s with", path)
 	}
-	return scan(path, keys)
+	a := &Audit{}
+	chain := chainState{head: receipt.Genesis}
+	line := 0
+	err := walk(path, keys, func(e *Entry) error {
+		line++
+		if err := chain.accept(e); err != nil {
+			return err
+		}
+		if e.Receipt != nil {
+			a.Receipts = append(a.Receipts, *e.Receipt)
+		} else {
+			a.Checkpoints++
+		}
+		a.Sealed = e.Checkpoint != nil
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	a.Head = chain.head
+	return a, nil
 }
 
-func scan(path string, keys sign.Keyring) ([]receipt.Receipt, error) {
+// ScanVerified is Verify returning only the receipts.
+func ScanVerified(path string, keys sign.Keyring) ([]receipt.Receipt, error) {
+	a, err := Verify(path, keys)
+	if err != nil {
+		return nil, err
+	}
+	return a.Receipts, nil
+}
+
+// Walk visits every entry of the log at path in order, receipts and
+// checkpoints alike. With keys, each entry's signature is verified
+// first; the chain is not checked (use Verify).
+func Walk(path string, keys sign.Keyring, visit func(*Entry) error) error {
+	return walk(path, keys, visit)
+}
+
+func walk(path string, keys sign.Keyring, visit func(*Entry) error) error {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("store: open: %w", err)
+		return fmt.Errorf("store: open: %w", err)
 	}
 	defer f.Close()
-
-	var out []receipt.Receipt
 	br := bufio.NewReaderSize(f, 1<<20)
 	for line := 1; ; line++ {
 		raw, err := br.ReadBytes('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
-			return nil, fmt.Errorf("store: scan %s: %w", path, err)
+			return fmt.Errorf("store: scan %s: %w", path, err)
 		}
 		if trimmed := bytes.TrimSpace(raw); len(trimmed) > 0 {
-			r, err := readLine(trimmed, keys)
-			if err != nil {
-				return nil, fmt.Errorf("store: %s line %d: %w", path, line, err)
+			e, derr := decodeEntry(trimmed, keys)
+			if derr == nil {
+				derr = visit(e)
 			}
-			out = append(out, *r)
+			if derr != nil {
+				return fmt.Errorf("store: %s line %d: %w", path, line, derr)
+			}
 		}
 		if err != nil {
-			return out, nil
+			return nil
 		}
 	}
-}
-
-// readLine decodes one log line and, when keys is non-nil, requires a
-// valid signature from one of them.
-func readLine(line []byte, keys sign.Keyring) (*receipt.Receipt, error) {
-	if keys == nil {
-		return decodeLine(line)
-	}
-	var env sign.Envelope
-	if err := json.Unmarshal(line, &env); err != nil {
-		return nil, fmt.Errorf("not an envelope: %w", err)
-	}
-	body, _, err := sign.Open(env, receipt.PayloadType, keys)
-	if err != nil {
-		return nil, err
-	}
-	return receipt.ParseBody(body)
 }

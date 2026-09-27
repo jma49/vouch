@@ -32,6 +32,7 @@ type Fact struct {
 // boundaries, (b) third-party verification with only the public key, and
 // (c) replay protection via (SessionID, TurnIndex) uniqueness.
 type Receipt struct {
+	Link
 	ReceiptID       string          `json:"receipt_id"`
 	SessionID       string          `json:"session_id"`
 	TurnIndex       int             `json:"turn_index"`
@@ -57,8 +58,49 @@ type Receipt struct {
 
 // PayloadType identifies a receipt body inside a DSSE envelope. The
 // version changes whenever the body's fields or the canonical JSON
-// rules change (docs/canonical-json.md, "Versioning").
-const PayloadType = "application/vnd.vouch.receipt+json; version=2"
+// rules change (docs/canonical-json.md, "Versioning"). Version 3 added
+// the chain link.
+const PayloadType = "application/vnd.vouch.receipt+json; version=3"
+
+// CheckpointType identifies a checkpoint body. A distinct type means a
+// signature over a receipt can never be replayed as a checkpoint, since
+// DSSE's pre-authentication encoding binds the type.
+const CheckpointType = "application/vnd.vouch.checkpoint+json; version=1"
+
+// Genesis is the prev_digest of the first entry in a log.
+const Genesis = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+// Link chains every log entry, receipt or checkpoint, to the one before
+// it (#54). Seq is the entry's position in the log, from 0; PrevDigest
+// is the digest of the previous entry's payload bytes, or Genesis. Both
+// are inside the signed body, so deleting, reordering, or inserting an
+// entry breaks the chain for everything after it.
+type Link struct {
+	Seq        int64  `json:"seq"`
+	PrevDigest string `json:"prev_digest"`
+}
+
+// Checkpoint seals a log at a point: how many receipts precede it and,
+// through its Link, the digest of the entry before it. The proxy
+// appends one when a session ends cleanly. A log that ends in a
+// checkpoint was not cut short after that session; whether it was cut
+// back to an earlier checkpoint can only be told against a head digest
+// kept outside the log (docs/threat-model.md).
+type Checkpoint struct {
+	Link
+	Receipts  int64     `json:"receipts"`
+	SessionID string    `json:"session_id"`
+	SealedAt  time.Time `json:"sealed_at"`
+}
+
+// Body returns the canonical JSON bytes of the checkpoint.
+func (c *Checkpoint) Body() ([]byte, error) {
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return nil, fmt.Errorf("receipt: marshal checkpoint: %w", err)
+	}
+	return Canonicalize(raw)
+}
 
 // Digest returns "sha256:<hex>" over canonical bytes.
 func Digest(canonical []byte) string {

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"os"
@@ -104,47 +105,55 @@ func goldenReceipts(t *testing.T) []*receipt.Receipt {
 
 // TestGoldenLog verifies the committed golden log matches what the Go
 // side produces today; -update regenerates it.
+// TestGoldenLog writes the golden receipts through a real log, sealed
+// with a checkpoint at a fixed time, and compares the result byte for
+// byte with testdata/receipts_golden.jsonl. Ed25519 is deterministic, so
+// any difference is a change in format, canonicalization, or signing.
 func TestGoldenLog(t *testing.T) {
 	goldenPath := filepath.Join("..", "..", "..", "testdata", "receipts_golden.jsonl")
-	receipts := goldenReceipts(t)
-
-	if *update {
-		tmp := filepath.Join(t.TempDir(), "receipts.jsonl")
-		l, err := Open(tmp, goldenSigner(t))
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, r := range receipts {
-			if err := l.Append(r); err != nil {
-				t.Fatal(err)
-			}
-		}
-		l.Close()
-		raw, err := os.ReadFile(tmp)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(goldenPath, raw, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("regenerated %s", goldenPath)
-	}
-
 	signer := goldenSigner(t)
-	got, err := ScanVerified(goldenPath, sign.Keyring{signer.KeyID(): signer.Public()})
+
+	tmp := filepath.Join(t.TempDir(), "receipts.jsonl")
+	l, err := Open(tmp, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != len(receipts) {
-		t.Fatalf("golden log has %d receipts, want %d (re-run with -update?)", len(got), len(receipts))
-	}
-	for i := range got {
-		want, _ := json.Marshal(receipts[i])
-		wantCanon, _ := receipt.Canonicalize(want)
-		gotRaw, _ := json.Marshal(&got[i])
-		gotCanon, _ := receipt.Canonicalize(gotRaw)
-		if string(wantCanon) != string(gotCanon) {
-			t.Fatalf("golden receipt %d drifted from generator (re-run with -update?):\nwant %s\ngot  %s", i, wantCanon, gotCanon)
+	for _, r := range goldenReceipts(t) {
+		if err := l.Append(r); err != nil {
+			t.Fatal(err)
 		}
+	}
+	head, err := l.Seal("s-golden", time.Date(2026, 7, 25, 2, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	built, err := os.ReadFile(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if *update {
+		if err := os.WriteFile(goldenPath, built, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("regenerated %s (head %s)", goldenPath, head)
+	}
+	golden, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(golden, built) {
+		t.Fatalf("%s drifted from the generator; re-run with -update if the change is intended", goldenPath)
+	}
+
+	audit, err := Verify(goldenPath, sign.Keyring{signer.KeyID(): signer.Public()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !audit.Sealed || audit.Head != head || len(audit.Receipts) != 3 || audit.Checkpoints != 1 {
+		t.Fatalf("golden audit: %+v, want 3 receipts, 1 checkpoint, sealed at head %s", audit, head)
 	}
 }

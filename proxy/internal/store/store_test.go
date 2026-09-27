@@ -120,21 +120,28 @@ func TestUniquenessSurvivesReopen(t *testing.T) {
 	}
 }
 
-func receiptLine(t *testing.T, session string, turn int) []byte {
+// chainedLines writes n receipts through a real log and returns its
+// lines, so each links correctly to the one before it.
+func chainedLines(t *testing.T, n int) [][]byte {
 	t.Helper()
-	body, err := testReceipt(t, session, turn).Body()
+	path := filepath.Join(t.TempDir(), "source.jsonl")
+	l, err := Open(path, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := json.Marshal(signer.Sign(receipt.PayloadType, body))
+	for turn := 0; turn < n; turn++ {
+		if err := l.Append(testReceipt(t, "s1", turn)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	line, err := receipt.Canonicalize(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return line
+	return bytes.Split(bytes.TrimSuffix(raw, []byte("\n")), []byte("\n"))
 }
 
 // TestOpenRecoversFromCrashedAppend pins crash recovery for the
@@ -143,8 +150,8 @@ func receiptLine(t *testing.T, session string, turn int) []byte {
 // acknowledged (Append returns only after the full line is written).
 // Damage anywhere else stays fatal.
 func TestOpenRecoversFromCrashedAppend(t *testing.T) {
-	first := receiptLine(t, "s1", 0)
-	second := receiptLine(t, "s1", 1)
+	lines := chainedLines(t, 2)
+	first, second := lines[0], lines[1]
 	cases := []struct {
 		name     string
 		content  []byte

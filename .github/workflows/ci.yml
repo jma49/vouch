@@ -105,7 +105,7 @@ jobs:
       # The same Go-signed log, verified independently by the Go reader;
       # the Python side verifies it in the tests above.
       - name: Verify golden log signatures (Go)
-        run: ./proxy/bin/vouch receipts verify --public-key testdata/keys/golden.pub.pem testdata/receipts_golden.jsonl
+        run: ./proxy/bin/vouch receipts verify --require-sealed --public-key testdata/keys/golden.pub.pem testdata/receipts_golden.jsonl
       - name: Run eval
         run: |
           vouch-eval --receipts testdata/receipts_golden.jsonl --n 10 \

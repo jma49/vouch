@@ -127,16 +127,31 @@ entry whenever a choice closes off an alternative (AGENTS.md).
 - Revisit when: published eval results need to prove authorship; sign
   those with a maintainer key kept out of the repository.
 
-**The log reader checks structure, not signatures** (#53)
-- Chosen: the proxy's store decodes envelopes on startup without
-  verifying them; `vouch receipts verify` and the Python verifier do.
-- Rejected: verifying in the store with the proxy's own key.
-- Why: trust belongs to whoever reads the log, with their own keyring;
-  the proxy would only be checking its own signatures.
-- Cost: a proxy restarted on a tampered log keeps appending to it; the
-  tampering is caught when the log is verified, not before.
-- Revisit when: the hash chain lands (#54), since appending then
-  extends a chain whose head the proxy should trust.
+**The log checks the chain on open, not signatures** (#53, #54)
+- Chosen: the proxy's store verifies the hash chain when it opens a log
+  (a broken chain is a hard error) but not signatures; `vouch receipts
+  verify` and the Python verifier check both.
+- Rejected: verifying signatures in the store with the proxy's own key.
+- Why: trust belongs to whoever reads the log, with their own keyring.
+  The chain check is cheap, needs no key, and stops the proxy from
+  appending to a log whose history was rearranged.
+- Cost: a log whose entries were re-signed by someone holding the key
+  is extended without complaint; that attacker is outside what the
+  proxy can judge (threat model).
+
+**Tail truncation is left to an external witness** (#54)
+- Chosen: checkpoints plus `--require-sealed` and `--expect-head`; eval
+  runs record their head in the committed `meta.json`.
+- Rejected: claiming the log detects truncation by itself.
+- Why: a prefix of a valid chain is a valid chain. Nothing inside a
+  log can show that later entries once existed; only a copy of the head
+  kept elsewhere can.
+- Cost: operators who want truncation detected must keep the head the
+  proxy prints (or publish it); without it, a log cut back to an
+  earlier checkpoint verifies.
+- Revisit when: logs are shared beyond the eval data; publish heads to
+  an append-only witness (a transparency log) rather than trusting
+  whoever holds the file.
 
 **docker-compose mounts the whole key volume into verify and eval**
 - Chosen: one `keys` volume, read-write for the proxy, read-only for

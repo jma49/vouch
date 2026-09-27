@@ -116,9 +116,9 @@ Goal: the receipt log's security claims are true and tested.
 | Item | Status |
 |---|---|
 | Ed25519 signatures in DSSE envelopes (public-key verification enables genuine third-party audit); key id on each receipt; HMAC removed | done (#53) |
-| Hash chain: each receipt carries `prev_digest`; deletion, truncation, reordering become detectable | todo |
-| Signed checkpoints (head digest + count) for sealing a session | todo |
-| Tamper test suite: delete, truncate, reorder, duplicate, edit fact, edit sig — each must be detected, in both Go and Python | todo |
+| Hash chain: each entry carries `seq` and `prev_digest`; deletion, insertion, reordering are detected | done (#54) |
+| Signed checkpoints for sealing a session; `--require-sealed`, `--expect-head` | done (#54) |
+| Tamper test suite: delete, truncate, reorder, duplicate, edit fact, edit sig — each must be detected, in both Go and Python | done (#55) |
 | Receipts bind the whole result the agent received, not only the extraction payload | done (#50, issue #20) |
 | Crash recovery: a partial final line is truncated on open; a failed append rolls back | done (#46, issue #25) |
 | `docs/threat-model.md`: attacker, assets, what is and is not protected | todo |

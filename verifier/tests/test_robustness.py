@@ -3,10 +3,20 @@ from the CLI (issue #16). Exit 1 is reserved for failing claims."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
-from envelopes import GOLDEN, GOLDEN_KEYS, ROOT, edit_body, edit_payload, golden_lines
+from envelopes import (
+    GOLDEN,
+    GOLDEN_KEYS,
+    ROOT,
+    bodies,
+    edit_body,
+    edit_payload,
+    golden_lines,
+    signed_chain,
+)
 
 from vouch_verifier.cli import main
 from vouch_verifier.receipts import ReceiptError, load_log
@@ -19,25 +29,34 @@ def _first_line_with(**changes: object) -> str:
     return edit_body(golden_lines()[0], lambda body: body.update(changes))
 
 
+def _replayed_receipt_id() -> str:
+    # Distinct turns, same receipt_id, in a valid signed chain: only the
+    # duplicate check can catch it.
+    (kind, body), _ = bodies(golden_lines()[:2])
+    first = json.loads(body)
+    return "\n".join(signed_chain([(kind, first), (kind, {**first, "turn_index": 99})])) + "\n"
+
+
 @pytest.mark.parametrize(
     ("content", "message"),
     [
-        (GOLDEN.read_text(encoding="utf-8") + "not json\n", "line 4"),
-        (_first_line_with(facts=["not an object"]) + "\n", "fact is not an object"),
-        (
+        pytest.param(
+            GOLDEN.read_text(encoding="utf-8") + "not json\n", "line 5", id="garbage-line"
+        ),
+        pytest.param(
+            _first_line_with(facts=["not an object"]) + "\n",
+            "fact is not an object",
+            id="fact-type",
+        ),
+        pytest.param(
             edit_payload(
                 golden_lines()[0], lambda b: b.replace('"turn_index":0', '"turn_index":1e400')
             )
             + "\n",
             "turn_index",
+            id="int-overflow",
         ),
-        (
-            GOLDEN.read_text(encoding="utf-8").splitlines()[0]
-            + "\n"
-            + _first_line_with(turn_index=99)
-            + "\n",
-            "duplicate receipt_id",
-        ),
+        pytest.param(_replayed_receipt_id(), "duplicate receipt_id", id="duplicate-id"),
     ],
 )
 def test_malformed_logs_raise_receipt_errors(tmp_path: Path, content: str, message: str) -> None:

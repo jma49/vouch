@@ -2,12 +2,17 @@
 
     vouch-verify --answer answer.txt --receipts receipts/receipts.jsonl \
         --public-key vouch.pub.pem [--public-key ...] \
+        [--require-sealed] [--expect-head sha256:...] \
         [--tolerances tolerance.yaml] [--format md|json]
 
 Trusted Ed25519 public keys come from --public-key (repeatable, for key
 rotation) or, when none is given, from $VOUCH_PUBLIC_KEY (paths
 separated by the OS path separator). Without any, signatures are not
-checked (structural and digest checks still run) and a warning says so.
+checked (structural, digest, and chain checks still run) and a warning
+says so. The log's hash chain is always checked. Truncation of its tail
+is detected only with --require-sealed (the log must end in the
+checkpoint the proxy writes when a session ends cleanly) or
+--expect-head (a head digest kept outside the log).
 
 Exit codes: 0 when no claim fails; 1 when any claim is CONTRADICTED,
 UNSUPPORTED, or STALE; 2 for usage errors and for input that cannot be
@@ -24,7 +29,7 @@ from pathlib import Path
 
 from vouch_verifier.claims import extract_claims
 from vouch_verifier.matcher import DEFAULT_TOLERANCES, load_tolerances, match_claims
-from vouch_verifier.receipts import ReceiptError, load_log
+from vouch_verifier.receipts import ReceiptError, audit_log
 from vouch_verifier.report import build_report, to_json, to_markdown
 from vouch_verifier.signing import load_keyring
 from vouch_verifier.verdict import FAILURES
@@ -42,6 +47,12 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="trusted Ed25519 public key PEM (repeatable); default $VOUCH_PUBLIC_KEY",
     )
+    p.add_argument(
+        "--require-sealed",
+        action="store_true",
+        help="fail unless the log ends in a checkpoint",
+    )
+    p.add_argument("--expect-head", help="fail unless the chain head is this digest")
     args = p.parse_args(argv)
 
     key_paths = args.public_key or [
@@ -61,7 +72,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         answer = Path(args.answer).read_text(encoding="utf-8")
         keys = load_keyring(key_paths) if key_paths else None
-        receipts = load_log(args.receipts, keys)
+        receipts = audit_log(
+            args.receipts,
+            keys,
+            require_sealed=args.require_sealed,
+            expect_head=args.expect_head,
+        ).receipts
         tolerances = load_tolerances(args.tolerances) if args.tolerances else DEFAULT_TOLERANCES
     except (OSError, UnicodeDecodeError, ReceiptError, ValueError) as e:
         print(f"vouch-verify: error: {e}", file=sys.stderr)

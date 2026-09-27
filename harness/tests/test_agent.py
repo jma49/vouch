@@ -33,7 +33,7 @@ from vouch_harness.agent.llm import (
     load_models,
 )
 from vouch_harness.agent.mcp_client import MCPError, RPCError, StdioMCPClient
-from vouch_verifier.receipts import load_log
+from vouch_verifier.receipts import audit_log, load_log
 
 ROOT = Path(__file__).resolve().parents[2]
 PROXY = ROOT / "proxy" / "bin" / "vouch"
@@ -532,6 +532,9 @@ def test_end_to_end_through_the_go_proxy(tmp_path: Path) -> None:
     d = runner.execute(spec, client, tmp_path, PROXY, ROOT / "schemas", env)
     receipts = load_log(d / "receipts.jsonl", EVAL_KEYS)
     assert [r.session_id for r in receipts] == ["fake.t08.s0"] * 2
+    # The proxy sealed the session on exit, and the run recorded the head.
+    audit = audit_log(d / "receipts.jsonl", EVAL_KEYS, require_sealed=True)
+    assert json.loads((d / "meta.json").read_text())["head"] == audit.head
     assert {f.entity for r in receipts for f in r.facts} == {"NVDA", "AMD"}
     nvda_last = next(f for f in receipts[0].facts if f.metric == "last_price")
     assert nvda_last.value == market.get_quote("NVDA")["last"]

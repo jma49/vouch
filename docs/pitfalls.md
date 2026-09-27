@@ -115,7 +115,7 @@ remembering. The 2026-09-27 audit filed #8-#48; all are closed.
 - **Cause:** receipts are signed individually; there is no hash chain
   or checkpoint binding them together.
 - **Fix / workaround:** roadmap Phase 3 (`prev_digest` chain).
-- **Status:** open. Code reading.
+- **Status:** fixed: hash chain and signed checkpoints (#54). Tail truncation to an earlier checkpoint remains detectable only against an external head digest (`--expect-head`).
 
 ---
 
