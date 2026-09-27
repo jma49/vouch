@@ -17,7 +17,11 @@ def load_vectors() -> list[dict[str, Any]]:
 
 @pytest.mark.parametrize("vec", load_vectors(), ids=lambda v: v["name"])
 def test_vectors(vec: dict[str, Any]) -> None:
-    assert canonicalize(vec["input"]) == vec["canonical"]
+    if vec.get("rejected"):
+        with pytest.raises(ValueError):
+            canonicalize(vec["input"])
+    else:
+        assert canonicalize(vec["input"]) == vec["canonical"]
 
 
 def test_idempotent() -> None:

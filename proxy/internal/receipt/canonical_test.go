@@ -13,6 +13,7 @@ type vectorFile struct {
 		Name      string `json:"name"`
 		Input     string `json:"input"`
 		Canonical string `json:"canonical"`
+		Rejected  bool   `json:"rejected"`
 	} `json:"vectors"`
 }
 
@@ -31,6 +32,12 @@ func TestCanonicalizeVectors(t *testing.T) {
 	for _, v := range vf.Vectors {
 		t.Run(v.Name, func(t *testing.T) {
 			got, err := Canonicalize([]byte(v.Input))
+			if v.Rejected {
+				if err == nil {
+					t.Fatalf("accepted %s as %s; want an error", v.Input, got)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("Canonicalize: %v", err)
 			}

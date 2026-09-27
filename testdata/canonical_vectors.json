@@ -1,5 +1,5 @@
 {
-  "description": "Shared canonicalization test vectors. Both the Go proxy and the Python verifier must produce byte-identical output for these inputs. Seed set: object key sorting, nesting, arrays, unicode passthrough, and number literals that round-trip identically in both languages. Exponent-form numbers are deliberately excluded until full RFC 8785 number normalization lands (see docs/design.md section 7).",
+  "description": "Shared canonicalization test vectors. Both the Go proxy and the Python verifier must produce byte-identical output for these inputs. Seed set: object key sorting, nesting, arrays, unicode passthrough, and number literals that round-trip identically in both languages. Exponent-form numbers are deliberately excluded until full RFC 8785 number normalization lands (see docs/design.md section 7). A vector with \"rejected\": true has no canonical form: both implementations must refuse the input, because canonicalizing it would change what the receiver saw.",
   "vectors": [
     {
       "name": "key_sorting_flat",
@@ -42,11 +42,6 @@
       "canonical": "{\"h\":\"a\\u2028b\\u2029c\",\"\\u2028\":1}"
     },
     {
-      "name": "lone_surrogates_replaced",
-      "input": "[\"\\ud800\", \"x\\udc00y\"]",
-      "canonical": "[\"�\",\"x�y\"]"
-    },
-    {
       "name": "control_characters",
       "input": "\"\\b\\f\\n\\r\\t\\u0001\\u001f\\u007f\"",
       "canonical": "\"\\b\\f\\n\\r\\t\\u0001\\u001f\""
@@ -55,6 +50,26 @@
       "name": "astral_plane_raw",
       "input": "\"\\ud83d\\ude00 \\u00e9\"",
       "canonical": "\"😀 é\""
+    },
+    {
+      "name": "lone_high_surrogate_rejected",
+      "input": "[\"\\ud800\"]",
+      "rejected": true
+    },
+    {
+      "name": "lone_low_surrogate_rejected",
+      "input": "\"x\\udc00y\"",
+      "rejected": true
+    },
+    {
+      "name": "duplicate_keys_rejected",
+      "input": "{\"a\": 1, \"a\": 2}",
+      "rejected": true
+    },
+    {
+      "name": "duplicate_keys_after_unescape_rejected",
+      "input": "{\"a\": 1, \"\\u0061\": 2}",
+      "rejected": true
     }
   ]
 }
