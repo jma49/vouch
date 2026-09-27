@@ -214,9 +214,10 @@ remembering. The 2026-09-27 audit filed #8-#48; all are closed.
 - **Cause:** the proxy returns tool results unchanged (by design), so
   the agent never sees a receipt id it could cite. The citation
   protocol in design section 5 has no channel to the model.
-- **Fix / workaround:** none yet. Needs an opt-in proxy mode that
-  exposes the receipt id to the model (roadmap Phase 2).
-- **Status:** open. Found while building the agent runner.
+- **Fix / workaround:** `vouch proxy --cite` appends a block naming
+  the receipt and a citation per fact; `vouch-agent --cite` asks the
+  model to use it, and the real-eval report measures adherence.
+- **Status:** fixed (#81). Found while building the agent runner.
 
 ---
 

@@ -111,6 +111,7 @@ make eval-real                                  # verifier vs. labels, misreport
 - **Deterministic upstream.** A synthetic market-data MCP server serves real tickers with generated values. Runs are reproducible, and a model that recalls real-world prices instead of reading the tool gets caught.
 - **Pay once.** Every model response is cached by request hash, and completed runs are skipped.
 - **Blind labels.** The labeling tool never shows the verifier's verdict. [`docs/labeling.md`](docs/labeling.md) defines every label, and agreement between labelers is reported as Cohen's kappa.
+- **Citation as a measured condition.** With `ARGS=--cite`, the proxy (`vouch proxy --cite`) appends each result's receipted values with a ready-made citation, such as `rsi_14 = 62.3  -> [[r:3f9a1c2e7b40#/rsi_14]]`, and the model is asked to use them. Those runs are kept under `<model>+cite`, and the report states how often each model actually cites (Tier 1 adherence).
 
 ## Overhead
 

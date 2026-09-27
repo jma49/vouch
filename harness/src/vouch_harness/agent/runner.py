@@ -11,6 +11,7 @@ them and never call a model.
 from __future__ import annotations
 
 import json
+import shlex
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
@@ -29,6 +30,14 @@ from vouch_verifier.receipts import audit_log
 SYSTEM_PROMPT = """You are a financial research assistant. Today is Friday, July 24, 2026, \
 after the US market close. Use the available tools to look up market data before stating any \
 figure, and answer the user's question concisely in plain prose."""
+
+# The citation condition (vouch proxy --cite, P-044): the proxy appends
+# citable values to each result, and the model is asked to use them.
+# Tier 1 adherence under this prompt is itself a measured property of
+# the model (design section 5).
+CITE_INSTRUCTIONS = """ Tool results may end with a [vouch] block that lists receipted values \
+with a citation for each. Whenever you state one of those values, put its citation, exactly as \
+given, right after the number."""
 
 MAX_TURNS = 12
 
@@ -131,7 +140,7 @@ class RunResult:
 
 
 def run_agent(
-    client: ChatClient, host: ToolHost, prompt: str, sample: int
+    client: ChatClient, host: ToolHost, prompt: str, sample: int, *, cite: bool = False
 ) -> tuple[RunResult, list[Message]]:
     """Drive one conversation to a final answer. Returns the result and
     the transcript. Assistant messages are kept exactly as the provider
@@ -139,7 +148,7 @@ def run_agent(
     be sent back unchanged on the next turn."""
     tools = to_openai_tools(host.list_tools())
     messages: list[Message] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": SYSTEM_PROMPT + (CITE_INSTRUCTIONS if cite else "")},
         {"role": "user", "content": prompt},
     ]
     calls = 0
@@ -192,20 +201,30 @@ class RunSpec:
     model: str
     task: Task
     sample: int
+    # The citation condition is a different experiment, so its runs live
+    # beside the plain ones under "<model>+cite", never among them.
+    cite: bool = False
+
+    @property
+    def condition(self) -> str:
+        return f"{self.model}+cite" if self.cite else self.model
 
     @property
     def session(self) -> str:
-        return f"{self.model}.{self.task.id}.s{self.sample}"
+        return f"{self.condition}.{self.task.id}.s{self.sample}"
 
 
 def run_dir(out: Path, spec: RunSpec) -> Path:
-    return out / spec.model / spec.task.id / f"s{spec.sample}"
+    return out / spec.condition / spec.task.id / f"s{spec.sample}"
 
 
-def proxy_argv(proxy: Path, schemas: Path, receipts: Path, session: str) -> list[str]:
-    # The proxy splits --upstream on whitespace (docs/pitfalls.md P-023).
-    upstream = f"{sys.executable} -m vouch_harness.market"
-    return [
+def proxy_argv(
+    proxy: Path, schemas: Path, receipts: Path, session: str, *, cite: bool = False
+) -> list[str]:
+    # The proxy splits --upstream like a shell would (#70), so an
+    # interpreter path with spaces must be quoted.
+    upstream = f"{shlex.quote(sys.executable)} -m vouch_harness.market"
+    argv = [
         str(proxy),
         "proxy",
         "--upstream",
@@ -217,6 +236,7 @@ def proxy_argv(proxy: Path, schemas: Path, receipts: Path, session: str) -> list
         "--session",
         session,
     ]
+    return [*argv, "--cite"] if cite else argv
 
 
 def execute(
@@ -237,13 +257,15 @@ def execute(
     d.mkdir(parents=True, exist_ok=True)
     (d / "receipts.jsonl").unlink(missing_ok=True)  # a partial previous attempt
     (d / "error.txt").unlink(missing_ok=True)  # its recorded failure
-    argv = proxy_argv(proxy, schemas, d, spec.session)
+    argv = proxy_argv(proxy, schemas, d, spec.session, cite=spec.cite)
     if host_factory is not None:
         host = host_factory(argv, env, d)
-        result, transcript = run_agent(client, host, spec.task.prompt, spec.sample)
+        result, transcript = run_agent(client, host, spec.task.prompt, spec.sample, cite=spec.cite)
     else:
         with StdioMCPClient(argv, env=env, stderr=d / "proxy.log") as mcp:
-            result, transcript = run_agent(client, mcp, spec.task.prompt, spec.sample)
+            result, transcript = run_agent(
+                client, mcp, spec.task.prompt, spec.sample, cite=spec.cite
+            )
     (d / "answer.txt").write_text(result.answer + "\n", encoding="utf-8")
     (d / "transcript.json").write_text(
         json.dumps(transcript, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -254,6 +276,7 @@ def execute(
         "prompt": spec.task.prompt,
         "sample": spec.sample,
         "session": spec.session,
+        "cite": spec.cite,
         # Which key signed receipts.jsonl, so scoring can tell a wrong
         # key from a tampered log (vouch_harness.signing).
         "key_id": signing_key_id(Path(env["VOUCH_SIGNING_KEY"]))

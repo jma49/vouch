@@ -155,6 +155,26 @@ entry whenever a choice closes off an alternative (AGENTS.md).
 - `tools/list_changed` refreshes routes before the agent is told; a
   refresh that finds a name collision keeps the old routes and logs.
 
+**Citation channel: a block derived from the receipt, opt-in** (#81)
+- Chosen: `--cite` appends one text block per receipted result, after
+  the receipt is written, listing each fact as `metric = value  ->
+  [[r:<12-hex prefix>#<pointer>]]`. The receipt signs the upstream's
+  result without the block. Results without facts are unchanged. The
+  harness runs it as a separate condition (`<model>+cite`) with an
+  extra system-prompt sentence, and the report adds citation adherence.
+- Rejected: always on (the proxy would no longer be transparent, and
+  the plain condition measures what agents do unprompted); signing the
+  block into `response_canonical` (the receipt records what the tool
+  returned; the block adds nothing the receipt does not already sign);
+  full 32-digit ids (models copy long hex badly; a unique prefix is
+  enough, and an ambiguous one fails as UNSUPPORTED, never as a wrong
+  match).
+- Cost: under `--cite` the agent sees a result that differs from the
+  upstream's by one block, and its JSON is re-serialized (keys sorted).
+  Values in the block are formatted from float64 facts, so a tool's
+  `181.50` appears as `181.5`.
+- Revisit when: agents cite reliably enough to make Tier 1 the default.
+
 **Streamable HTTP: one session per process, simple stream routing** (#79)
 - Chosen: `--listen` serves exactly one session; DELETE or a signal
   ends it and seals the log, as EOF does on stdio. Every POSTed request

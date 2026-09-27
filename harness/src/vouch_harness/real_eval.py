@@ -51,6 +51,7 @@ class RunScore:
     sample: int
     verifier: dict[tuple[int, int], str]  # span -> verdict
     human: dict[tuple[int, int], str] = field(default_factory=dict)  # span -> label
+    cited: frozenset[tuple[int, int]] = frozenset()  # spans with a Tier 1 citation
 
     @property
     def labeled(self) -> bool:
@@ -121,6 +122,7 @@ def score_runs(
                 sample=int(sample.lstrip("s")),
                 verifier={mc.claim.span: mc.verdict.value for mc in matched},
                 human=human.get(run_id, {}),
+                cited=frozenset(mc.claim.span for mc in matched if mc.claim.citation is not None),
             )
         )
     return scores
@@ -238,6 +240,29 @@ def _rates(scores: list[RunScore], source: str, rng: random.Random) -> list[Mode
     return out
 
 
+def _adherence(scores: list[RunScore], rng: random.Random) -> list[tuple[str, int, Stats]]:
+    """Per model or condition: the share of judged claims that carry a
+    Tier 1 citation, one value per sample index. Under the citation
+    condition (`vouch-agent --cite`) this is how well the model follows
+    the protocol it was asked to use (design section 5)."""
+    out = []
+    for model in sorted({s.model for s in scores}):
+        by_sample: dict[int, list[RunScore]] = defaultdict(list)
+        for s in scores:
+            if s.model == model:
+                by_sample[s.sample].append(s)
+        shares = []
+        for runs in by_sample.values():
+            judged = [
+                (s, span) for s in runs for span, v in s.verifier.items() if v != "UNVERIFIABLE"
+            ]
+            if judged:
+                shares.append(sum(span in s.cited for s, span in judged) / len(judged))
+        if shares:
+            out.append((model, sum(len(v) for v in by_sample.values()), summarize(shares, rng)))
+    return out
+
+
 def _fmt(s: Stats | None) -> str:
     if s is None:
         return "n/a"
@@ -320,7 +345,16 @@ def to_markdown(
         "The verifier estimate covers every run but inherits the verifier's errors above; "
         "the human rows are the ground truth where they exist.",
         "",
+        "## Citation adherence",
+        "",
+        "Share of judged claims that carry a receipt citation (Tier 1). Runs under "
+        "`<model>+cite` were offered citations by the proxy and asked to use them.",
+        "",
+        "| Model | Runs | Cited share |",
+        "|---|---|---|",
     ]
+    lines += [f"| {m} | {n} | {_fmt(st)} |" for m, n, st in _adherence(scores, rng)]
+    lines.append("")
     return "\n".join(lines)
 
 

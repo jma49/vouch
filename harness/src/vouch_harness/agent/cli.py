@@ -77,6 +77,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Ed25519 private key PEM (default: $VOUCH_SIGNING_KEY, else the public eval key)",
     )
+    p.add_argument(
+        "--cite",
+        action="store_true",
+        help="citation condition: the proxy offers receipt citations and the model is asked to "
+        "use them; runs go under <model>+cite",
+    )
     p.add_argument("--dry-run", action="store_true", help="list pending runs; call nothing")
     args = p.parse_args(argv)
 
@@ -91,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
             p.error(f"unknown task ids: {sorted(unknown)}")
         tasks = [t for t in tasks if t.id in args.task]
 
-    specs = [RunSpec(args.model, t, s) for t in tasks for s in range(args.samples)]
+    specs = [RunSpec(args.model, t, s, cite=args.cite) for t in tasks for s in range(args.samples)]
     pending = [s for s in specs if not (run_dir(args.out, s) / "meta.json").exists()]
     print(
         f"vouch-agent: {config.name} ({config.model}): {len(specs)} runs, "

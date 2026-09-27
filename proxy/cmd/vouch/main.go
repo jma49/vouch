@@ -3,7 +3,7 @@
 //	vouch keygen [--out <dir>] [--name <name>]
 //	vouch proxy --signing-key <key.pem> --upstream "[name=]cmd args" \
 //	    [--upstream "[name=]https://host/mcp" --upstream-header "name=H: v"] \
-//	    [--listen 127.0.0.1:8765] --receipts <dir> --schemas <dir> [--session <id>]
+//	    [--listen 127.0.0.1:8765] [--cite] --receipts <dir> --schemas <dir> [--session <id>]
 //	vouch receipts cat <log>
 //	vouch canon [--lines] < input
 //	vouch receipts verify --public-key <key.pub.pem> [--public-key ...] \
@@ -79,7 +79,7 @@ func usage() {
   vouch keygen [--out <dir>] [--name <name>]
   vouch proxy --signing-key <key.pem> --upstream "[name=]cmd args" [--upstream ...] \
       [--upstream "[name=]https://host/mcp" --upstream-header "name=Header: value"] \
-      [--listen 127.0.0.1:8765] --receipts <dir> --schemas <dir> [--session <id>]
+      [--listen 127.0.0.1:8765] [--cite] --receipts <dir> --schemas <dir> [--session <id>]
   vouch receipts cat <log>
   vouch receipts verify --public-key <key.pub.pem> [--public-key ...] \
       [--require-sealed] [--expect-head <digest>] <log>
@@ -94,6 +94,7 @@ func runProxy(args []string) error {
 	var headers stringSlice
 	fs.Var(&headers, "upstream-header", "header for an HTTP upstream as \"name=Header: value\"; a value of env:VAR reads $VAR (repeatable)")
 	listen := fs.String("listen", "", "serve the agent over Streamable HTTP at http://ADDR/mcp instead of stdio")
+	cite := fs.Bool("cite", false, "add a block to each result telling the model how to cite its receipted facts (design section 5)")
 	receiptsDir := fs.String("receipts", "receipts", "directory for the receipt log")
 	schemasDir := fs.String("schemas", "schemas", "directory of fact-extraction sidecar configs")
 	session := fs.String("session", "", "session id (default: random)")
@@ -194,6 +195,7 @@ func runProxy(args []string) error {
 		Log:       rlog,
 		SessionID: *session,
 		Clock:     clk,
+		Cite:      *cite,
 	}
 	fmt.Fprintf(os.Stderr, "vouch proxy: mode %s, session %s, %d upstream(s), receipts in %s\n",
 		*mode, *session, len(ups), *receiptsDir)

@@ -102,7 +102,7 @@ figures surface as `UNSUPPORTED`.
 | Report: per-model misreport rate (`CONTRADICTED` + `UNSUPPORTED` + `STALE`), variance across samples | tooling done (be11b55); numbers pending runs |
 | Gold set decoupled from the extractor | superseded: real answers with human labels replace it as the headline; the synthetic set stays as a regression check |
 | Remove or relabel metrics that are deterministic by construction (stability on a deterministic pipeline) | todo (with the README headline switch) |
-| Citation channel: opt-in proxy mode that shows the model a receipt id it can cite (P-044), so Tier 1 adherence can be measured | todo |
+| Citation channel: opt-in proxy mode that shows the model a receipt id it can cite (P-044), so Tier 1 adherence can be measured | done (#81): `--cite` in the proxy and the agent runner; adherence in the report |
 
 Exit criteria: `make eval-real` reproduces the report from committed
 labels and fixtures; README headline numbers come from it.

@@ -14,6 +14,7 @@ from vouch_harness import signing
 from vouch_harness.label import store
 from vouch_harness.real_eval import MISSED, detection, main, score_runs, to_markdown
 from vouch_verifier.matcher import DEFAULT_TOLERANCES
+from vouch_verifier.receipts import load_log
 
 ROOT = Path(__file__).resolve().parents[2]
 GOLDEN = ROOT / "testdata" / "receipts_golden.jsonl"
@@ -215,3 +216,22 @@ def test_a_run_whose_log_no_longer_matches_its_head_is_refused(
     assert main([*_cli_args(runs), "--public-key", str(GOLDEN_PUB)]) == 2
     err = capsys.readouterr().err
     assert "m/t01/s0" in err and "expected sha256:abab" in err
+
+
+def test_report_measures_citation_adherence_per_condition(tmp_path: Path) -> None:
+    receipt = load_log(GOLDEN, GOLDEN_KEYS)[0]
+    rsi = next(f for f in receipt.facts if f.metric == "rsi_14")
+    plain = f"NVDA's RSI is {rsi.value:g}."
+    cited = f"NVDA's RSI is {rsi.value:g} [[r:{receipt.receipt_id}#{rsi.json_ptr}]]."
+    runs = tmp_path / "runs"
+    for run_id, answer in [("m/t01/s0", plain), ("m+cite/t01/s0", cited)]:
+        d = runs / run_id
+        d.mkdir(parents=True)
+        (d / "answer.txt").write_text(answer + "\n")
+        (d / "meta.json").write_text(json.dumps({"prompt": "q"}))
+        shutil.copy(GOLDEN, d / "receipts.jsonl")
+    scores = {s.run: s for s in score_runs(runs, {}, DEFAULT_TOLERANCES, GOLDEN_KEYS)}
+    assert scores["m+cite/t01/s0"].cited and not scores["m/t01/s0"].cited
+    md = to_markdown(list(scores.values()), "alice", {}, {})
+    assert "| m | 1 | 0.00" in md
+    assert "| m+cite | 1 | 1.00" in md
