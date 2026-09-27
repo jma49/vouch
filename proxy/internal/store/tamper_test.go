@@ -119,6 +119,18 @@ func TestVerifyDetectsTampering(t *testing.T) {
 		{"re-sign a body with a case-variant key", [][]byte{r0, resign(t, r1, signer, func(b string) string {
 			return strings.Replace(b, `"facts":`, `"Facts":[],"facts":`, 1)
 		}), r2, cp}, "only in case"},
+		// #99: checks Go's verifier used to leave to Python.
+		{"re-sign a receipt with a wrong result digest", [][]byte{r0, resign(t, r1, signer, func(b string) string {
+			return strings.Replace(b, `"result_digest":"sha256:`, `"result_digest":"sha256:0`, 1)
+		}), r2, cp}, "result_digest"},
+		{"re-sign a receipt reusing an id", [][]byte{r0, resign(t, r1, signer, func(b string) string {
+			id := func(line []byte) string {
+				body := resignBody(t, line)
+				start := strings.Index(body, `"receipt_id":"`) + len(`"receipt_id":"`)
+				return body[start : start+strings.Index(body[start:], `"`)]
+			}
+			return strings.Replace(b, id(r1), id(r0), 1)
+		}), r2, cp}, "duplicate receipt_id"},
 		{"swap in a checkpoint's signature", [][]byte{r0, r1, r2, func() []byte {
 			var a, b sign.Envelope
 			_ = json.Unmarshal(cp, &a)
@@ -155,4 +167,18 @@ func TestVerifyDetectsTampering(t *testing.T) {
 			t.Fatalf("truncated log must be unsealed with a different head: %+v", a)
 		}
 	})
+}
+
+// resignBody is the decoded payload of a line, for building edits.
+func resignBody(t *testing.T, line []byte) string {
+	t.Helper()
+	var env sign.Envelope
+	if err := json.Unmarshal(line, &env); err != nil {
+		t.Fatal(err)
+	}
+	body, err := sign.Decode(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
 }

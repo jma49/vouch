@@ -5,6 +5,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -258,5 +259,27 @@ func TestReplayMatchesANumberSpelledDifferently(t *testing.T) {
 	params := map[string]any{"name": "get_bars", "arguments": map[string]any{"limit": json.Number("5.0")}}
 	if _, err := rep.Call("tools/call", params); err != nil {
 		t.Fatalf("replay of limit=5.0 against a limit=5 recording: %v", err)
+	}
+}
+
+// TestConcurrentSavesNeverCorrupt pins #99: fixtures are replaced whole,
+// so racing recordings of one call leave one complete response.
+func TestConcurrentSavesNeverCorrupt(t *testing.T) {
+	fs := &fixture.Store{Dir: t.TempDir()}
+	at := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			body := `{"pad":"` + strings.Repeat("x", 1+i*997) + `"}`
+			if err := fs.SaveCall("get_bars", json.RawMessage(`{}`), json.RawMessage(body), at); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if _, ok, err := fs.LoadCall("get_bars", []byte(`{}`)); err != nil || !ok {
+		t.Fatalf("load after concurrent saves: %v, %v", ok, err)
 	}
 }

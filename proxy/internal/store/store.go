@@ -87,12 +87,19 @@ func (e *Entry) link() receipt.Link {
 // rebuilds the uniqueness index. signer signs every appended entry; a
 // log opened with a nil signer can be read but refuses appends.
 func Open(path string, signer *sign.Signer) (*Log, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	// Owner-only: receipts hold tool arguments and results, which can be
+	// confidential (docs/threat-model.md, #99). Existing files and
+	// directories keep their modes.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("store: mkdir: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("store: open: %w", err)
+	}
+	if err := lockFile(f); err != nil {
+		f.Close()
+		return nil, err
 	}
 	l := &Log{
 		f: f, path: path, signer: signer,
@@ -406,14 +413,27 @@ func Verify(path string, keys sign.Keyring) (*Audit, error) {
 	}
 	a := &Audit{}
 	chain := chainState{head: receipt.Genesis}
-	line := 0
+	ids := make(map[string]bool)
+	turns := make(map[sessionTurn]bool)
 	err := walk(path, keys, func(e *Entry) error {
-		line++
 		if err := chain.accept(e); err != nil {
 			return err
 		}
-		if e.Receipt != nil {
-			a.Receipts = append(a.Receipts, *e.Receipt)
+		if r := e.Receipt; r != nil {
+			// The same checks the Python verifier makes (#99): a signed
+			// receipt must still be consistent with itself and unique.
+			if err := checkDigests(r); err != nil {
+				return err
+			}
+			key := sessionTurn{r.SessionID, r.TurnIndex}
+			switch {
+			case ids[r.ReceiptID]:
+				return fmt.Errorf("duplicate receipt_id %s", r.ReceiptID)
+			case turns[key]:
+				return fmt.Errorf("duplicate (session_id=%s, turn_index=%d)", r.SessionID, r.TurnIndex)
+			}
+			ids[r.ReceiptID], turns[key] = true, true
+			a.Receipts = append(a.Receipts, *r)
 		} else {
 			a.Checkpoints++
 		}
@@ -425,6 +445,19 @@ func Verify(path string, keys sign.Keyring) (*Audit, error) {
 	}
 	a.Head = chain.head
 	return a, nil
+}
+
+// checkDigests confirms a receipt's digests cover what they claim to.
+func checkDigests(r *receipt.Receipt) error {
+	if got := receipt.Digest(r.ResultCanonical); got != r.ResultDigest {
+		return fmt.Errorf("receipt %s: result_digest %s does not match result_canonical (%s)", r.ReceiptID, r.ResultDigest, got)
+	}
+	// Every body carries response_canonical (null at worst), and Python
+	// always checks it; so does Go.
+	if got := receipt.Digest(r.ResponseCanonical); got != r.ResponseDigest {
+		return fmt.Errorf("receipt %s: response_digest %s does not match response_canonical (%s)", r.ReceiptID, r.ResponseDigest, got)
+	}
+	return nil
 }
 
 // ScanVerified is Verify returning only the receipts.

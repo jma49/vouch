@@ -31,7 +31,11 @@ func testReceipt(t *testing.T, session string, turn int) *receipt.Receipt {
 		ArgsCanonical:   json.RawMessage(`{"symbol":"NVDA"}`),
 		ResultCanonical: canon,
 		ResultDigest:    receipt.Digest(canon),
-		WallTime:        time.Date(2026, 7, 25, 1, 12, 9, 0, time.UTC),
+		// A complete receipt, as the proxy writes it: Verify checks both
+		// digests, as the Python verifier does.
+		ResponseCanonical: canon,
+		ResponseDigest:    receipt.Digest(canon),
+		WallTime:          time.Date(2026, 7, 25, 1, 12, 9, 0, time.UTC),
 	}
 	return r
 }
@@ -333,4 +337,29 @@ func TestAppendNextTurnContinuesASessionAcrossReopen(t *testing.T) {
 	if got := []int{appendNext(l, "s1"), appendNext(l, "s2"), appendNext(l, "s3")}; got[0] != 2 || got[1] != 1 || got[2] != 0 {
 		t.Fatalf("turns after reopen %v, want [2 1 0]", got)
 	}
+}
+
+// TestOneWriterPerLog pins #99: a second process (here, a second open
+// file) cannot append to a log another holds, which would fork its
+// chain; the log is created owner-only.
+func TestOneWriterPerLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "receipts.jsonl")
+	l, err := Open(path, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path, signer); err == nil || !strings.Contains(err.Error(), "another process") {
+		t.Fatalf("second open: %v, want refused", err)
+	}
+	for p, want := range map[string]os.FileMode{path: 0o600, filepath.Dir(path): 0o700} {
+		if info, err := os.Stat(p); err != nil || info.Mode().Perm() != want {
+			t.Fatalf("%s mode %v, want %v", p, info.Mode().Perm(), want)
+		}
+	}
+	l.Close()
+	again, err := Open(path, signer)
+	if err != nil {
+		t.Fatalf("reopen after close: %v", err)
+	}
+	again.Close()
 }
