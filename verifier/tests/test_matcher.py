@@ -180,3 +180,12 @@ def test_exact_receipt_id_beats_a_longer_id_with_the_same_prefix() -> None:
     assert (matched[0].verdict, matched[0].receipt_id) == (Verdict.SUPPORTED, "golden-1")
     _, matched = run("NVDA RSI is 62.3 [[r:golden#/rsi_14]].", receipts)
     assert "ambiguous" in matched[0].note
+
+
+def test_markdown_report_escapes_cells(receipts: list[Receipt]) -> None:
+    # Issue #18: a json pointer with "|" and markup reached the note cell raw.
+    extraction, matched = run("NVDA RSI is 62.3 [[r:golden-0#/x|y|<b>z</b>]].", receipts)
+    md = to_markdown(build_report(extraction, matched, DEFAULT_TOLERANCES))
+    row = next(line for line in md.splitlines() if "62.3" in line)
+    assert row.count(" | ") == 6  # seven cells, as in the header
+    assert "<b>" not in row and "&lt;b&gt;" in row and "\\|" in row

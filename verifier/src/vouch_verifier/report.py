@@ -6,6 +6,7 @@ computed under; a verdict without its policy is not reproducible.
 
 from __future__ import annotations
 
+import html
 import json
 from dataclasses import dataclass
 
@@ -78,6 +79,23 @@ def to_json(report: Report) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
+def md_cell(value: object) -> str:
+    """Make any value safe inside a markdown table cell.
+
+    Claim text, json pointers, notes, and upstream-supplied entity and
+    metric names all reach report tables. Unescaped, a "|" adds cells
+    and raw HTML passes through to renderers that allow it (issue #18).
+    """
+    text = html.escape(str(value), quote=False)
+    return (
+        text.replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("`", "\\`")
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+
 def to_markdown(report: Report) -> str:
     lines = ["# vouch verdict report", ""]
     counts = report.counts
@@ -100,8 +118,8 @@ def to_markdown(report: Report) -> str:
         receipted = "" if mc.fact is None else str(mc.fact.value)
         rid = (mc.receipt_id or "")[:8]
         lines.append(
-            f"| {mc.verdict.value} | `{mc.claim.text.strip()}` | {entity} | {metric} "
-            f"| {receipted} | {rid} | {mc.note} |"
+            f"| {mc.verdict.value} | `{md_cell(mc.claim.text.strip())}` | {md_cell(entity)} "
+            f"| {md_cell(metric)} | {receipted} | {md_cell(rid)} | {md_cell(mc.note)} |"
         )
     lines.append("")
     lines.append("## Tolerance policy")
