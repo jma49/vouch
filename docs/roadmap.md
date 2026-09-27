@@ -160,8 +160,8 @@ measured overhead.
 | Item | Status |
 |---|---|
 | Robustness from the 2026-09-27 audit: malformed frames answered not fatal, stray upstream output skipped, notifications never answered, tool errors carry no facts, bounded shutdown, unique upstream names | done (#46, issues #21-#28) |
-| Concurrent request handling: id-multiplexed upstream client, no head-of-line blocking | todo |
-| `notifications/cancelled` and progress forwarding | todo |
+| Concurrent request handling: id-multiplexed upstream client, no head-of-line blocking | done (#67) |
+| `notifications/cancelled` and progress forwarding | done (#67) |
 | Server-to-client requests (sampling, roots, elicitation) forwarded, not treated as protocol errors | partial: no longer break calls (#46), not yet forwarded |
 | Protocol version negotiation with upstreams; `tools/list_changed` handling | todo |
 | Session resume: continue `turn_index` from the log when `--session` is reused | done (#69) |

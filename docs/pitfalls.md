@@ -155,9 +155,12 @@ remembering. The 2026-09-27 audit filed #8-#48; all are closed.
 ### P-021 One slow upstream call blocks everything
 - **Symptom:** `ping` and unrelated calls stall while one `tools/call`
   is in flight.
-- **Cause:** `Server.Run` dispatches serially; `mcp.Client` allows one
-  call in flight per upstream.
-- **Status:** open. Code reading. Roadmap Phase 5.
+- **Cause:** `Server.Run` dispatched serially; `mcp.Client` allowed
+  one call in flight per upstream.
+- **Fix / workaround:** `mcp.Client` multiplexes calls by id behind a
+  reader goroutine; the server serves each request after `initialize`
+  on its own goroutine; the log assigns turns under its lock.
+- **Status:** fixed (#67). Reproduced by `TestSlowCallDoesNotBlockOthers`.
 
 ### P-022 Server-to-client requests from an upstream are dropped
 - **Symptom:** an upstream that needs sampling, roots, or elicitation
@@ -166,8 +169,9 @@ remembering. The 2026-09-27 audit filed #8-#48; all are closed.
   Before #22 such a request broke the pending call ("response id does
   not match"); since then `mcp.Client.Call` skips it with a log line,
   so calls survive but the request goes unanswered.
-- **Status:** partly fixed by #22 (calls no longer break); forwarding
-  is roadmap Phase 5.
+- **Status:** partly fixed: since #22 calls no longer break, and since
+  #67 the request is answered with method-not-found instead of
+  ignored, so the upstream stops waiting. Forwarding is #68.
 
 ### P-023 `--upstream` is split on whitespace
 - **Symptom:** upstream commands with quoted arguments or spaces in
