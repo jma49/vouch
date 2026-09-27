@@ -19,7 +19,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from vouch_verifier.tokens import Kind, NumberToken, find_dates, tokenize
+from vouch_verifier.tokens import MINUTE_TIMEFRAME, Kind, NumberToken, find_dates, tokenize
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,10 @@ class Claim:
     citation: Citation | None = None
     as_of: str | None = None  # "YYYY-MM-DD", or "--MM-DD" when the text gives no year
     kind: Kind = "point"  # "multiple" and "range" are never judged as points
+    # "(1.35%)" with no explicit sign: negative if the metric is signed.
+    # Tier 2 applies this at extraction; Tier 1 only learns the metric
+    # from the cited fact, so the matcher applies it there.
+    parenthesized: bool = False
     resolution: float = 0.0  # unit of the last displayed digit (see tokens)
 
 
@@ -64,7 +68,13 @@ class Extraction:
 
 
 _CITATION_RE = re.compile(r"\[\[r:([A-Za-z0-9_-]+)#((?:/[^/\]\s]*)+|/?)\]\]")
-_SENTENCE_SPLIT_RE = re.compile(r"[.!?\n](?:\s|$)")
+# Every line break ends a sentence: agents write lists and tables, and
+# a row must not borrow a keyword from the row above (issue #15).
+_SENTENCE_SPLIT_RE = re.compile(r"[.!?](?:\s|$)|\n")
+
+# A markdown table: a header row, a separator row, then body rows.
+_TABLE_ROW_RE = re.compile(r"^[ \t]*\|.*\|[ \t]*$")
+_TABLE_SEPARATOR_RE = re.compile(r"^[ \t]*\|(?:[ \t]*:?-{3,}:?[ \t]*\|)+[ \t]*$")
 
 # Deterministic keyword -> metric mapping, longest match first. This is
 # config in spirit; callers can pass their own table built from their
@@ -100,6 +110,19 @@ DEFAULT_METRIC_UNITS: dict[str, str | None] = {
     "change_pct": "pct",
 }
 
+# Metrics that can be negative. Financial prose writes their negatives
+# in parentheses, "(1.35%)" (issue #10); for a metric that cannot be
+# negative (a price, RSI, volume), "(62.3)" is an aside and stays
+# positive.
+DEFAULT_SIGNED_METRICS: frozenset[str] = frozenset({"change_pct", "macd_hist"})
+
+# "fell 1.35% to 172.04", "rose from 170 to 172.04": a bare number after
+# a move and "to" is the resulting price (issue #39). Only used when no
+# price keyword resolves it first, so "closed up 1.92% at 181.52" still
+# reads as the close.
+_MOVE_TARGET_RE = re.compile(r"(?:%|\d)\s+(?:to|at)\s+\$?$", re.IGNORECASE)
+_MOVE_TARGET_METRIC = "last_price"
+
 # A percentage with no percentage keyword is read as a day change when
 # the sentence talks about price or names no metric at all: "AMD is down
 # 1.35%", "NVDA closed up 1.92%". Next to a non-price metric ("volume
@@ -123,7 +146,10 @@ _PHRASE_SPLIT_RE = re.compile(
 )
 
 # Chart timeframe named in the clause: "on the hourly chart", "1d RSI".
-_TIMEFRAME_RE = re.compile(r"\b(?:(?P<word>hourly|daily|weekly)|(?P<n>\d+)(?P<u>[hdw]))\b", re.I)
+_TIMEFRAME_RE = re.compile(
+    rf"\b(?:(?P<word>hourly|daily|weekly)|(?P<n>\d+)(?P<u>[hdw]))\b|(?P<min>{MINUTE_TIMEFRAME})",
+    re.I,
+)
 _TIMEFRAME_WORDS = {"hourly": "1h", "daily": "1d", "weekly": "1w"}
 
 # A sentence that opens with one of these, and names no entity itself,
@@ -229,7 +255,84 @@ def _timeframe(answer: str, scope: _Scope) -> str | None:
         return None
     if m["word"]:
         return _TIMEFRAME_WORDS[m["word"].lower()]
+    if m["min"]:
+        digits = re.match(r"\d+", m["min"])
+        assert digits is not None  # MINUTE_TIMEFRAME starts with digits
+        return f"{int(digits[0])}m"
     return f"{m['n']}{m['u'].lower()}"
+
+
+@dataclass(frozen=True)
+class _Cell:
+    """What a table cell's position says about the number in it."""
+
+    entity: str | None
+    metric: str | None
+    as_of: str | None
+
+
+def _line_bounds(answer: str, pos: int) -> _Bounds:
+    start = answer.rfind("\n", 0, pos) + 1
+    end = answer.find("\n", pos)
+    return start, len(answer) if end < 0 else end
+
+
+def _cells(line: str) -> list[str]:
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def _table_cell(
+    answer: str,
+    m: NumberToken,
+    entities: set[str],
+    synonyms: dict[str, str],
+    units: dict[str, str | None],
+) -> _Cell | None:
+    """Resolve a number inside a markdown table body row, or None if it
+    is not in one. Metric comes from the column header, entity from the
+    row (else the column header), and a date in the row dates the value.
+    A header naming no metric leaves the cell unresolved: the prose
+    fallback is what used to read a price under the RSI column."""
+    start, end = _line_bounds(answer, m.start)
+    line = answer[start:end]
+    if not _TABLE_ROW_RE.match(line) or _TABLE_SEPARATOR_RE.match(line):
+        return None
+    # Walk up through the body rows to the separator; the header is the
+    # row above it. A number in the header row itself is not a cell.
+    header: list[str] | None = None
+    cursor = start
+    while cursor > 0:
+        above_start, above_end = _line_bounds(answer, cursor - 1)
+        above = answer[above_start:above_end]
+        if _TABLE_SEPARATOR_RE.match(above):
+            if above_start > 0:
+                head_start, head_end = _line_bounds(answer, above_start - 1)
+                if _TABLE_ROW_RE.match(answer[head_start:head_end]):
+                    header = _cells(answer[head_start:head_end])
+            break
+        if not _TABLE_ROW_RE.match(above):
+            break
+        cursor = above_start
+    if header is None:
+        return None
+    column = line[: m.start - start].strip().lstrip("|").count("|")
+    heading = header[column] if column < len(header) else ""
+
+    hits = [
+        synonyms[kw]
+        for kw in sorted(synonyms, key=len, reverse=True)
+        if re.search(r"(?<!\w)" + re.escape(kw) + r"(?!\w)", heading, re.IGNORECASE)
+    ]
+    metric = _pick_metric(hits, m.unit, units) if hits else None
+
+    def entity_in(text: str) -> str | None:
+        found = _mentions(text, (0, len(text)), entities)
+        return found[0][1] if found else None
+
+    row = [c for i, c in enumerate(_cells(line)) if i != column]
+    entity = next((e for c in row if (e := entity_in(c))), None) or entity_in(heading)
+    dates = find_dates(line)
+    return _Cell(entity, metric, dates[0][1] if dates else None)
 
 
 def _keyword_hits(answer: str, pos: int, scope: _Scope, table: dict[str, str]) -> list[str]:
@@ -265,6 +368,22 @@ def _pick_metric(hits: list[str], unit: str | None, units: dict[str, str | None]
     return metric
 
 
+def negated_by_parentheses(parenthesized: bool, value: float, metric: str | None) -> bool:
+    """Whether "(1.35%)" is an accounting negative: only for a signed metric."""
+    return parenthesized and value > 0 and metric in DEFAULT_SIGNED_METRICS
+
+
+def _negated_by_direction(answer: str, m: NumberToken, scope: _Scope) -> bool:
+    # A direction word only signs the number it governs: in "Unlike AMD,
+    # which fell 1.35%, NVDA rose 1.92%" the "fell" stays in its phrase.
+    return (
+        m.unit == "pct"
+        and m.value > 0
+        and not m.signed
+        and _NEGATION_RE.search(answer, scope.phrase[0], m.start) is not None
+    )
+
+
 def _resolve(
     answer: str,
     m: NumberToken,
@@ -275,17 +394,23 @@ def _resolve(
     """Attach entity and metric to one Tier 2 numeric token."""
     value, unit = m.value, m.unit
     scope = _scope(answer, m.start)
-    # A direction word only signs the number it governs: in "Unlike AMD,
-    # which fell 1.35%, NVDA rose 1.92%" the "fell" stays in its phrase.
+    cell = _table_cell(answer, m, set(known_entities), synonyms, units)
+    if cell is not None:
+        entity, metric = cell.entity, cell.metric
+    else:
+        entity = _entity(answer, m.start, scope, set(known_entities))
+        metric = _pick_metric(_keyword_hits(answer, m.start, scope, synonyms), unit, units)
     if (
-        unit == "pct"
-        and value > 0
-        and not m.text.startswith(("+", "-"))
-        and _NEGATION_RE.search(answer, scope.phrase[0], m.start)
+        cell is None
+        and metric is None
+        and unit in (None, "USD")
+        and _MOVE_TARGET_RE.search(answer, scope.phrase[0], m.start)
+    ):
+        metric = _MOVE_TARGET_METRIC
+    if negated_by_parentheses(m.parenthesized and not m.signed, value, metric) or (
+        _negated_by_direction(answer, m, scope)
     ):
         value = -value
-    entity = _entity(answer, m.start, scope, set(known_entities))
-    metric = _pick_metric(_keyword_hits(answer, m.start, scope, synonyms), unit, units)
     return Claim(
         value=value,
         span=(m.start, m.end),
@@ -294,11 +419,22 @@ def _resolve(
         entity=entity,
         metric=metric,
         unit=unit,
-        timeframe=_timeframe(answer, scope),
-        as_of=_date(answer, m.start, scope),
+        timeframe=None if cell is not None else _timeframe(answer, scope),
+        as_of=cell.as_of if cell is not None else _date(answer, m.start, scope),
         kind=m.kind,
         resolution=m.resolution,
     )
+
+
+def _citation_runs(answer: str, citations: list[re.Match[str]]) -> list[list[re.Match[str]]]:
+    """Group citation markers separated only by whitespace."""
+    runs: list[list[re.Match[str]]] = []
+    for cit in citations:
+        if runs and not answer[runs[-1][-1].end() : cit.start()].strip():
+            runs[-1].append(cit)
+        else:
+            runs.append([cit])
+    return runs
 
 
 def extract_claims(
@@ -317,34 +453,41 @@ def extract_claims(
     claims: list[Claim] = []
     unresolved: list[Claim] = []
 
-    # Tier 1: each citation binds to the nearest preceding number in the
-    # same sentence.
-    for cit in citations:
-        sent_start, _ = _sentence_bounds(answer, cit.start())
+    # Tier 1: a run of adjacent citations binds, left to right, to the same
+    # number of preceding numbers in the sentence, so "62.3 and -0.42
+    # [[rsi]][[macd]]" pairs 62.3 with rsi (issue #12). A single citation
+    # is the one-element case: the nearest preceding number. A run with
+    # more citations than numbers is ambiguous and binds nothing.
+    for group in _citation_runs(answer, citations):
+        sent_start, _ = _sentence_bounds(answer, group[0].start())
         candidates = [
             i
             for i, m in enumerate(numbers)
             if i not in consumed
             and m.kind == "point"
             and sent_start <= m.start
-            and m.end <= cit.start()
+            and m.end <= group[0].start()
         ]
-        if not candidates:
-            continue  # dangling citation; the matcher flags it via coverage
-        i = candidates[-1]
-        m = numbers[i]
-        consumed.add(i)
-        claims.append(
-            Claim(
-                value=m.value,
-                span=(m.start, m.end),
-                text=m.text,
-                tier=1,
-                unit=m.unit,
-                resolution=m.resolution,
-                citation=Citation(receipt_id=cit.group(1), json_ptr=cit.group(2) or "/"),
+        if len(candidates) < len(group):
+            continue  # dangling or ambiguous; the matcher flags it via coverage
+        for i, cit in zip(candidates[-len(group) :], group, strict=True):
+            m = numbers[i]
+            consumed.add(i)
+            # The same sign rules as Tier 2 (issue #43): a citation pins
+            # which fact is meant, not how the sign was written.
+            negated = _negated_by_direction(answer, m, _scope(answer, m.start))
+            claims.append(
+                Claim(
+                    value=-m.value if negated else m.value,
+                    span=(m.start, m.end),
+                    text=m.text,
+                    tier=1,
+                    unit=m.unit,
+                    resolution=m.resolution,
+                    citation=Citation(receipt_id=cit.group(1), json_ptr=cit.group(2) or "/"),
+                    parenthesized=m.parenthesized and not m.signed and not negated,
+                )
             )
-        )
 
     # Tier 2: remaining numbers need an entity and a metric in-sentence.
     for i, m in enumerate(numbers):

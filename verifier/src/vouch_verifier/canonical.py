@@ -18,6 +18,7 @@ testdata/canonical_vectors.json.
 from __future__ import annotations
 
 import json
+import re
 
 
 class _NumberLiteral:
@@ -65,6 +66,20 @@ def canonicalize(raw: str | bytes) -> str:
     return serialize(parse_preserving(raw))
 
 
+# Where Go's encoding/json (which writes the receipts) and Python's
+# json.dumps differ on strings, follow Go byte for byte (issue #9):
+# - U+2028 and U+2029 are escaped by Go even with HTML escaping off;
+# - a lone surrogate is replaced by U+FFFD in Go, while Python keeps it
+#   and later fails to encode it as UTF-8.
+# Pinned by testdata/canonical_vectors.json on both sides.
+_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+
+
+def _string(s: str) -> str:
+    out = json.dumps(_SURROGATE_RE.sub("\ufffd", s), ensure_ascii=False)
+    return out.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+
+
 def _write(parts: list[str], value: object) -> None:
     if value is None:
         parts.append("null")
@@ -75,7 +90,7 @@ def _write(parts: list[str], value: object) -> None:
     elif isinstance(value, _NumberLiteral):
         parts.append(value.literal)
     elif isinstance(value, str):
-        parts.append(json.dumps(value, ensure_ascii=False))
+        parts.append(_string(value))
     elif isinstance(value, list):
         parts.append("[")
         for i, elem in enumerate(value):
@@ -88,7 +103,7 @@ def _write(parts: list[str], value: object) -> None:
         for i, key in enumerate(sorted(value)):
             if i:
                 parts.append(",")
-            parts.append(json.dumps(key, ensure_ascii=False))
+            parts.append(_string(key))
             parts.append(":")
             _write(parts, value[key])
         parts.append("}")

@@ -81,15 +81,22 @@ def facts_for(
     claim rarely pins one down; the matcher applies stricter rules when
     it can.
     """
+    # A fact without its own as_of is dated by its receipt: the data's
+    # as-of time if the schema gave one, else when the call was made
+    # (issue #14). Every candidate therefore has a date, and an unknown
+    # date can never make a match look STALE.
     q = (
-        "SELECT receipt_id, entity, metric, value, unit, as_of, timeframe, json_ptr, tol_class "
-        "FROM facts WHERE entity = ? AND metric = ?"
+        "SELECT f.receipt_id, f.entity, f.metric, f.value, f.unit, "
+        "COALESCE(NULLIF(f.as_of, ''), NULLIF(r.data_asof, ''), r.wall_time), "
+        "f.timeframe, f.json_ptr, f.tol_class "
+        "FROM facts f JOIN receipts r ON r.receipt_id = f.receipt_id "
+        "WHERE f.entity = ? AND f.metric = ?"
     )
     params: list[object] = [entity, metric]
     if timeframe is not None:
         # A fact with no timeframe (a quote, not a bar) is not
         # contradicted by the claim naming one.
-        q += " AND (timeframe = ? OR timeframe IS NULL OR timeframe = '')"
+        q += " AND (f.timeframe = ? OR f.timeframe IS NULL OR f.timeframe = '')"
         params.append(timeframe)
     out = []
     for row in conn.execute(q, params):
