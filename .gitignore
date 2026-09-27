@@ -38,3 +38,6 @@ coverage.out
 # Private signing keys (test keys under testdata/keys are the exception)
 *.pem
 !testdata/keys/*.pem
+
+# Pinned MCP reference servers for `make integration` (regenerable)
+/.cache/

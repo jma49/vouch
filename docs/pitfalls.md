@@ -194,6 +194,20 @@ remembering. The 2026-09-27 audit filed #8-#48; all are closed.
   test schemas against recorded fixtures.
 - **Status:** by design.
 
+### P-025 A nil `json.RawMessage` passed as `any` marshals to `null`
+- **Symptom:** the reference server never registered its sampling,
+  roots, and elicitation tools behind the proxy, and never asked for
+  roots; with a direct connection it did.
+- **Cause:** the proxy forwarded `notifications/initialized`, which
+  has no params, as `m.Params` (a nil `json.RawMessage`) in an `any`.
+  An interface holding a typed nil is not nil, so the `params != nil`
+  check passed and the frame carried `"params":null`, which the
+  TypeScript SDK rejects. Fakes written in Go accepted it.
+- **Fix / workaround:** `mcp.marshalParams` omits params that marshal
+  to `null`, whatever their type.
+- **Status:** fixed (#74). Reproduced; found by the reference-server
+  integration test (#75), which is why that test exists.
+
 ### P-044 Agents cannot use the citation protocol
 - **Symptom:** real agent answers never contain Tier 1 citations, so
   Tier 1 share is 0 and every claim goes through Tier 2.

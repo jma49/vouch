@@ -8,7 +8,7 @@ STAMP := $(VENV)/.installed
 VENV_OK := $(PY) -c 'import sys, vouch_verifier, vouch_harness; \
 	sys.exit(not vouch_verifier.__file__.startswith("$(CURDIR)/"))'
 
-.PHONY: test test-go test-py test-harness fuzz lint lint-go lint-py fmt cover build install-py eval golden readme readme-check agent eval-real clean
+.PHONY: test test-go test-py test-harness fuzz integration lint lint-go lint-py fmt cover build install-py eval golden readme readme-check agent eval-real clean
 
 test: test-go test-py test-harness
 
@@ -18,6 +18,19 @@ test-go:
 # build: the differential test runs the Go canonicalizer (vouch canon).
 test-py: install-py build
 	cd verifier && ../$(PY) -m pytest -q
+
+# The proxy against the official MCP reference server, at a pinned
+# version (docs/roadmap.md Phase 5). Needs Node; install scripts are not
+# run. CI runs this target.
+MCP_EVERYTHING_VERSION := 2026.8.31
+MCP_EVERYTHING_DIR := .cache/mcp-reference/$(MCP_EVERYTHING_VERSION)
+MCP_EVERYTHING := $(MCP_EVERYTHING_DIR)/node_modules/@modelcontextprotocol/server-everything/dist/index.js
+$(MCP_EVERYTHING):
+	npm install --prefix $(MCP_EVERYTHING_DIR) --ignore-scripts --no-audit --no-fund \
+		@modelcontextprotocol/server-everything@$(MCP_EVERYTHING_VERSION)
+integration: $(MCP_EVERYTHING)
+	cd proxy && VOUCH_MCP_EVERYTHING="node '$(CURDIR)/$(MCP_EVERYTHING)' stdio" \
+		go test -race -count=1 -v ./internal/integration
 
 # Grow the Go fuzz corpus, then check the new entries against Python.
 # Commit what lands in proxy/internal/receipt/testdata/fuzz.

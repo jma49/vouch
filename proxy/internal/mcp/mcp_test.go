@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -377,4 +378,29 @@ func TestClientCloseFailsPendingCalls(t *testing.T) {
 		t.Fatal("call on a closed client succeeded")
 	}
 	clientToPeer.Close()
+}
+
+// TestAbsentParamsAreOmittedNotNull pins #74: forwarding a message that
+// had no params (a nil json.RawMessage) must not put "params":null on
+// the wire, which the official SDK rejects.
+func TestAbsentParamsAreOmittedNotNull(t *testing.T) {
+	var buf bytes.Buffer
+	c := NewClient(NewConn(strings.NewReader(""), &buf))
+	var absent json.RawMessage
+	for _, params := range []any{nil, absent, json.RawMessage("null"), json.RawMessage(" null ")} {
+		buf.Reset()
+		if err := c.Notify("notifications/initialized", params); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(buf.String(), "params") {
+			t.Fatalf("params %#v written as %s", params, buf.String())
+		}
+	}
+	buf.Reset()
+	if err := c.Notify("notifications/progress", map[string]any{"progress": 1}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"params":{"progress":1}`) {
+		t.Fatalf("real params lost: %s", buf.String())
+	}
 }

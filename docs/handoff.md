@@ -155,6 +155,22 @@ entry whenever a choice closes off an alternative (AGENTS.md).
 - `tools/list_changed` refreshes routes before the agent is told; a
   refresh that finds a name collision keeps the old routes and logs.
 
+**Integration tests: one pinned reference server, in-process proxy** (#75)
+- Chosen: `@modelcontextprotocol/server-everything` at a pinned
+  version, installed by `make integration` with install scripts off,
+  spawned through the real `proxy.Spawn`, served by an in-process
+  `proxy.Server`; its own CI job with Node.
+- Rejected: a floating version (a release could break CI for reasons
+  unrelated to a change); driving the `vouch` binary (the harness
+  end-to-end test already covers the CLI, and in-process access lets
+  the test check the log directly); more reference servers (the
+  others exercise resources and prompts, which vouch does not federate).
+- Why: Go fakes encode vouch's reading of the spec; only a real SDK
+  shows whether that reading holds. It found #74 on its first run.
+- Cost: Node in CI; the test skips locally without `make integration`;
+  the pin must be bumped by hand.
+- Revisit when: the SDK's behavior changes in a release worth tracking.
+
 **Upstream commands are split like a shell, not run by one** (#70)
 - Chosen: POSIX quoting and backslashes; no expansion of any kind.
 - Rejected: `sh -c` (expansions make the argv, and so the default

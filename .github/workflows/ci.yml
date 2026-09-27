@@ -34,6 +34,24 @@ jobs:
       - name: Fuzz canonical JSON (30s)
         run: go test ./internal/receipt -run '^$' -fuzz FuzzCanonicalize -fuzztime 30s
 
+  integration:
+    # The proxy against the official MCP reference server (a real SDK,
+    # not vouch's own fakes): sampling, roots, elicitation, progress,
+    # list_changed, concurrency, and cancellation, end to end.
+    name: integration (MCP reference server)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+          cache-dependency-path: proxy/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Integration tests
+        run: make integration
+
   python:
     # Every supported interpreter: requires-python says >=3.11, and a
     # 3.12-only construct once slipped past a 3.12-only CI (#48).
