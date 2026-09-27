@@ -515,6 +515,12 @@ wrong in the stated way.
 
 ### Process
 
+- **go.mod declares the Go that CI builds with (1.27)** (#106). Rejected:
+  keeping `go 1.22` as a floor nothing tests (1.22 is unsupported and
+  has known stdlib vulnerabilities; CI and the Dockerfile moved to 1.27
+  in #93). Cost: building needs Go 1.27, or `GOTOOLCHAIN=auto` fetches
+  it.
+
 - **Merge commits, never squash or rebase.** Docs cite commit hashes.
   Cost: a noisier history.
 
