@@ -367,13 +367,20 @@ func serveHTTP(addr string) (*mcp.HTTPServer, func(), error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("listen: %w", err)
 	}
-	if host, _, _ := net.SplitHostPort(ln.Addr().String()); !net.ParseIP(host).IsLoopback() {
+	hs := mcp.NewHTTPServer(nil)
+	if host, _, _ := net.SplitHostPort(ln.Addr().String()); net.ParseIP(host).IsLoopback() {
+		hs.LoopbackHostsOnly()
+	} else {
 		fmt.Fprintf(os.Stderr, "vouch proxy: warning: listening on %s, beyond this machine; the endpoint has no authentication\n", ln.Addr())
 	}
-	hs := mcp.NewHTTPServer(nil)
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", hs)
-	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	// No write timeout: event streams stay open for as long as a call
+	// runs. Reads and idle connections are bounded (#100).
+	server := &http.Server{
+		Handler: mux, ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout: time.Minute, IdleTimeout: 2 * time.Minute,
+	}
 	go func() {
 		if err := server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintln(os.Stderr, "vouch proxy:", err)

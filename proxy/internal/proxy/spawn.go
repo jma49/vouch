@@ -3,6 +3,7 @@ package proxy
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -158,6 +159,13 @@ func Connect(spec UpstreamSpec, header http.Header) (*Upstream, error) {
 	}
 	if strings.ContainsAny(spec.Command, " \t") {
 		return nil, fmt.Errorf("proxy: upstream %s: a URL takes no arguments", spec.Name)
+	}
+	// Credentials in the URL would become the upstream's name, which
+	// appears in errors sent to the agent and in fixtures (#100); they
+	// belong in --upstream-header, ideally as env:VAR.
+	if u, err := url.Parse(spec.Command); err != nil || u.User != nil {
+		// Not named in the error: for such a URL the name is the URL.
+		return nil, fmt.Errorf("proxy: an upstream URL carries credentials; put them in --upstream-header, not the URL")
 	}
 	hc := mcp.NewHTTPClient(spec.Command, header, nil)
 	return &Upstream{Name: spec.Name, Client: mcp.NewClient(hc), Close: hc.Close}, nil
