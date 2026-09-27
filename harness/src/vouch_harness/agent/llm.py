@@ -15,6 +15,7 @@ the same prompt stay distinct.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import time
@@ -22,6 +23,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -69,11 +71,32 @@ def load_models(path: str | Path) -> dict[str, ModelConfig]:
     return out
 
 
+MAX_RETRY_AFTER = 120.0  # seconds; a longer server request is capped, not obeyed
+
+
+def retry_after_seconds(value: str, now: float) -> float | None:
+    """Seconds to wait for a Retry-After header, in either RFC 9110 form
+    (delay-seconds or an HTTP-date), clamped to [0, MAX_RETRY_AFTER].
+    None when the header is unparsable, so the caller backs off instead."""
+    value = value.strip()
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            seconds = parsedate_to_datetime(value).timestamp() - now
+        except (TypeError, ValueError, IndexError):
+            return None
+    return min(max(seconds, 0.0), MAX_RETRY_AFTER)
+
+
 class OpenAICompatClient:
     """POSTs to an OpenAI-compatible /chat/completions endpoint.
 
     Retries 429 and 5xx with exponential backoff (honoring Retry-After),
     and spaces requests to stay under the configured requests/minute.
+    Transport failures (connection resets, timeouts, a body that is not
+    JSON) are retried the same way, and every final failure is an
+    LLMError, which the batch records against one run and moves past.
     """
 
     def __init__(
@@ -84,6 +107,7 @@ class OpenAICompatClient:
         timeout: float = 120.0,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        wallclock: Callable[[], float] = time.time,
     ) -> None:
         key = os.environ.get(config.api_key_env, "")
         if not key:
@@ -94,6 +118,7 @@ class OpenAICompatClient:
         self._timeout = timeout
         self._sleep = sleep
         self._clock = clock
+        self._wallclock = wallclock  # only to read Retry-After HTTP-dates
         self._next_slot = 0.0
 
     def _throttle(self) -> None:
@@ -140,11 +165,15 @@ class OpenAICompatClient:
                     if not (e.code == 429 or e.code >= 500) or attempt == self._max_retries:
                         detail = e.read().decode("utf-8", "replace")[:500]
                         raise LLMError(f"{self._config.name}: HTTP {e.code}: {detail}") from e
-                    retry_after = e.headers.get("Retry-After")
-                self._sleep(float(retry_after) if retry_after else delay)
-            except urllib.error.URLError as e:
+                    header = e.headers.get("Retry-After")
+                wait = retry_after_seconds(header, self._wallclock()) if header else None
+                self._sleep(delay if wait is None else wait)
+            except (OSError, http.client.HTTPException, ValueError) as e:
+                # OSError covers URLError, resets, and timeouts; ValueError
+                # covers a body that is not JSON (a proxy's HTML error page).
                 if attempt == self._max_retries:
-                    raise LLMError(f"{self._config.name}: {e.reason}") from e
+                    reason = e.reason if isinstance(e, urllib.error.URLError) else e
+                    raise LLMError(f"{self._config.name}: {type(e).__name__}: {reason}") from e
                 self._sleep(delay)
             delay = min(delay * 2, 60.0)
         raise AssertionError("unreachable: the last attempt returns or raises")

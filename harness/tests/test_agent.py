@@ -4,10 +4,12 @@ directories, and an end-to-end run through the real Go proxy."""
 from __future__ import annotations
 
 import json
+import socket
+import struct
 import threading
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +17,7 @@ import pytest
 
 from vouch_harness import market
 from vouch_harness.agent import cli as agent_cli
-from vouch_harness.agent import runner
+from vouch_harness.agent import llm, runner
 from vouch_harness.agent.llm import (
     CachedClient,
     LLMError,
@@ -253,6 +255,107 @@ def test_http_client_fails_fast_on_client_errors(
     with pytest.raises(LLMError, match="HTTP 400"):
         client.complete([], [], 0)
     assert len(provider.bodies) == 1
+
+
+@dataclass
+class FlakyProvider:
+    """A local endpoint that fails in scripted transport-level ways."""
+
+    url: str = ""
+    actions: list[str] = field(default_factory=list)
+    requests: int = 0
+    release: threading.Event = field(default_factory=threading.Event)
+
+
+@pytest.fixture
+def flaky() -> Iterator[FlakyProvider]:
+    state = FlakyProvider()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["Content-Length"]))
+            state.requests += 1
+            action = state.actions.pop(0)
+            if action == "reset":
+                # SO_LINGER 0 makes close() send a TCP RST.
+                self.connection.setsockopt(
+                    socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+                )
+                self.connection.close()
+                return
+            if action == "hang":
+                state.release.wait(5)  # past the client's timeout
+                return
+            self.send_response(429 if action.startswith("429") else 200)
+            if action == "429-date":
+                self.send_header("Retry-After", "Wed, 21 Oct 2026 07:28:00 GMT")
+            if action == "429-garbage":
+                self.send_header("Retry-After", "soon")
+            self.end_headers()
+            if action == "html":
+                self.wfile.write(b"<html>Bad gateway</html>")
+            elif action == "ok":
+                reply = {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+                self.wfile.write(json.dumps(reply).encode())
+
+        def log_message(self, format: str, *args: Any) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    state.url = f"http://127.0.0.1:{server.server_port}/v1/"
+    yield state
+    state.release.set()
+    server.shutdown()
+    server.server_close()
+
+
+def _flaky_client(
+    flaky: FlakyProvider, monkeypatch: pytest.MonkeyPatch, sleeps: list[float], retries: int = 6
+) -> OpenAICompatClient:
+    monkeypatch.setenv("TEST_KEY", "secret")
+    return OpenAICompatClient(
+        ModelConfig("t", flaky.url, "m", "TEST_KEY", rpm=60000),
+        max_retries=retries,
+        timeout=0.3,
+        sleep=sleeps.append,
+        # 07:27:30 GMT on the Retry-After date: 30 seconds before it.
+        wallclock=lambda: 1792567650.0,
+    )
+
+
+def test_http_client_retries_transport_failures(
+    flaky: FlakyProvider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flaky.actions = ["429-date", "429-garbage", "reset", "hang", "html", "ok"]
+    sleeps: list[float] = []
+    client = _flaky_client(flaky, monkeypatch, sleeps)
+    assert client.complete([], [], 0)["content"] == "ok"
+    assert flaky.requests == 6
+    retry_sleeps = [s for s in sleeps if s >= 1.0]  # throttle sleeps are tiny
+    assert retry_sleeps[0] == pytest.approx(30.0)  # the HTTP-date form of Retry-After
+    assert len(retry_sleeps) == 5
+
+
+def test_http_client_clamps_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = 1792567650.0
+    assert llm.retry_after_seconds("5", now) == 5.0
+    assert llm.retry_after_seconds("100000", now) == llm.MAX_RETRY_AFTER
+    assert llm.retry_after_seconds("Wed, 21 Oct 2026 07:28:00 GMT", now) == pytest.approx(30.0)
+    assert llm.retry_after_seconds("Wed, 21 Oct 2020 07:28:00 GMT", now) == 0.0
+    assert llm.retry_after_seconds("-3", now) == 0.0
+    assert llm.retry_after_seconds("soon", now) is None
+
+
+def test_http_client_raises_llm_error_after_last_transport_failure(
+    flaky: FlakyProvider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flaky.actions = ["html", "reset"]
+    client = _flaky_client(flaky, monkeypatch, [], retries=1)
+    with pytest.raises(LLMError, match="t: "):
+        client.complete([], [], 0)
+    assert flaky.requests == 2
 
 
 def test_missing_key_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
