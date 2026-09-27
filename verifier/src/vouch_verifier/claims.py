@@ -106,6 +106,13 @@ DEFAULT_METRIC_UNITS: dict[str, str | None] = {
 # positive.
 DEFAULT_SIGNED_METRICS: frozenset[str] = frozenset({"change_pct", "macd_hist"})
 
+# "fell 1.35% to 172.04", "rose from 170 to 172.04": a bare number after
+# a move and "to" is the resulting price (issue #39). Only used when no
+# price keyword resolves it first, so "closed up 1.92% at 181.52" still
+# reads as the close.
+_MOVE_TARGET_RE = re.compile(r"(?:%|\d)\s+(?:to|at)\s+\$?$", re.IGNORECASE)
+_MOVE_TARGET_METRIC = "last_price"
+
 # A percentage with no percentage keyword is read as a day change when
 # the sentence talks about price or names no metric at all: "AMD is down
 # 1.35%", "NVDA closed up 1.92%". Next to a non-price metric ("volume
@@ -290,6 +297,12 @@ def _resolve(
     scope = _scope(answer, m.start)
     entity = _entity(answer, m.start, scope, set(known_entities))
     metric = _pick_metric(_keyword_hits(answer, m.start, scope, synonyms), unit, units)
+    if (
+        metric is None
+        and unit in (None, "USD")
+        and _MOVE_TARGET_RE.search(answer, scope.phrase[0], m.start)
+    ):
+        metric = _MOVE_TARGET_METRIC
     if (m.parenthesized and not m.signed and value > 0 and metric in DEFAULT_SIGNED_METRICS) or (
         unit == "pct"
         and value > 0

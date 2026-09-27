@@ -209,6 +209,16 @@ cases:
   - text: AMD volume was 52.4m shares.
     expect: ["52.4m -> SUPPORTED (AMD volume)"]
 
+  # --- the price at the end of a move (#39) ---
+  - text: AMD fell 1.35% to 172.04.
+    expect: ["1.35% -> SUPPORTED (AMD change_pct)", "172.04 -> SUPPORTED (AMD last_price)"]
+  - text: AMD fell 1.35% to $172.40.
+    expect: ["1.35% -> SUPPORTED (AMD change_pct)", "172.40 -> CONTRADICTED (AMD last_price)"]
+  - text: AMD slipped from 174 to 172.04.
+    expect: ["174 -> UNVERIFIABLE", "172.04 -> SUPPORTED (AMD last_price)"]
+  - text: NVDA closed up 1.92% at 181.52.
+    expect: ["1.92% -> SUPPORTED (NVDA change_pct)", "181.52 -> SUPPORTED (NVDA close_price)"]
+
   # --- dates, times, quarters, ordinals, periods are not claims ---
   - text: As of 2026-07-24, NVDA closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]
