@@ -6,14 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from vouch_verifier.claims import DEFAULT_METRIC_SYNONYMS, extract_claims
-from vouch_verifier.vocabulary import FINANCE, load_vocabulary
+from vouch_verifier.claims import extract_claims
+from vouch_verifier.vocabulary import load_vocabulary
 
 PACK = Path(__file__).resolve().parents[2] / "examples" / "analytics" / "vocabulary.yaml"
 
 
 def test_finance_is_the_default_and_unchanged() -> None:
-    assert dict(FINANCE.synonyms) == DEFAULT_METRIC_SYNONYMS
     [claim] = extract_claims("NVDA closed at 181.52.", {"NVDA"}).claims
     assert claim.metric == "close_price"
 

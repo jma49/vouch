@@ -79,7 +79,7 @@ One receipt per tool call, appended to the log. Immutable after write.
 
 ```jsonc
 {
-  "receipt_id": "a1b2c3...",            // uuid
+  "receipt_id": "a1b2c3...",            // 32 random hex digits
   "session_id": "s-...",
   "turn_index": 3,
   "tool_name": "get_indicators",
@@ -102,7 +102,7 @@ On disk, each receipt body is the payload of a signed DSSE envelope, one per lin
 ```jsonc
 {
   "payload": "<base64 of the canonical receipt body>",
-  "payloadType": "application/vnd.vouch.receipt+json; version=2",
+  "payloadType": "application/vnd.vouch.receipt+json; version=4",
   "signatures": [{ "keyid": "ed25519:8bdc9a88e7cf36a6", "sig": "<base64 Ed25519 signature>" }]
 }
 ```
@@ -209,9 +209,9 @@ Behavior on hand-written prose is pinned by an adversarial corpus (`verifier/tes
 
 ### 6.2 DERIVED: whitelisted recomputation only
 
-Allowed operations: percentage change, difference, ratio, and min/max/count over a receipted series. Example: the agent says "up 3.2% on the day" — the verifier recomputes from the two receipted prices and compares. **Anything outside the whitelist is `UNSUPPORTED`. The verifier never guesses.**
+Allowed operations, in principle: percentage change, difference, ratio, and min/max/count over a receipted series. **The verifier never guesses**: a derived claim it cannot recompute exactly is `UNSUPPORTED` when a needed point was never receipted, and `UNVERIFIABLE` when the claim itself is ambiguous (a period that could be trading or calendar days, or a change in a metric that is not the series). A one-day change is not derived: it is matched against the receipted `change_pct`.
 
-Built (#90): a percentage change over an explicit period ("since July 20", "from July 21 to July 22", "from its July 22 close", "over the past 3 sessions" or "trading days") and a high or low over N sessions ("3-day high of", "highest close over the past 5 sessions"). The series is the metric the sentence names, else the vocabulary's `series` (finance: the close). The verifier rebuilds the daily series from a single receipt (one OHLCV call returns consecutive sessions; days stitched from several calls could hide gaps, #94), using only facts that carry their own date and excluding data after `--as-of`; another receipt disagreeing about a day it uses makes the result `UNSUPPORTED`. A phrase that names a metric other than the series ("RSI rose 6.8% since July 20") is not recomputed, cues count only in the number's own phrase, and a date the claim states ends the window and compares within the tolerance policy: a match is `DERIVED`, a mismatch `CONTRADICTED` with the recomputed value in the note, and a missing point `UNSUPPORTED`. Two receipts giving different values for one day make the series unusable rather than letting the verifier pick. "Over the past 5 days" is not recomputed at all: trading and calendar days start from different points, so the claim stays `UNVERIFIABLE`. Before this, each of these claims was read as a one-day change or the latest value and could be falsely `CONTRADICTED`. Difference and ratio are not built.
+Built (#90): a percentage change over an explicit period ("since July 20", "from July 21 to July 22", "from its July 22 close", "over the past 3 sessions" or "trading days") and a high or low over N sessions ("3-day high of", "highest close over the past 5 sessions"). The series is the metric the sentence names, else the vocabulary's `series` (finance: the close). The verifier rebuilds the daily series from a single receipt (one OHLCV call returns consecutive sessions; days stitched from several calls could hide gaps, #94), using only facts that carry their own date and excluding data after `--as-of`; another receipt disagreeing about a day it uses makes the result `UNSUPPORTED`. A phrase that names a metric other than the series ("RSI rose 6.8% since July 20") is not recomputed, cues count only in the number's own phrase, and a date the claim states ends the window. The result is compared within the tolerance policy: a match is `DERIVED`, a mismatch `CONTRADICTED` with the recomputed value in the note, and a missing point `UNSUPPORTED`. "Over the past 5 days" is not recomputed at all: trading and calendar days start from different points, so the claim stays `UNVERIFIABLE`. Before this, each of these claims was read as a one-day change or the latest value and could be falsely `CONTRADICTED`. Difference and ratio are not built.
 
 ### 6.2.1 Domain independence
 
@@ -269,7 +269,7 @@ LLMs are not deterministic even at temperature 0. Every eval runs N times (defau
 The mutation gold set (§9) measures detection of known error shapes on synthetic prose. The real evaluation measures what matters: real models, real answers, human ground truth.
 
 - **Upstream:** a deterministic synthetic market-data MCP server (`vouch_harness.market`). Real tickers, generated values, every payload marked synthetic. Recalled real-world figures therefore show up as `UNSUPPORTED`.
-- **Runner:** `vouch-agent` drives any OpenAI-compatible model through a fresh proxy session per (model, task, sample). It writes the answer, the signed receipt log, and the transcript. Responses are cached by request hash, so reruns are free and runs resume.
+- **Runner:** `vouch-agent` drives any OpenAI-compatible model through a fresh proxy session per (model, task, sample). It writes the answer, the signed receipt log, and the transcript. Responses are cached by request hash, with receipt ids normalized so citation-condition runs hit the cache too (#104); reruns are free and runs resume.
 - **Labels:** `vouch-label` is a blind labeling UI (no verifier output shown), defined by `docs/labeling.md`. Agreement is reported as Cohen's kappa.
 - **Report:** `vouch-eval-real` aligns verifier verdicts with labels by span (a span the verifier never extracted counts as a miss) and reports precision/recall with run-resampled CIs. It also reports each model's misreport rate across samples, where §8.3's variance machinery finally measures real nondeterminism.
 
@@ -306,7 +306,7 @@ Each mutation type gets its own precision/recall in the report. The gold set is 
 - Detection rate and false-positive rate, **per mutation type**
 - Claim coverage: fraction of numeric claims receiving a verdict other than `UNVERIFIABLE`
 - Citation-protocol adherence (Tier 1 share of claims)
-- Verification latency p50 / p99 (published receipt-verification baselines run under ~15 ms; that is the bar) — *not yet measured; roadmap Phase 5*
+- Proxy latency p50 / p99 per `tools/call`: measured by `make bench` and published in the README (roadmap Phase 5). Verifier latency per answer: not measured; the linear-scaling tests (`tests/test_performance.py`) bound its growth, not its absolute cost
 - Verdict stability across N repeated runs (agreement rate, variance)
 
 ---
@@ -326,10 +326,9 @@ Status: all six items are implemented. The SQLite index is built in memory by th
 
 ### Later (explicitly optional)
 
-- `DERIVED` recomputation engine
-- Look-ahead detection (the `STALE` verdict itself is implemented; see §5)
-- Tier 3 LLM fallback extraction
-- HTML report with span highlighting
+Built since: `DERIVED` recomputation (§6.2), look-ahead detection (§8.4), and the HTML report. Still open:
+
+- Tier 3 LLM fallback extraction (needs model calls)
 - gRPC streaming verification (verify-as-you-stream)
 
 **Scope guard: stop at the Weeks 1–2 line first.** A deployed, tested, CI'd MVP beats a half-finished complete version.

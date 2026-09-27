@@ -1,0 +1,19 @@
+# The image copies verifier/ and harness/ whole; keep local state out.
+**/.venv
+**/__pycache__
+**/*.egg-info
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+**/.hypothesis
+**/.coverage
+proxy/bin
+proxy/coverage.out
+.cache
+.git
+eval/.cache
+eval/runs
+receipts
+fixtures
+*.pem
+!testdata/keys/*.pem

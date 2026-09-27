@@ -82,8 +82,7 @@ func LoadDir(dir string) (map[string]*Schema, error) {
 		if err != nil {
 			return nil, err
 		}
-		if prev, dup := out[s.Tool]; dup {
-			_ = prev
+		if _, dup := out[s.Tool]; dup {
 			return nil, fmt.Errorf("extract: duplicate schema for tool %q (%s)", s.Tool, name)
 		}
 		out[s.Tool] = s

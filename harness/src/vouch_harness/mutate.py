@@ -4,11 +4,11 @@ Takes a passing answer and machine-generates known-bad variants, one
 per applicable mutation type. Deterministic given (answer, receipts,
 seed): the gold set must be regenerable bit-for-bit.
 
-Two listed mutations are included but expected to evade the MVP
-verifier — timeframe_swap (Tier 2 claims carry no timeframe yet) and
-false_absence (an absent claim produces no verdict). They stay in the
-gold set so the per-mutation recall table reports the gap instead of
-hiding it.
+false_absence is expected to evade the verifier (an absent claim
+produces no verdict) and stays in the gold set so the per-mutation
+recall table reports the gap instead of hiding it. timeframe_swap is
+defined but the golden answers name no timeframe for it to swap, so it
+is never generated (docs/pitfalls.md P-042).
 """
 
 from __future__ import annotations

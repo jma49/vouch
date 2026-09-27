@@ -12,7 +12,7 @@ from __future__ import annotations
 from vouch_verifier.receipts import Fact, Receipt
 
 # metric -> sentence template. Phrasing must stay in sync with
-# vouch_verifier.claims.DEFAULT_METRIC_SYNONYMS or Tier 2 extraction
+# vouch_verifier.vocabulary.FINANCE.synonyms or Tier 2 extraction
 # will not resolve the generated claims.
 _TEMPLATES: dict[str, str] = {
     "rsi_14": "{entity} RSI is {value}",
