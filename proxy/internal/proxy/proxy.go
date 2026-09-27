@@ -3,12 +3,14 @@
 // proxy forwards every call, records a signed receipt of the
 // request/response pair, and returns the result unchanged.
 //
-// Federation surface: initialize, notifications/initialized, ping,
-// tools/list (merged across upstreams), tools/call (routed by tool
-// name), and cancellation. Requests are served concurrently after
-// initialize (#67). Upstream progress and log notifications are
-// forwarded to the agent. Resources and prompts are out of scope and
-// answered with method-not-found.
+// Federation surface: initialize (with protocol version negotiation),
+// notifications/initialized, ping, tools/list (merged across
+// upstreams), tools/call (routed by tool name), and cancellation.
+// Requests are served concurrently after initialize (#67). From
+// upstreams, progress, log, and tools/list_changed notifications reach
+// the agent, and server-to-client requests (sampling, roots,
+// elicitation) are forwarded to it and answered back (#68). Resources
+// and prompts are out of scope and answered with method-not-found.
 package proxy
 
 import (
@@ -21,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"sync"
 
 	"github.com/jma49/vouch/proxy/internal/clock"
@@ -61,7 +64,18 @@ type Server struct {
 	inflight map[string]context.CancelFunc // downstream request id -> cancel
 	writeErr error                         // first failed write to the agent
 	wg       sync.WaitGroup                // requests being served
+
+	// Requests the proxy sends the agent on an upstream's behalf, by the
+	// proxy's own id; downClosed is set when the agent has gone away.
+	downPending map[string]chan *mcp.Message
+	downNext    int64
+	downClosed  bool
 }
+
+// SupportedVersions are the MCP protocol versions the proxy can speak,
+// newest first. The proxy forwards messages it does not interpret, so
+// it can relay any version whose framing and federation methods match.
+var SupportedVersions = []string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"}
 
 func (s *Server) logf(format string, args ...any) {
 	if s.Logf != nil {
@@ -79,12 +93,17 @@ func (s *Server) logf(format string, args ...any) {
 // while a receipt is still being written.
 func (s *Server) Run() error {
 	s.inflight = make(map[string]context.CancelFunc)
+	s.downPending = make(map[string]chan *mcp.Message)
 	for _, u := range s.Upstreams {
 		if l, ok := u.Client.(interface{ Handle(mcp.Handler) }); ok {
 			l.Handle(&upstreamHandler{s: s, u: u})
 		}
 	}
 	err := s.serve()
+	// The agent is gone: requests forwarded to it will never be
+	// answered. Fail them first, or a tools/call waiting on one would
+	// hold Wait forever.
+	s.closeDown()
 	s.wg.Wait()
 	if err == nil {
 		s.mu.Lock()
@@ -130,10 +149,17 @@ func (s *Server) dispatch(m *mcp.Message) error {
 	// is a response, and the proxy sends no requests downstream.
 	switch {
 	case m.Method == "":
-		s.logf("proxy: ignoring message without a method (id %s)", m.ID)
+		s.deliver(m)
 		return nil
 	case m.Method == "notifications/cancelled" && m.IsNotification():
 		s.cancel(m)
+		return nil
+	case m.Method == "notifications/roots/list_changed" && m.IsNotification():
+		for _, u := range s.Upstreams {
+			if err := u.Client.Notify(m.Method, m.Params); err != nil {
+				s.logf("proxy: forward %s to %s: %v", m.Method, u.Name, err)
+			}
+		}
 		return nil
 	case m.IsNotification() && m.Method != "notifications/initialized":
 		s.logf("proxy: dropping notification %s", m.Method)
@@ -228,23 +254,120 @@ type upstreamHandler struct {
 // HandleNotification forwards progress and log messages to the agent
 // unchanged: a progressToken is the agent's own (it rides in the
 // forwarded params), so the agent can match it without translation.
+// tools/list_changed rebuilds the routes before the agent hears of it,
+// so a call to a new tool made in response is routable. It runs on its
+// own goroutine: refreshing calls tools/list on this upstream, whose
+// response the calling goroutine (the upstream's reader) would have to
+// read itself.
 func (h *upstreamHandler) HandleNotification(m *mcp.Message) {
 	switch m.Method {
 	case "notifications/progress", "notifications/message":
-		if err := h.s.Down.Write(&mcp.Message{Method: m.Method, Params: m.Params}); err != nil {
-			h.s.logf("proxy: forward %s from %s: %v", m.Method, h.u.Name, err)
-		}
+		h.s.forwardNote(m, h.u)
+	case "notifications/tools/list_changed":
+		go func() {
+			if err := h.s.refreshRoutes(); err != nil {
+				h.s.logf("proxy: %s from %s: keeping the old routes: %v", m.Method, h.u.Name, err)
+			}
+			h.s.forwardNote(m, h.u)
+		}()
 	default:
 		h.s.logf("proxy: dropping %s from %s", m.Method, h.u.Name)
 	}
 }
 
-// HandleRequest refuses server-to-client requests for now; forwarding
-// them to the agent is #68. Answering beats silence: the upstream stops
-// waiting.
-func (h *upstreamHandler) HandleRequest(_ context.Context, m *mcp.Message) (json.RawMessage, error) {
-	h.s.logf("proxy: refusing %s from %s", m.Method, h.u.Name)
-	return nil, &mcp.Error{Code: mcp.CodeMethodNotFound, Message: fmt.Sprintf("vouch proxy does not forward %s yet", m.Method)}
+func (s *Server) forwardNote(m *mcp.Message, u *Upstream) {
+	if err := s.Down.Write(&mcp.Message{Method: m.Method, Params: m.Params}); err != nil {
+		s.logf("proxy: forward %s from %s: %v", m.Method, u.Name, err)
+	}
+}
+
+// forwardedRequests are the server-to-client requests an upstream may
+// send through the proxy. Everything else is refused: the agent never
+// agreed to answer it.
+var forwardedRequests = map[string]bool{
+	"sampling/createMessage": true,
+	"roots/list":             true,
+	"elicitation/create":     true,
+}
+
+// HandleRequest relays a server-to-client request to the agent under a
+// proxy-assigned id and returns the agent's answer, which mcp.Client
+// sends back under the upstream's id. ping is answered by the proxy
+// itself. If the upstream cancels, the agent is told to cancel too.
+// The upstream saw the agent's own capabilities in the forwarded
+// initialize, so it asks only for what the agent offered.
+func (h *upstreamHandler) HandleRequest(ctx context.Context, m *mcp.Message) (json.RawMessage, error) {
+	if m.Method == "ping" {
+		return json.RawMessage(`{}`), nil
+	}
+	if !forwardedRequests[m.Method] {
+		return nil, &mcp.Error{Code: mcp.CodeMethodNotFound, Message: fmt.Sprintf("vouch proxy does not forward %s", m.Method)}
+	}
+	return h.s.askAgent(ctx, m.Method, m.Params)
+}
+
+// askAgent sends the agent a request and waits for its response.
+func (s *Server) askAgent(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
+	reply := make(chan *mcp.Message, 1)
+	s.mu.Lock()
+	if s.downClosed {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("agent disconnected")
+	}
+	s.downNext++
+	id := json.RawMessage(fmt.Sprintf(`"vouch-%d"`, s.downNext))
+	s.downPending[string(id)] = reply
+	s.mu.Unlock()
+	forget := func() {
+		s.mu.Lock()
+		delete(s.downPending, string(id))
+		s.mu.Unlock()
+	}
+
+	if err := s.Down.Write(&mcp.Message{ID: id, Method: method, Params: params}); err != nil {
+		forget()
+		return nil, err
+	}
+	select {
+	case m, ok := <-reply:
+		if !ok {
+			return nil, fmt.Errorf("agent disconnected before answering %s", method)
+		}
+		if m.Error != nil {
+			return nil, m.Error
+		}
+		return m.Result, nil
+	case <-ctx.Done():
+		forget()
+		note, _ := json.Marshal(map[string]any{"requestId": id, "reason": "cancelled by the upstream"})
+		if err := s.Down.Write(&mcp.Message{Method: "notifications/cancelled", Params: note}); err != nil {
+			s.logf("proxy: cancel %s: %v", method, err)
+		}
+		return nil, ctx.Err()
+	}
+}
+
+// deliver routes a response from the agent to the request it answers.
+func (s *Server) deliver(m *mcp.Message) {
+	s.mu.Lock()
+	reply, ok := s.downPending[string(bytes.TrimSpace(m.ID))]
+	delete(s.downPending, string(bytes.TrimSpace(m.ID)))
+	s.mu.Unlock()
+	if !ok {
+		s.logf("proxy: ignoring response with unknown id %s", m.ID)
+		return
+	}
+	reply <- m
+}
+
+func (s *Server) closeDown() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.downClosed = true
+	for id, reply := range s.downPending {
+		delete(s.downPending, id)
+		close(reply)
+	}
 }
 
 // cancelled reports whether err means the agent cancelled the request,
@@ -253,22 +376,36 @@ func cancelled(ctx context.Context, err error) bool {
 	return ctx.Err() != nil && errors.Is(err, ctx.Err())
 }
 
+// handleInitialize forwards the agent's initialize to every upstream,
+// so each sees the agent's own requested version and capabilities, and
+// answers with the version they all chose. MCP lets a server answer
+// with a different version than requested; the proxy relays messages
+// without translating them, so it can serve only one version per
+// session. If upstreams disagree, or chose one the proxy does not
+// support, initialize fails and says why rather than guessing (#68).
 func (s *Server) handleInitialize(m *mcp.Message) error {
-	var params struct {
-		ProtocolVersion string `json:"protocolVersion"`
-	}
-	_ = json.Unmarshal(m.Params, &params)
-	for _, u := range s.Upstreams {
-		if _, err := u.Client.CallContext(context.Background(), "initialize", json.RawMessage(m.Params)); err != nil {
+	versions := make([]string, len(s.Upstreams))
+	for i, u := range s.Upstreams {
+		raw, err := u.Client.CallContext(context.Background(), "initialize", json.RawMessage(m.Params))
+		if err != nil {
 			return s.replyError(m, mcp.CodeInternalError, fmt.Sprintf("upstream %s initialize: %v", u.Name, err))
 		}
+		var res struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		_ = json.Unmarshal(raw, &res)
+		versions[i] = res.ProtocolVersion
+	}
+	version, err := s.negotiate(m.Params, versions)
+	if err != nil {
+		return s.replyError(m, mcp.CodeInternalError, err.Error())
 	}
 	if err := s.refreshRoutes(); err != nil {
 		return s.replyError(m, mcp.CodeInternalError, err.Error())
 	}
 	result := map[string]any{
-		"protocolVersion": params.ProtocolVersion,
-		"capabilities":    map[string]any{"tools": map[string]any{}},
+		"protocolVersion": version,
+		"capabilities":    map[string]any{"tools": map[string]any{"listChanged": true}},
 		"serverInfo":      map[string]any{"name": "vouch-proxy", "version": "0.0.1-dev"},
 	}
 	raw, err := json.Marshal(result)
@@ -276,6 +413,35 @@ func (s *Server) handleInitialize(m *mcp.Message) error {
 		return err
 	}
 	return s.reply(m, raw)
+}
+
+// negotiate picks the session's protocol version from what each
+// upstream answered. With no upstreams it is the agent's request.
+func (s *Server) negotiate(params json.RawMessage, versions []string) (string, error) {
+	var req struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	_ = json.Unmarshal(params, &req)
+	chosen := req.ProtocolVersion
+	for i, v := range versions {
+		if i == 0 {
+			chosen = v
+		} else if v != chosen {
+			var parts []string
+			for j, u := range s.Upstreams {
+				parts = append(parts, fmt.Sprintf("%s=%q", u.Name, versions[j]))
+			}
+			return "", fmt.Errorf("upstreams chose different protocol versions (%s); vouch proxy relays one version per session",
+				strings.Join(parts, ", "))
+		}
+	}
+	for _, v := range SupportedVersions {
+		if v == chosen {
+			return chosen, nil
+		}
+	}
+	return "", fmt.Errorf("protocol version %q is not supported by vouch proxy (supported: %s)",
+		chosen, strings.Join(SupportedVersions, ", "))
 }
 
 // refreshRoutes rebuilds the tool -> upstream routing table from every

@@ -84,7 +84,22 @@ func (r *Replayer) Call(method string, params any) (json.RawMessage, error) {
 func (r *Replayer) CallContext(_ context.Context, method string, params any) (json.RawMessage, error) {
 	switch method {
 	case "initialize":
-		return json.RawMessage(`{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"vouch-replay","version":"0.0.1-dev"}}`), nil
+		// Recorded data does not depend on the protocol version, so the
+		// replayer agrees to whichever the agent asked for; the proxy
+		// still checks that it supports it.
+		raw, err := json.Marshal(params)
+		if err != nil {
+			return nil, fmt.Errorf("replay: initialize params: %w", err)
+		}
+		var req struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		return json.Marshal(map[string]any{
+			"protocolVersion": req.ProtocolVersion,
+			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"serverInfo":      map[string]any{"name": "vouch-replay", "version": "0.0.1-dev"},
+		})
 	case "tools/list":
 		return r.Tools, nil
 	case "tools/call":

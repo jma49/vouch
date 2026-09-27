@@ -169,9 +169,12 @@ remembering. The 2026-09-27 audit filed #8-#48; all are closed.
   Before #22 such a request broke the pending call ("response id does
   not match"); since then `mcp.Client.Call` skips it with a log line,
   so calls survive but the request goes unanswered.
-- **Status:** partly fixed: since #22 calls no longer break, and since
-  #67 the request is answered with method-not-found instead of
-  ignored, so the upstream stops waiting. Forwarding is #68.
+- **Fix / workaround:** sampling, roots, and elicitation requests are
+  forwarded to the agent under a proxy id and answered back; ping is
+  answered by the proxy; anything else gets method-not-found.
+- **Status:** fixed (#68), after #22 (calls no longer broke) and #67
+  (requests answered instead of ignored). Reproduced by
+  `TestSamplingIsForwardedToTheAgent`.
 
 ### P-023 `--upstream` is split on whitespace
 - **Symptom:** upstream commands with quoted arguments or spaces in

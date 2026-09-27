@@ -169,7 +169,7 @@ vouch is an MVP. The most consequential gaps, each tracked with a reproduction i
 - **The headline metrics are synthetic.** See the note under [Measured results](#measured-results); the real evaluation is Phase 2.
 - **Cutting a log's tail needs an outside witness to detect.** Receipts are signed with Ed25519 and hash-chained, so edits, deletions, and reordering are detected, and a cleanly ended session is sealed with a signed checkpoint. But a log cut back to an earlier checkpoint is still a valid chain; only a head digest kept elsewhere (`--expect-head`) reveals it. What the receipts do and do not protect, and against whom, is in the [threat model](docs/threat-model.md).
 - **Canonicalization is vouch's own, not RFC 8785**, on purpose: number literals are kept exactly as a tool wrote them, so `62.30` and `62.3` digest differently. The rules are specified in [`docs/canonical-json.md`](docs/canonical-json.md), pinned across Go and Python by shared vectors, and differentially fuzzed between the two.
-- **The proxy does not yet forward server-to-client requests** (sampling, roots, elicitation); it answers them with method-not-found. Requests are served concurrently, and cancellation and progress are forwarded.
+- **The proxy federates tools, over stdio.** Calls run concurrently, and cancellation, progress, `tools/list_changed`, and sampling/roots/elicitation requests pass through, but resources and prompts are not federated, and there is no HTTP transport yet.
 
 ## Roadmap
 
