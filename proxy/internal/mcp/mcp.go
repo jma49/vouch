@@ -1,6 +1,6 @@
 // Package mcp implements the minimal slice of MCP the proxy needs:
 // JSON-RPC 2.0 messages over a newline-delimited stdio transport, plus
-// a serial client for talking to upstream servers. Stdlib only — the
+// a multiplexing client for talking to upstream servers. Stdlib only — the
 // federation surface (initialize, tools/list, tools/call) is small
 // enough that an SDK would cost more than it saves (docs/design.md
 // section 12).
@@ -9,6 +9,7 @@ package mcp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -122,8 +123,8 @@ func decodeFrame(line []byte) (*Message, error) {
 	switch line[0] {
 	case '{':
 	case '[':
-		// MCP 2025-06-18 removed JSON-RPC batching, and the proxy's
-		// one-receipt-per-call path is serial by design.
+		// MCP 2025-06-18 removed JSON-RPC batching; a batch would also
+		// need one receipt per element under one response.
 		return nil, &FrameError{Code: CodeInvalidRequest, Err: errors.New("batch requests are not supported")}
 	default:
 		return nil, &FrameError{Code: CodeInvalidRequest, Err: errors.New("message is not a JSON object")}
@@ -188,33 +189,69 @@ func (c *Conn) Write(m *Message) error {
 	return nil
 }
 
-// Client drives one upstream server serially: one Call in flight at a
-// time. Notifications arriving while a response is pending are dropped
-// — the MVP proxy does not forward upstream notifications
-// (docs/design.md section 12, open questions).
+// Handler receives the messages a peer sends that are not responses to
+// the client's own calls.
+type Handler interface {
+	// HandleNotification is called for each notification, in arrival
+	// order, on the client's reader goroutine: it must not block.
+	HandleNotification(m *Message)
+	// HandleRequest answers a request from the peer (MCP server-to-
+	// client requests such as sampling). It runs on its own goroutine;
+	// ctx is cancelled if the peer cancels the request, in which case
+	// no response is sent. An *Error is sent as is; any other error as
+	// an internal error.
+	HandleRequest(ctx context.Context, m *Message) (json.RawMessage, error)
+}
+
+// Client multiplexes calls to one peer over a connection: any number
+// of calls may be in flight, matched to responses by id (#67). A reader
+// goroutine, started by the first call, routes every incoming message:
+// responses to their callers, notifications and requests to the
+// Handler. Without a Handler, notifications are dropped and requests
+// are answered with method-not-found.
 type Client struct {
 	// Logf reports frames the client skips; nil means log.Printf.
 	Logf func(format string, args ...any)
 
-	mu     sync.Mutex
-	conn   *Conn
-	nextID int64
+	conn      *Conn
+	startOnce sync.Once
+
+	mu       sync.Mutex
+	handler  Handler
+	nextID   int64
+	pending  map[string]chan reply         // our requests, by id
+	inbound  map[string]context.CancelFunc // peer requests being handled, by id
+	closeErr error                         // set when the reader stops
 }
 
 // NewClient wraps an established connection.
 func NewClient(conn *Conn) *Client {
-	return &Client{conn: conn}
+	return &Client{
+		conn:    conn,
+		pending: make(map[string]chan reply),
+		inbound: make(map[string]context.CancelFunc),
+	}
 }
 
-// Call sends a request and blocks until its response arrives.
-// A JSON-RPC error response is returned as *Error.
-func (c *Client) Call(method string, params any) (json.RawMessage, error) {
+// Handle sets the handler for notifications and requests from the peer.
+func (c *Client) Handle(h Handler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.nextID++
-	id := json.RawMessage(strconv.FormatInt(c.nextID, 10))
+	c.handler = h
+}
 
-	req := &Message{ID: id, Method: method}
+// Call is CallContext without cancellation.
+func (c *Client) Call(method string, params any) (json.RawMessage, error) {
+	return c.CallContext(context.Background(), method, params)
+}
+
+// CallContext sends a request and waits for its response. A JSON-RPC
+// error response is returned as *Error. If ctx ends first, the peer is
+// sent notifications/cancelled for the request (MCP cancellation), a
+// late response is discarded, and ctx's error is returned.
+func (c *Client) CallContext(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	c.startOnce.Do(func() { go c.readLoop() })
+	req := &Message{Method: method}
 	if params != nil {
 		raw, err := json.Marshal(params)
 		if err != nil {
@@ -222,45 +259,194 @@ func (c *Client) Call(method string, params any) (json.RawMessage, error) {
 		}
 		req.Params = raw
 	}
+	done := make(chan reply, 1)
+	c.mu.Lock()
+	if c.closeErr != nil {
+		err := c.closeErr
+		c.mu.Unlock()
+		return nil, fmt.Errorf("mcp: %s: %w", method, err)
+	}
+	c.nextID++
+	req.ID = json.RawMessage(strconv.FormatInt(c.nextID, 10))
+	key := string(req.ID)
+	c.pending[key] = done
+	c.mu.Unlock()
+
 	if err := c.conn.Write(req); err != nil {
+		c.forget(key)
 		return nil, err
 	}
-	// Upstreams share stdout with their own logging more often than they
-	// should. Returning on the first stray line would leave the real
-	// response in the pipe for the next call to read, desynchronizing
-	// the upstream for the rest of the session, so anything that is not
-	// this call's response is skipped. Only EOF, an I/O error, or a
-	// frame too large to read ends the call.
+	select {
+	case r := <-done:
+		switch {
+		case r.err != nil:
+			return nil, fmt.Errorf("mcp: %s: %w", method, r.err)
+		case r.msg.Error != nil:
+			return nil, r.msg.Error
+		}
+		return r.msg.Result, nil
+	case <-ctx.Done():
+		c.forget(key)
+		reason, _ := json.Marshal(map[string]any{"requestId": req.ID, "reason": ctx.Err().Error()})
+		if err := c.conn.Write(&Message{Method: "notifications/cancelled", Params: reason}); err != nil {
+			c.logf("mcp: %s: send cancellation: %v", method, err)
+		}
+		return nil, ctx.Err()
+	}
+}
+
+// reply ends a pending call: the peer's response, or the error that
+// means none will come.
+type reply struct {
+	msg *Message
+	err error
+}
+
+func (c *Client) forget(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.pending, key)
+}
+
+// readLoop routes incoming messages until the connection ends, then
+// fails every pending call. Upstreams share stdout with their own
+// logging more often than they should, so anything unreadable is
+// skipped rather than ending the connection; only EOF or an I/O error
+// does.
+func (c *Client) readLoop() {
 	for {
 		m, err := c.conn.Read()
 		var fe *FrameError
-		if errors.As(err, &fe) && !errors.Is(err, ErrFrameTooLarge) {
-			c.logf("mcp: %s: skipping upstream output: %v", method, err)
+		if errors.As(err, &fe) {
+			if errors.Is(err, ErrFrameTooLarge) {
+				// Its id is unreadable. With one call in flight the frame
+				// can only be that call's response, which is lost: fail
+				// the call rather than leave it waiting forever.
+				c.failSole(err)
+			} else {
+				c.logf("mcp: skipping peer output: %v", err)
+			}
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("mcp: %s: %w", method, err)
+			c.shutdown(err)
+			return
 		}
 		switch {
+		case m.Method != "" && len(m.ID) == 0:
+			c.notification(m)
 		case m.Method != "":
-			// Notifications are not forwarded (see Client). Requests from
-			// the upstream are not supported yet (docs/pitfalls.md P-022).
-			if !m.IsNotification() {
-				c.logf("mcp: %s: ignoring upstream request %s (id %s)", method, m.Method, m.ID)
-			}
-			continue
-		case bytes.Equal(m.ID, id):
-		case bytes.Equal(m.ID, nullID) && m.Error != nil:
-			// The upstream could not read the request (JSON-RPC 2.0
-			// section 5.1). With one call in flight it can only be ours.
+			go c.request(m)
 		default:
-			c.logf("mcp: %s: discarding response with id %s while waiting for %s", method, m.ID, id)
-			continue
+			c.response(m)
 		}
-		if m.Error != nil {
-			return nil, m.Error
+	}
+}
+
+func (c *Client) response(m *Message) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if bytes.Equal(m.ID, nullID) && m.Error != nil {
+		// The peer could not read a request (JSON-RPC 2.0 section 5.1).
+		// It can be attributed only when one call is in flight.
+		if len(c.pending) == 1 {
+			for key, done := range c.pending {
+				delete(c.pending, key)
+				done <- reply{msg: m}
+			}
+			return
 		}
-		return m.Result, nil
+		c.logf("mcp: peer error with id null, %d calls in flight: %s", len(c.pending), m.Error.Message)
+		return
+	}
+	key := string(bytes.TrimSpace(m.ID))
+	done, ok := c.pending[key]
+	if !ok {
+		c.logf("mcp: discarding response with unknown id %s", m.ID)
+		return
+	}
+	delete(c.pending, key)
+	done <- reply{msg: m}
+}
+
+func (c *Client) failSole(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.pending) != 1 {
+		c.logf("mcp: %v, %d calls in flight", err, len(c.pending))
+		return
+	}
+	for key, done := range c.pending {
+		delete(c.pending, key)
+		done <- reply{err: err}
+	}
+}
+
+func (c *Client) shutdown(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closeErr = err
+	for key, done := range c.pending {
+		delete(c.pending, key)
+		done <- reply{err: err}
+	}
+	for _, cancel := range c.inbound {
+		cancel()
+	}
+}
+
+func (c *Client) notification(m *Message) {
+	c.mu.Lock()
+	h := c.handler
+	if m.Method == "notifications/cancelled" {
+		var p struct {
+			RequestID json.RawMessage `json:"requestId"`
+		}
+		if json.Unmarshal(m.Params, &p) == nil {
+			if cancel, ok := c.inbound[string(bytes.TrimSpace(p.RequestID))]; ok {
+				cancel()
+				c.mu.Unlock()
+				return // one of ours to cancel; not the handler's business
+			}
+		}
+	}
+	c.mu.Unlock()
+	if h != nil {
+		h.HandleNotification(m)
+	}
+}
+
+func (c *Client) request(m *Message) {
+	key := string(bytes.TrimSpace(m.ID))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.mu.Lock()
+	h := c.handler
+	c.inbound[key] = cancel
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(c.inbound, key)
+		c.mu.Unlock()
+	}()
+
+	resp := &Message{ID: m.ID}
+	if h == nil {
+		resp.Error = &Error{Code: CodeMethodNotFound, Message: fmt.Sprintf("method %q not supported", m.Method)}
+	} else if result, err := h.HandleRequest(ctx, m); err != nil {
+		var rpcErr *Error
+		if !errors.As(err, &rpcErr) {
+			rpcErr = &Error{Code: CodeInternalError, Message: err.Error()}
+		}
+		resp.Error = rpcErr
+	} else {
+		resp.Result = result
+	}
+	if ctx.Err() != nil {
+		return // cancelled by the peer: MCP says not to respond
+	}
+	if err := c.conn.Write(resp); err != nil {
+		c.logf("mcp: answer %s: %v", m.Method, err)
 	}
 }
 

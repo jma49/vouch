@@ -3,14 +3,17 @@
 // proxy forwards every call, records a signed receipt of the
 // request/response pair, and returns the result unchanged.
 //
-// MVP federation surface: initialize, notifications/initialized, ping,
+// Federation surface: initialize, notifications/initialized, ping,
 // tools/list (merged across upstreams), tools/call (routed by tool
-// name). Resources, prompts, and upstream-initiated notifications are
-// out of scope for now and answered with method-not-found.
+// name), and cancellation. Requests are served concurrently after
+// initialize (#67). Upstream progress and log notifications are
+// forwarded to the agent. Resources and prompts are out of scope and
+// answered with method-not-found.
 package proxy
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -18,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sync"
 
 	"github.com/jma49/vouch/proxy/internal/clock"
 	"github.com/jma49/vouch/proxy/internal/extract"
@@ -30,7 +34,7 @@ import (
 // implementation; the fixture recorder and replayer wrap or replace it
 // (docs/design.md section 8.1).
 type Caller interface {
-	Call(method string, params any) (json.RawMessage, error)
+	CallContext(ctx context.Context, method string, params any) (json.RawMessage, error)
 	Notify(method string, params any) error
 }
 
@@ -52,7 +56,11 @@ type Server struct {
 	Clock     clock.Clock
 	Logf      func(format string, args ...any)
 
-	routes map[string]*Upstream
+	mu       sync.RWMutex
+	routes   map[string]*Upstream
+	inflight map[string]context.CancelFunc // downstream request id -> cancel
+	writeErr error                         // first failed write to the agent
+	wg       sync.WaitGroup                // requests being served
 }
 
 func (s *Server) logf(format string, args ...any) {
@@ -65,7 +73,28 @@ func (s *Server) logf(format string, args ...any) {
 
 // Run serves the downstream connection until EOF. Only EOF or an I/O
 // error ends the session; a malformed frame is answered and skipped.
+// initialize is served before the next message is read, so routes exist
+// before any call; every other request runs on its own goroutine, and
+// Run returns only after they finish, so a session is never sealed
+// while a receipt is still being written.
 func (s *Server) Run() error {
+	s.inflight = make(map[string]context.CancelFunc)
+	for _, u := range s.Upstreams {
+		if l, ok := u.Client.(interface{ Handle(mcp.Handler) }); ok {
+			l.Handle(&upstreamHandler{s: s, u: u})
+		}
+	}
+	err := s.serve()
+	s.wg.Wait()
+	if err == nil {
+		s.mu.Lock()
+		err = s.writeErr
+		s.mu.Unlock()
+	}
+	return err
+}
+
+func (s *Server) serve() error {
 	for {
 		m, err := s.Down.Read()
 		var fe *mcp.FrameError
@@ -103,6 +132,9 @@ func (s *Server) dispatch(m *mcp.Message) error {
 	case m.Method == "":
 		s.logf("proxy: ignoring message without a method (id %s)", m.ID)
 		return nil
+	case m.Method == "notifications/cancelled" && m.IsNotification():
+		s.cancel(m)
+		return nil
 	case m.IsNotification() && m.Method != "notifications/initialized":
 		s.logf("proxy: dropping notification %s", m.Method)
 		return nil
@@ -121,15 +153,104 @@ func (s *Server) dispatch(m *mcp.Message) error {
 			}
 		}
 		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	key := string(bytes.TrimSpace(m.ID))
+	s.mu.Lock()
+	if _, dup := s.inflight[key]; dup {
+		s.mu.Unlock()
+		cancel()
+		return s.replyError(m, mcp.CodeInvalidRequest, fmt.Sprintf("request id %s is already in use", m.ID))
+	}
+	s.inflight[key] = cancel
+	s.mu.Unlock()
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer func() {
+			s.mu.Lock()
+			delete(s.inflight, key)
+			s.mu.Unlock()
+			cancel()
+		}()
+		if err := s.handle(ctx, m); err != nil {
+			s.mu.Lock()
+			if s.writeErr == nil {
+				s.writeErr = err
+			}
+			s.mu.Unlock()
+		}
+	}()
+	return nil
+}
+
+func (s *Server) handle(ctx context.Context, m *mcp.Message) error {
+	switch m.Method {
 	case "ping":
 		return s.reply(m, json.RawMessage(`{}`))
 	case "tools/list":
-		return s.handleToolsList(m)
+		return s.handleToolsList(ctx, m)
 	case "tools/call":
-		return s.handleToolsCall(m)
+		return s.handleToolsCall(ctx, m)
 	default:
 		return s.replyError(m, mcp.CodeMethodNotFound, fmt.Sprintf("method %q not federated by vouch proxy", m.Method))
 	}
+}
+
+// cancel handles notifications/cancelled from the agent: the request's
+// context ends, which cancels its upstream call in turn (mcp.Client
+// sends the upstream its own notifications/cancelled). A cancelled
+// request gets no response and, unless its result had already come
+// back, no receipt: the agent never saw a result.
+func (s *Server) cancel(m *mcp.Message) {
+	var p struct {
+		RequestID json.RawMessage `json:"requestId"`
+	}
+	if err := json.Unmarshal(m.Params, &p); err != nil {
+		s.logf("proxy: notifications/cancelled: %v", err)
+		return
+	}
+	s.mu.Lock()
+	cancel, ok := s.inflight[string(bytes.TrimSpace(p.RequestID))]
+	s.mu.Unlock()
+	if ok {
+		cancel()
+	}
+}
+
+// upstreamHandler receives what one upstream sends besides responses.
+type upstreamHandler struct {
+	s *Server
+	u *Upstream
+}
+
+// HandleNotification forwards progress and log messages to the agent
+// unchanged: a progressToken is the agent's own (it rides in the
+// forwarded params), so the agent can match it without translation.
+func (h *upstreamHandler) HandleNotification(m *mcp.Message) {
+	switch m.Method {
+	case "notifications/progress", "notifications/message":
+		if err := h.s.Down.Write(&mcp.Message{Method: m.Method, Params: m.Params}); err != nil {
+			h.s.logf("proxy: forward %s from %s: %v", m.Method, h.u.Name, err)
+		}
+	default:
+		h.s.logf("proxy: dropping %s from %s", m.Method, h.u.Name)
+	}
+}
+
+// HandleRequest refuses server-to-client requests for now; forwarding
+// them to the agent is #68. Answering beats silence: the upstream stops
+// waiting.
+func (h *upstreamHandler) HandleRequest(_ context.Context, m *mcp.Message) (json.RawMessage, error) {
+	h.s.logf("proxy: refusing %s from %s", m.Method, h.u.Name)
+	return nil, &mcp.Error{Code: mcp.CodeMethodNotFound, Message: fmt.Sprintf("vouch proxy does not forward %s yet", m.Method)}
+}
+
+// cancelled reports whether err means the agent cancelled the request,
+// which is answered with silence (MCP cancellation).
+func cancelled(ctx context.Context, err error) bool {
+	return ctx.Err() != nil && errors.Is(err, ctx.Err())
 }
 
 func (s *Server) handleInitialize(m *mcp.Message) error {
@@ -138,7 +259,7 @@ func (s *Server) handleInitialize(m *mcp.Message) error {
 	}
 	_ = json.Unmarshal(m.Params, &params)
 	for _, u := range s.Upstreams {
-		if _, err := u.Client.Call("initialize", json.RawMessage(m.Params)); err != nil {
+		if _, err := u.Client.CallContext(context.Background(), "initialize", json.RawMessage(m.Params)); err != nil {
 			return s.replyError(m, mcp.CodeInternalError, fmt.Sprintf("upstream %s initialize: %v", u.Name, err))
 		}
 	}
@@ -163,7 +284,7 @@ func (s *Server) handleInitialize(m *mcp.Message) error {
 func (s *Server) refreshRoutes() error {
 	routes := make(map[string]*Upstream)
 	for _, u := range s.Upstreams {
-		raw, err := u.Client.Call("tools/list", nil)
+		raw, err := u.Client.CallContext(context.Background(), "tools/list", nil)
 		if err != nil {
 			return fmt.Errorf("upstream %s tools/list: %w", u.Name, err)
 		}
@@ -182,14 +303,19 @@ func (s *Server) refreshRoutes() error {
 			routes[tool.Name] = u
 		}
 	}
+	s.mu.Lock()
 	s.routes = routes
+	s.mu.Unlock()
 	return nil
 }
 
-func (s *Server) handleToolsList(m *mcp.Message) error {
+func (s *Server) handleToolsList(ctx context.Context, m *mcp.Message) error {
 	var merged []json.RawMessage
 	for _, u := range s.Upstreams {
-		raw, err := u.Client.Call("tools/list", json.RawMessage(m.Params))
+		raw, err := u.Client.CallContext(ctx, "tools/list", json.RawMessage(m.Params))
+		if cancelled(ctx, err) {
+			return nil
+		}
 		if err != nil {
 			return s.replyError(m, mcp.CodeInternalError, fmt.Sprintf("upstream %s tools/list: %v", u.Name, err))
 		}
@@ -208,7 +334,7 @@ func (s *Server) handleToolsList(m *mcp.Message) error {
 	return s.reply(m, raw)
 }
 
-func (s *Server) handleToolsCall(m *mcp.Message) error {
+func (s *Server) handleToolsCall(ctx context.Context, m *mcp.Message) error {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -223,14 +349,19 @@ func (s *Server) handleToolsCall(m *mcp.Message) error {
 	if err := json.Unmarshal(m.Params, &params); err != nil || params.Name == "" {
 		return s.replyError(m, mcp.CodeInvalidParams, "tools/call: missing tool name")
 	}
+	s.mu.RLock()
 	u, ok := s.routes[params.Name]
+	s.mu.RUnlock()
 	if !ok {
 		return s.replyError(m, mcp.CodeInvalidParams, fmt.Sprintf("tools/call: unknown tool %q", params.Name))
 	}
 
 	start := s.Clock.Now()
-	result, err := u.Client.Call("tools/call", json.RawMessage(m.Params))
+	result, err := u.Client.CallContext(ctx, "tools/call", json.RawMessage(m.Params))
 	latency := s.Clock.Now().Sub(start).Milliseconds()
+	if cancelled(ctx, err) {
+		return nil // no response, and no receipt: the agent saw nothing
+	}
 	if err != nil {
 		var rpcErr *mcp.Error
 		if errors.As(err, &rpcErr) {

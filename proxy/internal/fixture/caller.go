@@ -1,15 +1,18 @@
 package fixture
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/jma49/vouch/proxy/internal/mcp"
 )
 
 // caller matches proxy.Caller structurally; declared here to avoid an
 // import cycle.
 type caller interface {
-	Call(method string, params any) (json.RawMessage, error)
+	CallContext(ctx context.Context, method string, params any) (json.RawMessage, error)
 	Notify(method string, params any) error
 }
 
@@ -27,8 +30,17 @@ func NewRecorder(upstream string, inner caller, store *Store, now func() time.Ti
 	return &Recorder{Upstream: upstream, Inner: inner, Store: store, Now: now}
 }
 
-func (r *Recorder) Call(method string, params any) (json.RawMessage, error) {
-	result, err := r.Inner.Call(method, params)
+// Handle passes the proxy's handler for upstream notifications and
+// requests through to the live upstream; recording does not change
+// what the agent sees.
+func (r *Recorder) Handle(h mcp.Handler) {
+	if l, ok := r.Inner.(interface{ Handle(mcp.Handler) }); ok {
+		l.Handle(h)
+	}
+}
+
+func (r *Recorder) CallContext(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	result, err := r.Inner.CallContext(ctx, method, params)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +74,14 @@ type Replayer struct {
 	Tools    json.RawMessage // recorded tools/list result
 }
 
+// Call is CallContext without cancellation, for tests.
 func (r *Replayer) Call(method string, params any) (json.RawMessage, error) {
+	return r.CallContext(context.Background(), method, params)
+}
+
+// CallContext answers from fixtures, which is instant, so ctx is not
+// consulted: replay has nothing to cancel.
+func (r *Replayer) CallContext(_ context.Context, method string, params any) (json.RawMessage, error) {
 	switch method {
 	case "initialize":
 		return json.RawMessage(`{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"vouch-replay","version":"0.0.1-dev"}}`), nil

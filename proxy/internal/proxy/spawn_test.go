@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -177,10 +178,10 @@ func TestOversizedUpstreamFrameFailsOnlyThatCall(t *testing.T) {
 	defer u.Close()
 
 	params := map[string]any{"name": "t", "arguments": map[string]any{}}
-	if _, err := u.Client.Call("tools/call", params); !errors.Is(err, mcp.ErrFrameTooLarge) {
+	if _, err := u.Client.CallContext(context.Background(), "tools/call", params); !errors.Is(err, mcp.ErrFrameTooLarge) {
 		t.Fatalf("first call: got %v, want ErrFrameTooLarge", err)
 	}
-	res, err := u.Client.Call("tools/call", params)
+	res, err := u.Client.CallContext(context.Background(), "tools/call", params)
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}

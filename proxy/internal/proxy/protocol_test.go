@@ -39,8 +39,8 @@ func TestBadFramesAreAnsweredAndServingContinues(t *testing.T) {
 			if string(m.ID) != "null" || m.Error == nil || m.Error.Code != tc.code {
 				t.Fatalf("reply: id=%s error=%+v, want id null code %d", m.ID, m.Error, tc.code)
 			}
-			if _, err := s.agent.Call("ping", nil); err != nil {
-				t.Fatalf("ping after bad frame: %v", err)
+			if m := s.rawCall(t, "9", "ping", nil); m.Error != nil || string(m.ID) != "9" {
+				t.Fatalf("ping after bad frame: %+v", m)
 			}
 		})
 	}
@@ -67,8 +67,8 @@ func TestNoReplyWithoutRequest(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := startSession(t)
-			if _, err := s.agent.Call("initialize", map[string]any{"protocolVersion": "2025-06-18"}); err != nil {
-				t.Fatal(err)
+			if m := s.rawCall(t, "1", "initialize", map[string]any{"protocolVersion": "2025-06-18"}); m.Error != nil {
+				t.Fatal(m.Error)
 			}
 			if _, err := io.WriteString(s.send, tc.line+"\n"+`{"jsonrpc":"2.0","id":"after","method":"ping"}`+"\n"); err != nil {
 				t.Fatal(err)
@@ -156,7 +156,7 @@ func TestOversizedDownstreamFrameIsAnswered(t *testing.T) {
 	if string(m.ID) != "null" || m.Error == nil || m.Error.Code != mcp.CodeInvalidRequest {
 		t.Fatalf("reply: id=%s error=%+v", m.ID, m.Error)
 	}
-	if _, err := s.agent.Call("ping", nil); err != nil {
-		t.Fatalf("ping after oversized frame: %v", err)
+	if m := s.rawCall(t, "9", "ping", nil); m.Error != nil || string(m.ID) != "9" {
+		t.Fatalf("ping after oversized frame: %+v", m)
 	}
 }

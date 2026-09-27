@@ -108,6 +108,26 @@ entry whenever a choice closes off an alternative (AGENTS.md).
 - Cost: `turn_index` is the order receipts were written, not the order
   requests arrived; under concurrency (#67) the two can differ.
 
+**Concurrency: receipt if and only if the agent was sent the result** (#67)
+- Chosen: every request after `initialize` runs on its own goroutine;
+  `mcp.Client` multiplexes by id. A cancelled request is cancelled
+  upstream (under the upstream's id) and gets no response and no
+  receipt; if its result already came back, it is receipted and sent
+  anyway. `Run` waits for in-flight requests before returning, so
+  sealing never races a receipt.
+- Rejected: receipting a result that arrives after cancellation (it
+  would attest to data no agent saw); a per-upstream worker pool
+  (bounds nothing the upstream does not already bound, adds tuning).
+- Why: one slow tool stalled `ping` and every other tool.
+- Cost: `turn_index` is completion order, not request order. A
+  JSON-RPC error with id null from an upstream can be attributed only
+  when exactly one call is in flight; otherwise it is logged and the
+  call waits for its real response. Concurrency is unbounded: an agent
+  can open as many upstream calls as it sends requests. Only
+  `notifications/progress` and `notifications/message` are forwarded
+  from upstreams; the rest wait for #68.
+- Revisit when: an agent floods the proxy; add a per-session limit.
+
 **Upstream commands are split like a shell, not run by one** (#70)
 - Chosen: POSIX quoting and backslashes; no expansion of any kind.
 - Rejected: `sh -c` (expansions make the argv, and so the default

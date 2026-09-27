@@ -69,8 +69,8 @@ func fakeUpstream(t *testing.T, conn *mcp.Conn) {
 
 // session is one running proxy wired between an in-process fake
 // upstream and an agent-side connection. agent and raw share one Conn,
-// so a test may mix typed calls with raw frames as long as it does not
-// read from both concurrently.
+// and agent's reader takes every frame once agent makes a call, so a
+// test that reads raw frames must use only raw (rawCall) for requests.
 type session struct {
 	agent    *mcp.Client
 	raw      *mcp.Conn
@@ -404,4 +404,22 @@ func TestReusedSessionContinuesItsTurns(t *testing.T) {
 	if len(receipts) != 2 || receipts[0].TurnIndex != 0 || receipts[1].TurnIndex != 1 {
 		t.Fatalf("got %d receipts, want turns 0 and 1", len(receipts))
 	}
+}
+
+// rawCall sends a request on the raw connection and returns the next
+// frame the proxy writes, for tests that also read raw frames.
+func (s *session) rawCall(t *testing.T, id, method string, params any) *mcp.Message {
+	t.Helper()
+	raw, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.raw.Write(&mcp.Message{ID: json.RawMessage(id), Method: method, Params: raw}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.raw.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
 }
