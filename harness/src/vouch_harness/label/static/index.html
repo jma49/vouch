@@ -160,6 +160,32 @@ function toast(msg) {
   clearTimeout(toast.h); toast.h = setTimeout(() => (t.style.display = "none"), 3000);
 }
 
+// BEGIN offsets
+// Span offsets from the server count code points (Python str indices);
+// the DOM and String.slice count UTF-16 code units. A character outside
+// the BMP (an emoji, some CJK) is one of the first and two of the second,
+// so every offset crossing between them goes through this map, built
+// once per answer: u16[cp] is where code point cp starts.
+function offsetMap(text) {
+  const u16 = [0];
+  for (const ch of text) u16.push(u16[u16.length - 1] + ch.length);
+  const last = u16.length - 1;
+  return {
+    toU16: (cp) => u16[Math.max(0, Math.min(cp, last))],
+    // The first code point starting at or after this unit; a unit inside
+    // a surrogate pair rounds up to the end of that character.
+    toCp: (unit) => {
+      let lo = 0, hi = last;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (u16[mid] < unit) lo = mid + 1; else hi = mid;
+      }
+      return lo;
+    },
+  };
+}
+// END offsets
+
 function mergeSpans(run) {
   const byKey = new Map();
   for (const s of run.spans) byKey.set(`${s.start}:${s.end}`, { ...s, source: "token" });
@@ -191,19 +217,21 @@ function renderView() {
   view.append(el("h2", { text: "Answer" }));
   if (!run.finished) view.append(el("p", { class: "warn", text: "The run did not finish (out of turns, or the answer was cut off); the answer may be empty or incomplete." }));
   const box = el("p", { class: "answer", id: "answer" });
+  const off = offsetMap(run.answer);
+  const slice = (a, b) => run.answer.slice(off.toU16(a), off.toU16(b));
   let pos = 0;
   S.spans.forEach((s, i) => {
     if (s.start < pos) return; // overlaps an earlier span: navigable, not drawn inline
-    box.append(document.createTextNode(run.answer.slice(pos, s.start)));
+    box.append(document.createTextNode(slice(pos, s.start)));
     const m = el("mark", { "data-i": String(i), title: s.label || "unlabeled", onclick: () => enqueue(() => select(i)) });
-    m.textContent = run.answer.slice(s.start, s.end);
+    m.textContent = slice(s.start, s.end);
     if (s.label) { m.dataset.label = s.label; m.style.setProperty("--c", `var(--${s.label})`); }
     if (s.source === "manual") m.classList.add("manual");
     if (i === S.cur) m.classList.add("current");
     box.append(m);
     pos = s.end;
   });
-  box.append(document.createTextNode(run.answer.slice(pos)));
+  box.append(document.createTextNode(run.answer.slice(off.toU16(pos))));
   view.append(box);
   const s = S.spans[S.cur];
   $("spaninfo").textContent = s ? `span ${S.cur + 1} of ${S.spans.length}: "${s.text}"` : "no spans";
@@ -281,14 +309,16 @@ async function addSelection() {
   }
   const range = sel.getRangeAt(0), pre = document.createRange();
   pre.selectNodeContents(box); pre.setEnd(range.startContainer, range.startOffset);
-  let start = pre.toString().length, end = start + range.toString().length;
-  const answer = S.run.answer;
-  while (start < end && /\s/.test(answer[start])) start++;
-  while (end > start && /\s/.test(answer[end - 1])) end--;
+  // The DOM measures in UTF-16 units; the server wants code points.
+  const answer = S.run.answer, off = offsetMap(answer), chars = Array.from(answer);
+  const u16 = pre.toString().length;
+  let start = off.toCp(u16), end = off.toCp(u16 + range.toString().length);
+  while (start < end && /\s/u.test(chars[start])) start++;
+  while (end > start && /\s/u.test(chars[end - 1])) end--;
   if (start === end) return;
   const existing = S.spans.findIndex((s) => s.start === start && s.end === end);
   if (existing >= 0) { select(existing); return; }
-  S.spans.push({ start, end, text: answer.slice(start, end), source: "manual" });
+  S.spans.push({ start, end, text: chars.slice(start, end).join(""), source: "manual" });
   S.spans.sort((a, b) => a.start - b.start || b.end - a.end);
   S.cur = S.spans.findIndex((s) => s.start === start && s.end === end);
   sel.removeAllRanges();

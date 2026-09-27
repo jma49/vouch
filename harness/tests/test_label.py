@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import http.client
 import json
+import shutil
+import subprocess
 import threading
 import urllib.error
 import urllib.request
@@ -14,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from vouch_harness.label import server as label_server
 from vouch_harness.label import store
 from vouch_harness.label.agreement import agreement, cohen_kappa
 from vouch_harness.label.runs import discover, load_run
@@ -230,3 +233,73 @@ def test_http_api_rejects_bad_requests(server: str) -> None:
             _get(server + path)
         assert err.value.code in (400, 404)
         err.value.close()
+
+
+# Outside the BMP: one code point in Python, two UTF-16 units in the page.
+EMOJI_ANSWER = "\U0001f4c8 NVDA closed at 181.52, and volume was about 190 million."
+
+
+def test_server_spans_are_code_point_offsets(tmp_path: Path) -> None:
+    make_run(tmp_path / "runs", answer=EMOJI_ANSWER)
+    view = load_run(tmp_path / "runs", "m/t01/s0")
+    spans = [(s["start"], s["end"], s["text"]) for s in view.spans]
+    assert spans == [(17, 23, "181.52"), (46, 57, "190 million")]
+    app = LabelApp(tmp_path / "runs", tmp_path / "labels", "alice")
+    start = EMOJI_ANSWER.index("about 190 million")
+    body = {"run": "m/t01/s0", "start": start, "end": start + 17, "text": "about 190 million"}
+    app.label({**body, "label": "SUPPORTED", "source": "manual"})
+
+
+NODE = shutil.which("node")
+
+
+def page_script(block: str) -> str:
+    """One marked block of the page's script, for testing it in node."""
+    html = Path(label_server.__file__).with_name("static").joinpath("index.html").read_text()
+    begin, end = f"// BEGIN {block}\n", f"// END {block}\n"
+    return html[html.index(begin) + len(begin) : html.index(end)]
+
+
+def run_node(tmp_path: Path, script: str) -> None:
+    assert NODE is not None
+    path = tmp_path / "test.js"
+    path.write_text('"use strict";\n' + script)
+    proc = subprocess.run([NODE, str(path)], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_page_script_parses(tmp_path: Path) -> None:
+    html = Path(label_server.__file__).with_name("static").joinpath("index.html").read_text()
+    script = html[html.index("<script>") + len("<script>") : html.index("</script>")]
+    path = tmp_path / "page.js"
+    path.write_text(script)
+    assert NODE is not None
+    proc = subprocess.run([NODE, "--check", str(path)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_page_converts_offsets_between_code_points_and_utf16(tmp_path: Path) -> None:
+    make_run(tmp_path / "runs", answer=EMOJI_ANSWER)
+    spans = load_run(tmp_path / "runs", "m/t01/s0").spans
+    selected = "about 190 million"
+    start_cp = EMOJI_ANSWER.index(selected)
+    checks = f"""
+const assert = require("node:assert/strict");
+const answer = {json.dumps(EMOJI_ANSWER)};
+const off = offsetMap(answer);
+// Drawing: a server span, mapped to UTF-16, slices exactly its text.
+for (const s of {json.dumps(spans)}) {{
+  assert.equal(answer.slice(off.toU16(s.start), off.toU16(s.end)), s.text);
+}}
+// Selecting: DOM (UTF-16) offsets map back to the server's code points.
+const u16 = answer.indexOf({json.dumps(selected)});
+assert.equal(off.toCp(u16), {start_cp});
+assert.equal(off.toCp(u16 + {len(selected)}), {start_cp + len(selected)});
+assert.equal(off.toCp(0), 0);
+assert.equal(off.toU16(0), 0);
+assert.equal(off.toCp(answer.length), {len(EMOJI_ANSWER)});
+assert.equal(off.toU16({len(EMOJI_ANSWER)}), answer.length);
+"""
+    run_node(tmp_path, page_script("offsets") + checks)
