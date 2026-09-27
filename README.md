@@ -206,6 +206,7 @@ make cover    # coverage report for Go and Python
 make readme   # regenerate the measured sections of this README
 make golden   # regenerate the Go-written golden receipt log
 make fuzz     # grow the Go fuzz corpus, then replay it through Python
+make integration  # the proxy against the official MCP reference server (needs Node)
 ```
 
 Contribution rules for humans and coding agents alike (invariants, commit conventions, which docs to keep current) live in [`AGENTS.md`](AGENTS.md).

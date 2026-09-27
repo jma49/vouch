@@ -167,7 +167,7 @@ measured overhead.
 | Session resume: continue `turn_index` from the log when `--session` is reused | done (#69) |
 | Streamable HTTP transport | todo |
 | Upstream command parsing with proper quoting | done (#70) |
-| Integration tests against official MCP reference servers in CI | todo |
+| Integration tests against official MCP reference servers in CI | done (#75): `server-everything`, pinned; found #74 |
 | Benchmarks: added latency p50/p99 per `tools/call`, published in README | todo |
 
 Exit criteria: reference-server integration suite green; benchmark
