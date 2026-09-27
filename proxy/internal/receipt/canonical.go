@@ -1,5 +1,5 @@
 // Package receipt implements vouch's receipt model: canonical JSON
-// serialization, fact-carrying receipts, and HMAC signing.
+// serialization and fact-carrying receipts. Signing is package sign.
 //
 // Canonicalize implements vouch canonical JSON v1, specified in
 // docs/canonical-json.md and pinned, byte for byte against the Python

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
 import pytest
+from keys import EVAL_KEY_ID, EVAL_PRIV, EVAL_PUB, GOLDEN_KEY_ID, GOLDEN_KEYS, GOLDEN_PUB
 
 from vouch_harness import signing
 from vouch_harness.label import store
@@ -15,7 +17,6 @@ from vouch_verifier.matcher import DEFAULT_TOLERANCES
 
 ROOT = Path(__file__).resolve().parents[2]
 GOLDEN = ROOT / "testdata" / "receipts_golden.jsonl"
-KEY = b"vouch-golden-key"
 
 # (run id, answer, {span text: human label})
 RUNS = [
@@ -71,7 +72,7 @@ def test_spans_align_and_missed_spans_count(
     workspace: tuple[Path, dict[store.SpanKey, store.LabelRecord]],
 ) -> None:
     runs, labels = workspace
-    scores = {s.run: s for s in score_runs(runs, labels, DEFAULT_TOLERANCES, KEY)}
+    scores = {s.run: s for s in score_runs(runs, labels, DEFAULT_TOLERANCES, GOLDEN_KEYS)}
     assert scores["m/t01/s0"].pairs() == [
         ("SUPPORTED", "SUPPORTED"),
         ("CONTRADICTED", "CONTRADICTED"),
@@ -85,7 +86,7 @@ def test_detection_counts_and_rates(
     workspace: tuple[Path, dict[store.SpanKey, store.LabelRecord]],
 ) -> None:
     runs, labels = workspace
-    det = detection(score_runs(runs, labels, DEFAULT_TOLERANCES, KEY))
+    det = detection(score_runs(runs, labels, DEFAULT_TOLERANCES, GOLDEN_KEYS))
     # Flagged misreports: 172.40, 41 million, 99. Missed: the recalled
     # P/E, which the verifier leaves UNVERIFIABLE. NOT_A_CLAIM is excluded.
     assert (det.tp, det.fp, det.fn, det.tn) == (3, 0, 1, 2)
@@ -98,7 +99,7 @@ def test_report_separates_human_and_verifier_rates(
     workspace: tuple[Path, dict[store.SpanKey, store.LabelRecord]],
 ) -> None:
     runs, labels = workspace
-    md = to_markdown(score_runs(runs, labels, DEFAULT_TOLERANCES, KEY), "alice", {}, labels)
+    md = to_markdown(score_runs(runs, labels, DEFAULT_TOLERANCES, GOLDEN_KEYS), "alice", {}, labels)
     assert "| m | human labels | 3 |" in md  # only labeled runs
     assert "| m | verifier estimate | 4 |" in md  # every run
     assert "TP 3, FP 0, FN 1, TN 2" in md
@@ -125,8 +126,8 @@ def test_cli(
             str(runs.parent / "labels"),
             "--tolerances",
             str(ROOT / "tolerance.yaml"),
-            "--key",
-            KEY.decode(),
+            "--public-key",
+            str(GOLDEN_PUB),
             "--format",
             "json",
         ]
@@ -141,8 +142,8 @@ def test_a_bad_signature_names_its_run(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     runs, _ = workspace  # no key ids recorded: runs from before they were
-    assert main([*_cli_args(runs), "--key", "wrong"]) == 2
-    assert "m/t01/s0: line 1: signature verification failed" in capsys.readouterr().err
+    assert main([*_cli_args(runs), "--public-key", str(EVAL_PUB)]) == 2
+    assert "m/t01/s0: line 1: no valid signature from a trusted key" in capsys.readouterr().err
 
 
 def _cli_args(runs: Path) -> list[str]:
@@ -160,15 +161,19 @@ def _cli_args(runs: Path) -> list[str]:
     ]
 
 
-def test_key_resolution_is_shared(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("VOUCH_HMAC_KEY", raising=False)
-    assert signing.resolve_key() == signing.EVAL_HMAC_KEY
-    assert signing.resolve_key("explicit") == "explicit"
-    monkeypatch.setenv("VOUCH_HMAC_KEY", "from-env")
-    assert signing.resolve_key() == "from-env"
-    assert signing.resolve_key("explicit") == "explicit"
-    assert signing.key_id("from-env") == signing.key_id(b"from-env")
-    assert len(signing.key_id("from-env")) == 8
+def test_key_resolution_is_shared(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("VOUCH_SIGNING_KEY", raising=False)
+    monkeypatch.delenv("VOUCH_PUBLIC_KEY", raising=False)
+    assert signing.resolve_signing_key() == signing.EVAL_SIGNING_KEY
+    assert signing.resolve_public_keys() == [signing.EVAL_PUBLIC_KEY]
+    assert signing.resolve_signing_key(Path("explicit.pem")) == Path("explicit.pem")
+    monkeypatch.setenv("VOUCH_SIGNING_KEY", "from-env.pem")
+    monkeypatch.setenv("VOUCH_PUBLIC_KEY", os.pathsep.join(["a.pub.pem", "b.pub.pem"]))
+    assert signing.resolve_signing_key() == Path("from-env.pem")
+    assert signing.resolve_public_keys() == [Path("a.pub.pem"), Path("b.pub.pem")]
+    assert signing.resolve_public_keys([Path("x.pem")]) == [Path("x.pem")]
+    copy = signing.private_copy(EVAL_PRIV, tmp_path)
+    assert copy.stat().st_mode & 0o777 == 0o600
 
 
 def test_cli_takes_the_key_from_the_environment(
@@ -177,7 +182,7 @@ def test_cli_takes_the_key_from_the_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runs, _ = workspace
-    monkeypatch.setenv("VOUCH_HMAC_KEY", KEY.decode())  # what signed the golden log
+    monkeypatch.setenv("VOUCH_PUBLIC_KEY", str(GOLDEN_PUB))  # what signed the golden log
     assert main(_cli_args(runs)) == 0
     assert json.loads(capsys.readouterr().out)["runs"] == 4
 
@@ -189,9 +194,10 @@ def test_cli_names_the_run_signed_with_another_key(
 ) -> None:
     runs, _ = workspace
     for meta in runs.glob("*/*/*/meta.json"):
-        meta.write_text(json.dumps({"prompt": "q", "key_id": signing.key_id(KEY)}))
-    monkeypatch.delenv("VOUCH_HMAC_KEY", raising=False)  # falls back to the eval key
+        meta.write_text(json.dumps({"prompt": "q", "key_id": GOLDEN_KEY_ID}))
+    monkeypatch.delenv("VOUCH_PUBLIC_KEY", raising=False)  # falls back to the eval key
+    monkeypatch.chdir(ROOT)  # CLI defaults are relative to the repository root
     assert main(_cli_args(runs)) == 2
     err = capsys.readouterr().err
     assert "m/t01/s0" in err
-    assert signing.key_id(KEY) in err and signing.key_id(signing.EVAL_HMAC_KEY) in err
+    assert GOLDEN_KEY_ID in err and EVAL_KEY_ID in err

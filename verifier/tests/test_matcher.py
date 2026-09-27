@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from envelopes import GOLDEN_KEYS
 
 from vouch_verifier.claims import Extraction, extract_claims
 from vouch_verifier.matcher import DEFAULT_TOLERANCES, MatchedClaim, load_tolerances, match_claims
@@ -11,13 +12,12 @@ from vouch_verifier.report import build_report, to_json, to_markdown
 from vouch_verifier.verdict import Verdict
 
 GOLDEN = Path(__file__).parent.parent.parent / "testdata" / "receipts_golden.jsonl"
-KEY = b"vouch-golden-key"
 ENTITIES = {"NVDA", "AMD"}
 
 
 @pytest.fixture(scope="module")
 def receipts() -> list[Receipt]:
-    return load_log(GOLDEN, key=KEY)
+    return load_log(GOLDEN, GOLDEN_KEYS)
 
 
 def run(answer: str, receipts: list[Receipt]) -> tuple[Extraction, list[MatchedClaim]]:
@@ -144,7 +144,6 @@ def _receipt(receipt_id: str, facts: tuple[Fact, ...], data_asof: str | None = N
         wall_time="2026-07-24T21:00:00Z",
         logical_time=0,
         upstream_latency_ms=0,
-        sig="",
     )
 
 

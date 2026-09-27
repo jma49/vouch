@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,10 +13,12 @@ import (
 	"github.com/jma49/vouch/proxy/internal/extract"
 	"github.com/jma49/vouch/proxy/internal/mcp"
 	"github.com/jma49/vouch/proxy/internal/receipt"
+	"github.com/jma49/vouch/proxy/internal/sign"
+	"github.com/jma49/vouch/proxy/internal/sign/signtest"
 	"github.com/jma49/vouch/proxy/internal/store"
 )
 
-var key = []byte("test-key")
+var signer = signtest.Signer(1)
 
 // fakeUpstream serves a minimal MCP server: one get_indicators tool
 // returning a fixed indicator payload as structuredContent.
@@ -98,7 +102,7 @@ func startSession(t *testing.T) *session {
 		t.Fatal(err)
 	}
 	logPath := filepath.Join(t.TempDir(), "receipts.jsonl")
-	rlog, err := store.Open(logPath)
+	rlog, err := store.Open(logPath, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +112,6 @@ func startSession(t *testing.T) *session {
 		Upstreams: []*Upstream{{Name: "fake", Client: mcp.NewClient(mcp.NewConn(upOut, proxyToUp))}},
 		Schemas:   schemas,
 		Log:       rlog,
-		Key:       key,
 		SessionID: "s-test",
 		Clock:     &clock.Wall{},
 		Logf:      t.Logf,
@@ -164,7 +167,7 @@ func TestFederationEndToEnd(t *testing.T) {
 	}
 	shutdown()
 
-	receipts, err := store.Scan(logPath)
+	receipts, err := store.ScanVerified(logPath, signtest.Keyring(signer))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,9 +175,6 @@ func TestFederationEndToEnd(t *testing.T) {
 		t.Fatalf("got %d receipts, want 2", len(receipts))
 	}
 	for i, r := range receipts {
-		if ok, err := r.Verify(key); err != nil || !ok {
-			t.Fatalf("receipt %d signature: ok=%v err=%v", i, ok, err)
-		}
 		if r.TurnIndex != i {
 			t.Fatalf("receipt %d: turn_index %d", i, r.TurnIndex)
 		}
@@ -281,10 +281,44 @@ func TestReceiptBindsTheResponse(t *testing.T) {
 	if r.PayloadSource != "structuredContent" || !strings.Contains(string(r.ResponseCanonical), "12.0") {
 		t.Fatalf("payload_source = %q; response = %s", r.PayloadSource, r.ResponseCanonical)
 	}
-	// Tampering with the response breaks the signature.
-	r.ResponseCanonical = json.RawMessage(strings.Replace(string(r.ResponseCanonical), "12.0", "62.3", 1))
-	if ok, err := r.Verify(key); err != nil || ok {
-		t.Fatalf("tampered response verified: ok=%v err=%v", ok, err)
+	// Editing the response in the log, without the signing key, breaks
+	// verification.
+	tamperPayload(t, logPath, func(body string) string {
+		return strings.Replace(body, "12.0", "62.3", 1)
+	})
+	if _, err := store.ScanVerified(logPath, signtest.Keyring(signer)); err == nil {
+		t.Fatal("a log with an edited response verified")
+	}
+}
+
+// tamperPayload rewrites the body inside every envelope of the log at
+// path with edit, re-encoding it without re-signing: what someone
+// holding the log but not the key can do.
+func tamperPayload(t *testing.T, path string, edit func(string) string) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var env sign.Envelope
+		if err := json.Unmarshal([]byte(line), &env); err != nil {
+			t.Fatal(err)
+		}
+		body, err := base64.StdEncoding.DecodeString(env.Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		env.Payload = base64.StdEncoding.EncodeToString([]byte(edit(string(body))))
+		b, err := json.Marshal(env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, string(b))
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(out, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -297,12 +331,12 @@ func recordingServer(t *testing.T) (*Server, string) {
 		t.Fatal(err)
 	}
 	logPath := filepath.Join(t.TempDir(), "receipts.jsonl")
-	rlog, err := store.Open(logPath)
+	rlog, err := store.Open(logPath, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { rlog.Close() })
-	return &Server{Schemas: schemas, Log: rlog, Key: key, SessionID: "s-rec", Clock: &clock.Wall{}, Logf: t.Logf}, logPath
+	return &Server{Schemas: schemas, Log: rlog, SessionID: "s-rec", Clock: &clock.Wall{}, Logf: t.Logf}, logPath
 }
 
 // TestRecordFactsByResultKind pins which results become evidence. A

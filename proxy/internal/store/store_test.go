@@ -11,9 +11,10 @@ import (
 	"time"
 
 	"github.com/jma49/vouch/proxy/internal/receipt"
+	"github.com/jma49/vouch/proxy/internal/sign/signtest"
 )
 
-var key = []byte("test-key")
+var signer = signtest.Signer(1)
 
 func testReceipt(t *testing.T, session string, turn int) *receipt.Receipt {
 	t.Helper()
@@ -32,15 +33,12 @@ func testReceipt(t *testing.T, session string, turn int) *receipt.Receipt {
 		ResultDigest:    receipt.Digest(canon),
 		WallTime:        time.Date(2026, 7, 25, 1, 12, 9, 0, time.UTC),
 	}
-	if err := r.Sign(key); err != nil {
-		t.Fatal(err)
-	}
 	return r
 }
 
 func TestAppendAndScan(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "receipts.jsonl")
-	l, err := Open(path)
+	l, err := Open(path, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,37 +52,34 @@ func TestAppendAndScan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Scan(path)
+	got, err := ScanVerified(path, signtest.Keyring(signer))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 {
 		t.Fatalf("scan: got %d receipts, want 2", len(got))
 	}
-	ok, err := got[0].Verify(key)
-	if err != nil || !ok {
-		t.Fatalf("scanned receipt failed signature verification: ok=%v err=%v", ok, err)
+	if _, err := ScanVerified(path, signtest.Keyring(signtest.Signer(2))); err == nil {
+		t.Fatal("a log verified under a key that did not sign it")
 	}
 	if got[1].TurnIndex != 1 {
 		t.Fatalf("append order lost: got turn %d, want 1", got[1].TurnIndex)
 	}
 }
 
-func TestRejectUnsigned(t *testing.T) {
-	l, err := Open(filepath.Join(t.TempDir(), "receipts.jsonl"))
+func TestAppendNeedsASigningKey(t *testing.T) {
+	l, err := Open(filepath.Join(t.TempDir(), "receipts.jsonl"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	r := testReceipt(t, "s1", 0)
-	r.Sig = ""
-	if err := l.Append(r); err == nil || !strings.Contains(err.Error(), "unsigned") {
-		t.Fatalf("append unsigned: got %v, want unsigned error", err)
+	if err := l.Append(testReceipt(t, "s1", 0)); err == nil || !strings.Contains(err.Error(), "signing key") {
+		t.Fatalf("append without a key: got %v, want a signing-key error", err)
 	}
 }
 
 func TestRejectDuplicateSessionTurn(t *testing.T) {
-	l, err := Open(filepath.Join(t.TempDir(), "receipts.jsonl"))
+	l, err := Open(filepath.Join(t.TempDir(), "receipts.jsonl"), signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +95,7 @@ func TestRejectDuplicateSessionTurn(t *testing.T) {
 
 func TestUniquenessSurvivesReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "receipts.jsonl")
-	l, err := Open(path)
+	l, err := Open(path, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +106,7 @@ func TestUniquenessSurvivesReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	l2, err := Open(path)
+	l2, err := Open(path, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +122,11 @@ func TestUniquenessSurvivesReopen(t *testing.T) {
 
 func receiptLine(t *testing.T, session string, turn int) []byte {
 	t.Helper()
-	raw, err := json.Marshal(testReceipt(t, session, turn))
+	body, err := testReceipt(t, session, turn).Body()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(signer.Sign(receipt.PayloadType, body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +169,7 @@ func TestOpenRecoversFromCrashedAppend(t *testing.T) {
 			stderr = &warn
 			defer func() { stderr = os.Stderr }()
 
-			l, err := Open(path)
+			l, err := Open(path, signer)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("Open: got %v, want error mentioning %q", err, tc.wantErr)
@@ -243,7 +242,7 @@ func TestFailedAppendLeavesNoPartialLine(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "receipts.jsonl")
-			l, err := Open(path)
+			l, err := Open(path, signer)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -272,7 +271,7 @@ func TestFailedAppendLeavesNoPartialLine(t *testing.T) {
 
 func TestScannedLinesAreCanonical(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "receipts.jsonl")
-	l, err := Open(path)
+	l, err := Open(path, signer)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -127,21 +127,26 @@ make eval-real                                  # verifier vs. labels, misreport
 make build        # Go proxy -> proxy/bin/vouch
 make install-py   # verifier + harness into verifier/.venv
 
-export VOUCH_HMAC_KEY="$(openssl rand -hex 32)"
+# 0. Create a signing key. Keep vouch.pem private; share vouch.pub.pem.
+./proxy/bin/vouch keygen --out ~/.vouch
 
 # 1. Put the proxy in front of your upstream MCP server(s),
 #    and point your agent at this process instead.
-./proxy/bin/vouch proxy \
+./proxy/bin/vouch proxy --signing-key ~/.vouch/vouch.pem \
     --upstream "uvx some-market-data-mcp" \
     --receipts ./receipts --schemas ./schemas
 
 # 2. Audit the agent's final answer against the receipts it produced.
 #    Exits 1 if any claim is CONTRADICTED, UNSUPPORTED, or STALE.
-vouch-verify --answer answer.txt \
+vouch-verify --answer answer.txt --public-key ~/.vouch/vouch.pub.pem \
     --receipts ./receipts/receipts.jsonl --tolerances tolerance.yaml
 
 # 3. Measure the verifier against machine-generated known-bad answers.
-vouch-eval --receipts ./receipts/receipts.jsonl --n 10
+vouch-eval --receipts ./receipts/receipts.jsonl --n 10 --public-key ~/.vouch/vouch.pub.pem
+
+# Anyone with the public key can check the log, and read it:
+./proxy/bin/vouch receipts verify --public-key ~/.vouch/vouch.pub.pem ./receipts/receipts.jsonl
+./proxy/bin/vouch receipts cat ./receipts/receipts.jsonl | jq .
 ```
 
 Record once, then replay deterministically with no network access:
@@ -159,7 +164,7 @@ vouch is an MVP. The most consequential gaps, each tracked with a reproduction i
 
 - **Extraction is deterministic, English-only, and keyword-driven.** It handles dates, magnitudes, units, signs (including Unicode minus and accounting parentheses), clause structure, markdown tables and lists, and pronouns that open a sentence, measured by a 166-case adversarial corpus and property-based tests. It does not do general coreference, it reads a threshold (*"below the 70 overbought line"*) as a claim, and a ticker that no tool returned is left unjudged rather than flagged. The LLM fallback (Tier 3) is not built yet.
 - **The headline metrics are synthetic.** See the note under [Measured results](#measured-results); the real evaluation is Phase 2.
-- **Signatures are symmetric.** HMAC gives tamper evidence to key holders, not public verifiability, and the log has no hash chain yet, so deleted lines go undetected.
+- **The log is not hash-chained yet.** Each receipt is signed with Ed25519, so anyone with the public key can verify it and no one without the private key can forge one. But deleting or reordering whole lines is not yet detectable (roadmap Phase 3, #54).
 - **Canonicalization is vouch's own, not RFC 8785**, on purpose: number literals are kept exactly as a tool wrote them, so `62.30` and `62.3` digest differently. The rules are specified in [`docs/canonical-json.md`](docs/canonical-json.md) and pinned across Go and Python.
 - **The proxy serves one request at a time** and does not yet forward server-to-client requests or cancellation.
 

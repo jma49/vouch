@@ -15,7 +15,8 @@ import sys
 from vouch_harness.eval import run_eval
 from vouch_harness.report import to_json, to_markdown
 from vouch_verifier.matcher import load_tolerances
-from vouch_verifier.receipts import load_log
+from vouch_verifier.receipts import ReceiptError, load_log
+from vouch_verifier.signing import load_keyring
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -25,15 +26,25 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--tolerances", help="tolerance policy YAML")
     p.add_argument("--format", choices=["md", "json"], default="md")
+    p.add_argument(
+        "--public-key",
+        action="append",
+        default=[],
+        help="trusted Ed25519 public key PEM (repeatable); default $VOUCH_PUBLIC_KEY",
+    )
     args = p.parse_args(argv)
 
-    key = os.environ.get("VOUCH_HMAC_KEY", "").encode() or None
-    if key is None:
-        print(
-            "vouch-eval: warning: VOUCH_HMAC_KEY not set, signatures not checked", file=sys.stderr
-        )
+    key_paths = args.public_key or [
+        k for k in os.environ.get("VOUCH_PUBLIC_KEY", "").split(os.pathsep) if k
+    ]
+    if not key_paths:
+        print("vouch-eval: warning: no public key given, signatures not checked", file=sys.stderr)
 
-    receipts = load_log(args.receipts, key=key)
+    try:
+        receipts = load_log(args.receipts, load_keyring(key_paths) if key_paths else None)
+    except (OSError, ReceiptError, ValueError) as e:
+        print(f"vouch-eval: error: {e}", file=sys.stderr)
+        return 2
     tolerances = load_tolerances(args.tolerances) if args.tolerances else None
     try:
         result = run_eval(receipts, n=args.n, seed=args.seed, tolerances=tolerances)

@@ -1,7 +1,6 @@
 package receipt
 
 import (
-	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -22,14 +21,15 @@ type Fact struct {
 	TolClass  string  `json:"tol_class"`
 }
 
-// Receipt records one tool call: the canonicalized request/response pair,
-// the facts extracted from the response, and an HMAC signature over the
-// whole record.
+// Receipt records one tool call: the canonicalized request, the payload
+// facts were extracted from, the whole response the agent received, and
+// the facts themselves. On disk each receipt is the payload of a signed
+// DSSE envelope (package sign); Body gives the exact bytes signed.
 //
 // Threat model note: in a single-process deployment the LLM cannot write to
 // our storage, so the signature is not protecting against the model. It
 // provides (a) tamper-evidence once receipts cross process or machine
-// boundaries, (b) third-party re-verifiability of eval results, and
+// boundaries, (b) third-party verification with only the public key, and
 // (c) replay protection via (SessionID, TurnIndex) uniqueness.
 type Receipt struct {
 	ReceiptID       string          `json:"receipt_id"`
@@ -53,8 +53,12 @@ type Receipt struct {
 	WallTime          time.Time       `json:"wall_time"`
 	LogicalTime       int64           `json:"logical_time"`
 	UpstreamLatencyMS int64           `json:"upstream_latency_ms"`
-	Sig               string          `json:"sig,omitempty"`
 }
+
+// PayloadType identifies a receipt body inside a DSSE envelope. The
+// version changes whenever the body's fields or the canonical JSON
+// rules change (docs/canonical-json.md, "Versioning").
+const PayloadType = "application/vnd.vouch.receipt+json; version=2"
 
 // Digest returns "sha256:<hex>" over canonical bytes.
 func Digest(canonical []byte) string {
@@ -62,40 +66,21 @@ func Digest(canonical []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// signingPayload returns the canonical bytes of the receipt with the Sig
-// field cleared, which is the exact byte sequence the HMAC covers.
-func (r *Receipt) signingPayload() ([]byte, error) {
-	unsigned := *r
-	unsigned.Sig = ""
-	raw, err := json.Marshal(&unsigned)
+// Body returns the canonical JSON bytes of the receipt: the payload of
+// its envelope, and therefore the exact bytes its signature covers.
+func (r *Receipt) Body() ([]byte, error) {
+	raw, err := json.Marshal(r)
 	if err != nil {
-		return nil, fmt.Errorf("receipt: marshal for signing: %w", err)
+		return nil, fmt.Errorf("receipt: marshal %s: %w", r.ReceiptID, err)
 	}
 	return Canonicalize(raw)
 }
 
-// Sign computes the HMAC-SHA256 signature over the canonical form of the
-// receipt (excluding Sig) and stores it on the receipt.
-func (r *Receipt) Sign(key []byte) error {
-	payload, err := r.signingPayload()
-	if err != nil {
-		return err
+// ParseBody decodes an envelope payload into a receipt.
+func ParseBody(body []byte) (*Receipt, error) {
+	var r Receipt
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("receipt: parse body: %w", err)
 	}
-	mac := hmac.New(sha256.New, key)
-	mac.Write(payload)
-	r.Sig = "hmac-sha256:" + hex.EncodeToString(mac.Sum(nil))
-	return nil
-}
-
-// Verify recomputes the signature and compares it in constant time.
-func (r *Receipt) Verify(key []byte) (bool, error) {
-	if r.Sig == "" {
-		return false, nil
-	}
-	got := r.Sig
-	cp := *r
-	if err := cp.Sign(key); err != nil {
-		return false, err
-	}
-	return hmac.Equal([]byte(got), []byte(cp.Sig)), nil
+	return &r, nil
 }

@@ -48,7 +48,6 @@ type Server struct {
 	Upstreams []*Upstream
 	Schemas   map[string]*extract.Schema
 	Log       *store.Log
-	Key       []byte
 	SessionID string
 	Clock     clock.Clock
 	Logf      func(format string, args ...any)
@@ -298,9 +297,8 @@ func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int
 		LogicalTime:       s.Clock.Tick(),
 		UpstreamLatencyMS: latencyMS,
 	}
-	if err := r.Sign(s.Key); err != nil {
-		return err
-	}
+	// The log signs: the envelope's signature covers the exact bytes it
+	// writes (package sign).
 	if err := s.Log.Append(r); err != nil {
 		return err
 	}

@@ -1,22 +1,23 @@
 """Receipt log reading and signature verification.
 
-The Go proxy signs HMAC-SHA256 over canonical(receipt minus sig), and
-appends canonical(signed receipt) to the JSONL log. Because canonical
-form is key-sorted and number literals survive the round trip, dropping
-the top-level "sig" key from a stored line and re-serializing yields
-exactly the bytes the HMAC covers — no struct-order coupling with Go.
+Each line of a log is a DSSE envelope written by the Go proxy: its
+payload is the canonical JSON body of one receipt, signed with Ed25519
+over the exact payload bytes (signing.py). Verification therefore
+checks bytes, not a re-serialization, and the body is parsed only after
+its signature has been checked.
 """
 
 from __future__ import annotations
 
 import hashlib
-import hmac
+import json
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TextIO
 
 from vouch_verifier.canonical import number_value, parse_preserving, serialize
+from vouch_verifier.signing import RECEIPT_PAYLOAD_TYPE, Keyring, decode, open_envelope
 
 
 @dataclass(frozen=True)
@@ -49,7 +50,6 @@ class Receipt:
     wall_time: str
     logical_time: int
     upstream_latency_ms: int
-    sig: str
     raw: object = field(repr=False, compare=False, default=None)
     # The whole tools/call result the agent received (#20). Absent in
     # logs written before the proxy recorded it; the signature, when
@@ -57,6 +57,7 @@ class Receipt:
     payload_source: str | None = None
     response_canonical: str | None = None
     response_digest: str | None = None
+    keyid: str | None = None  # the trusted key that signed it, when verified
 
 
 class ReceiptError(ValueError):
@@ -129,19 +130,8 @@ def _parse_receipt(line: str, lineno: int) -> Receipt:
         wall_time=text("wall_time"),
         logical_time=integer("logical_time"),
         upstream_latency_ms=integer("upstream_latency_ms"),
-        sig=text("sig"),
         raw=tree,
     )
-
-
-def verify_receipt(r: Receipt, key: bytes) -> bool:
-    """Recompute the HMAC over canonical(receipt minus sig)."""
-    if not isinstance(r.raw, dict) or not r.sig.startswith("hmac-sha256:"):
-        return False
-    unsigned = {k: v for k, v in r.raw.items() if k != "sig"}
-    payload = serialize(unsigned).encode("utf-8")
-    mac = hmac.new(key, payload, hashlib.sha256).hexdigest()
-    return hmac.compare_digest("hmac-sha256:" + mac, r.sig)
 
 
 def _numbered_lines(f: TextIO) -> Iterator[tuple[int, str]]:
@@ -153,13 +143,16 @@ def _numbered_lines(f: TextIO) -> Iterator[tuple[int, str]]:
         raise ReceiptError(f"line {lineno + 1}: not valid UTF-8: {e.reason}") from e
 
 
-def load_log(path: str | Path, key: bytes | None = None) -> list[Receipt]:
+def load_log(path: str | Path, keys: Keyring | None = None) -> list[Receipt]:
     """Read a receipt log, enforcing the invariants the proxy promises.
 
-    Always checked: result_digest matches result_canonical, and
-    (session_id, turn_index) is unique. When key is given, every
-    signature is verified too. Raises ReceiptError on any violation —
-    a partially trusted log is not a thing.
+    With keys, every line must carry a valid signature from one of them,
+    checked before the body is parsed. Without keys, only structure is
+    checked; callers must say so to their users. Always checked:
+    result_digest and response_digest match what they cover, and
+    receipt_id and (session_id, turn_index) are unique. Raises
+    ReceiptError on any violation: a partially trusted log is not a
+    thing.
     """
     receipts: list[Receipt] = []
     seen: dict[tuple[str, int], str] = {}
@@ -172,7 +165,12 @@ def load_log(path: str | Path, key: bytes | None = None) -> list[Receipt]:
             if not line:
                 continue
             try:
-                r = _parse_receipt(line, lineno)
+                envelope = json.loads(line)
+                if keys is not None:
+                    payload, keyid = open_envelope(envelope, RECEIPT_PAYLOAD_TYPE, keys)
+                else:
+                    payload, keyid = decode(envelope, RECEIPT_PAYLOAD_TYPE), None
+                r = replace(_parse_receipt(payload.decode("utf-8"), lineno), keyid=keyid)
             except ReceiptError:
                 raise
             except (ValueError, TypeError, AttributeError, OverflowError) as e:
@@ -196,7 +194,5 @@ def load_log(path: str | Path, key: bytes | None = None) -> list[Receipt]:
                     f"turn_index={r.turn_index}), first seen as receipt {dup}"
                 )
             seen[(r.session_id, r.turn_index)] = r.receipt_id
-            if key is not None and not verify_receipt(r, key):
-                raise ReceiptError(f"line {lineno}: signature verification failed")
             receipts.append(r)
     return receipts

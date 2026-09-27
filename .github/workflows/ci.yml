@@ -102,11 +102,15 @@ jobs:
       - name: Agent end to end through the proxy
         run: python -m pytest -q tests/test_agent.py -k end_to_end -rs
         working-directory: harness
+      # The same Go-signed log, verified independently by the Go reader;
+      # the Python side verifies it in the tests above.
+      - name: Verify golden log signatures (Go)
+        run: ./proxy/bin/vouch receipts verify --public-key testdata/keys/golden.pub.pem testdata/receipts_golden.jsonl
       - name: Run eval
         run: |
-          VOUCH_HMAC_KEY=vouch-golden-key vouch-eval \
-            --receipts testdata/receipts_golden.jsonl --n 10 --tolerances tolerance.yaml
+          vouch-eval --receipts testdata/receipts_golden.jsonl --n 10 \
+            --tolerances tolerance.yaml --public-key testdata/keys/golden.pub.pem
       # README metrics are generated; a hand edit or an unregenerated
       # behavior change shows up here as a stale README.
       - name: README is current
-        run: VOUCH_HMAC_KEY=vouch-golden-key python -m vouch_harness.readme README.md --check
+        run: python -m vouch_harness.readme README.md --check

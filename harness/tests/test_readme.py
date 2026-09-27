@@ -7,7 +7,6 @@ import pytest
 from vouch_harness.readme import main, regenerate, splice
 
 ROOT = Path(__file__).resolve().parents[2]
-KEY = b"vouch-golden-key"
 
 SKELETON = """# title
 
@@ -37,9 +36,9 @@ def test_splice_rejects_missing_block() -> None:
 
 
 def test_regenerate_is_deterministic_and_idempotent() -> None:
-    once = regenerate(SKELETON, ROOT, KEY)
-    assert regenerate(SKELETON, ROOT, KEY) == once
-    assert regenerate(once, ROOT, KEY) == once
+    once = regenerate(SKELETON, ROOT)
+    assert regenerate(SKELETON, ROOT) == once
+    assert regenerate(once, ROOT) == once
     assert "| Mutation detection rate |" in once
     assert "**CONTRADICTED**" in once
 
@@ -47,8 +46,12 @@ def test_regenerate_is_deterministic_and_idempotent() -> None:
 def test_check_flags_stale_readme(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setenv("VOUCH_HMAC_KEY", KEY.decode())
-    for rel in ("testdata/receipts_golden.jsonl", "tolerance.yaml", "examples/answer.txt"):
+    for rel in (
+        "testdata/receipts_golden.jsonl",
+        "testdata/keys/golden.pub.pem",
+        "tolerance.yaml",
+        "examples/answer.txt",
+    ):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).write_bytes((ROOT / rel).read_bytes())
     readme = tmp_path / "README.md"
@@ -61,5 +64,4 @@ def test_check_flags_stale_readme(
 
 
 def test_repo_readme_is_current(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("VOUCH_HMAC_KEY", KEY.decode())
     assert main([str(ROOT / "README.md"), "--check"]) == 0, "run `make readme`"

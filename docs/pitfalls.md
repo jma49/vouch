@@ -108,7 +108,7 @@ remembering. The 2026-09-27 audit filed #8-#48; all are closed.
   and with the key can forge receipts.
 - **Fix / workaround:** treat receipts as tamper-evident only against
   parties without the key. Roadmap Phase 3 (Ed25519).
-- **Status:** open.
+- **Status:** fixed: Ed25519 in DSSE envelopes replaced HMAC (#53).
 
 ### P-012 Deleted, truncated, or reordered receipts are not detected
 - **Symptom:** removing a line from `receipts.jsonl` still verifies.

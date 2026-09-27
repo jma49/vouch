@@ -62,7 +62,7 @@ Key property: **the proxy sits on the only path where ground truth exists.** No 
 
 | Component | Language | Role |
 |---|---|---|
-| `proxy/` | Go | Federating MCP server; receipt emission; HMAC signing; fixture record/replay |
+| `proxy/` | Go | Federating MCP server; receipt emission; Ed25519 signing (DSSE); fixture record/replay |
 | `verifier/` | Python | Claim extraction, fact matching, verdict assignment, markdown/JSON reports |
 | `harness/` | Python | Mutation injection, gold set, repeated-run eval, variance reports |
 | `schemas/` | YAML | Per-tool fact-extraction sidecar configs |
@@ -93,16 +93,27 @@ One receipt per tool call, appended to the log. Immutable after write.
   "data_asof": "2026-07-24T20:00:00Z",  // timestamp OF THE DATA, not of the call
   "wall_time": "2026-07-25T01:12:09Z",
   "logical_time": 41,                    // injected clock tick (replay mode)
-  "upstream_latency_ms": 87,
-  "sig": "hmac-sha256:..."              // over canonical(receipt minus sig)
+  "upstream_latency_ms": 87
 }
 ```
 
+On disk, each receipt body is the payload of a signed DSSE envelope, one per line:
+
+```jsonc
+{
+  "payload": "<base64 of the canonical receipt body>",
+  "payloadType": "application/vnd.vouch.receipt+json; version=2",
+  "signatures": [{ "keyid": "ed25519:8bdc9a88e7cf36a6", "sig": "<base64 Ed25519 signature>" }]
+}
+```
+
+The signature covers DSSE's pre-authentication encoding of the exact payload bytes, so verifying needs only base64 and an Ed25519 library, never vouch's canonicalizer. Canonical JSON (§7) only makes the body's digests reproducible. `vouch receipts verify` and `vouch-verify --public-key` check signatures against a keyring (several keys, for rotation), and `vouch receipts cat` decodes a log for reading.
+
 **Payload and response.** Facts are extracted from one JSON document, the payload: `structuredContent` when present, else the first text block that parses as a JSON object or array, else the whole result. But what the model reads can differ from the payload (a prose text block next to structured content, or several blocks), so the receipt also stores the whole result as received, and the signature covers both. Without that, a receipt could sign 62.3 while the model had read "12.0" (#20). The cost is size: for text-block payloads the data appears twice.
 
-**On the HMAC signature — what it is for and what it is not for.** In a single-process setup the LLM cannot write to our storage anyway; the signature is *not* protecting against the model. Its actual value: (a) tamper-evidence when receipts cross process/machine boundaries or rest on disk, (b) making eval results reproducible and auditable — a third party can re-verify that a verdict report was computed against unmodified receipts, (c) replay protection via `(session_id, turn_index)` uniqueness. We keep it, and we are honest about its threat model.
+**On the signature: what it is for and what it is not for.** In a single-process setup the LLM cannot write to our storage anyway; the signature is *not* protecting against the model. Its actual value: (a) tamper-evidence when receipts cross process or machine boundaries or rest on disk; (b) third-party verification: anyone holding the public key can re-verify that a verdict report was computed against unmodified receipts, and cannot forge one; (c) replay protection via `(session_id, turn_index)` uniqueness. Ed25519 replaced the original HMAC scheme because HMAC could not give (b): whoever can verify an HMAC can also forge it (#53).
 
-**Current gaps against that model.** (1) HMAC is symmetric: anyone who can verify a receipt holds the key and can therefore forge one, so (b) holds only among parties who already trust each other with the key. Genuine third-party verifiability needs a public-key signature (Ed25519). (2) Receipts are signed individually, with no hash chain or checkpoint binding them, so deleting, truncating, or reordering lines goes undetected. Both are tracked as roadmap Phase 3 and pitfalls P-011, P-012.
+**Current gap against that model.** Receipts are signed individually, with no hash chain or checkpoint binding them, so deleting, truncating, or reordering whole lines goes undetected (roadmap Phase 3, pitfall P-012, #54).
 
 ### 3.2 Fact
 
@@ -320,7 +331,7 @@ Status: all six items are implemented. The SQLite index is built in memory by th
 | Proxy language | Go, stdlib JSON-RPC | I/O-bound forwarding suits Go. Resolved: the federated surface (initialize, tools/list, tools/call) is small enough that a stdlib implementation costs less than an SDK dependency |
 | Verifier language | Python | Numeric tooling and eval ecosystem |
 | Receipt store | JSONL, SQLite index derived by the verifier | Append-only survives crashes mid-write; the index is disposable and rebuilt from the log; no server dependency |
-| Signing | HMAC-SHA256 | Symmetric is sufficient for the stated threat model (§3.1); asymmetric adds ops burden with no benefit here |
+| Signing | Ed25519 in DSSE envelopes | Third-party verification needs a public key (HMAC verifiers can forge); DSSE signs exact bytes, so verification does not depend on canonicalization; Python needs the `cryptography` package for it |
 | Canonical JSON | vouch canonical JSON v1, not RFC 8785 | Number literals kept exactly (fidelity over a standard format); shared cross-language vectors; see section 7 |
 | Upstream servers | Existing open-source market-data MCP servers | We deliberately do not rebuild market data; the README says so |
 
@@ -343,6 +354,6 @@ Status: all six items are implemented. The SQLite index is built in memory by th
 
 ## 14. Relation to prior art
 
-- **Receipt-based verification** (HMAC-signed tool receipts, cross-referencing agent claims): we adopt the core mechanism and are explicit about the threat model differences in a single-process deployment (§3.1).
+- **Receipt-based verification** (signed tool receipts, cross-referencing agent claims): we adopt the core mechanism and are explicit about the threat model differences in a single-process deployment (§3.1).
 - **Benchmark-reliability audits** (double-digit score swings across identical re-runs): motivates §8 — repetition, variance reporting, and the refusal to print single-run scores.
 - **Multi-agent trading frameworks / market-data MCP servers**: adjacent but orthogonal. They produce answers; we audit them. Crowded spaces we intentionally do not enter.
