@@ -76,22 +76,33 @@ replaces it.
 
 ---
 
-## Phase 2 — A real evaluation (the headline)
+## Phase 2 — A real evaluation (the headline) — tooling done, data pending
 
 Goal: replace self-referential metrics with precision/recall against
 human labels on real agent output. This is what turns the project from
 a demo into a measurement.
 
+Decisions (2026-09-27): support most mainstream models through one
+OpenAI-compatible client; run Gemini first; keep API spend small
+(cache everything, resume, dry-run first); label with a purpose-built
+tool rather than a spreadsheet. Upstream data is a deterministic
+synthetic market server instead of recorded fixtures: no network, no
+redistribution question, and real tickers so recalled real-world
+figures surface as `UNSUPPORTED`.
+
 | Item | Status |
 |---|---|
-| Task set: 30–50 fixed research prompts over recorded fixtures (replay mode, no network) | todo |
-| Agent runner: drive 3–4 models (e.g. Claude, GPT, one open-weights) through the proxy; record answers + receipts | todo |
-| Labeling spec and tool: per numeric span, human verdict from the six-verdict taxonomy | todo |
-| Labeled set: 200–300 claims; second-pass labeling on a subset for agreement | todo |
-| Report: verifier precision/recall per verdict against human labels, with CIs | todo |
-| Report: per-model numeric hallucination rate (`CONTRADICTED` + `UNSUPPORTED`), N >= 5 runs per model, variance from actual LLM nondeterminism | todo |
-| Gold set decoupled from the extractor: paraphrased answers not generated from `answers.py` templates | todo |
-| Remove or relabel metrics that are deterministic by construction (stability on a deterministic pipeline) | todo |
+| Task set: 30–50 fixed research prompts over a deterministic synthetic upstream (no network) | done (c207b2b, d2aae34) |
+| Agent runner: any OpenAI-compatible model through the proxy; record answers + receipts; cached, resumable | done (d2aae34) |
+| First model run: Gemini, 30 tasks x N samples | todo (needs maintainer's API key and budget) |
+| More providers: at least one each of OpenAI, Anthropic, open-weights | todo |
+| Labeling spec and tool: per numeric span, human verdict from the six-verdict taxonomy | done (6198f34) |
+| Labeled set: 200–300 claims; second-pass labeling on a subset for agreement | todo (needs a human) |
+| Report: verifier precision/recall per verdict against human labels, with CIs | tooling done (be11b55); numbers pending labels |
+| Report: per-model misreport rate (`CONTRADICTED` + `UNSUPPORTED` + `STALE`), variance across samples | tooling done (be11b55); numbers pending runs |
+| Gold set decoupled from the extractor | superseded: real answers with human labels replace it as the headline; the synthetic set stays as a regression check |
+| Remove or relabel metrics that are deterministic by construction (stability on a deterministic pipeline) | todo (with the README headline switch) |
+| Citation channel: opt-in proxy mode that shows the model a receipt id it can cite (P-044), so Tier 1 adherence can be measured | todo |
 
 Exit criteria: `make eval-real` reproduces the report from committed
 labels and fixtures; README headline numbers come from it.
