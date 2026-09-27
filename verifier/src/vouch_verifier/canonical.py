@@ -39,7 +39,12 @@ def parse_preserving(raw: str | bytes) -> object:
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8")
     try:
-        return json.loads(raw, parse_float=_NumberLiteral, parse_int=_NumberLiteral)
+        return json.loads(
+            raw,
+            parse_float=_NumberLiteral,
+            parse_int=_NumberLiteral,
+            object_pairs_hook=_no_duplicate_keys,
+        )
     except json.JSONDecodeError as e:
         raise ValueError(f"canonicalize: parse: {e}") from e
 
@@ -66,18 +71,28 @@ def canonicalize(raw: str | bytes) -> str:
     return serialize(parse_preserving(raw))
 
 
-# Where Go's encoding/json (which writes the receipts) and Python's
-# json.dumps differ on strings, follow Go byte for byte (issue #9):
-# - U+2028 and U+2029 are escaped by Go even with HTML escaping off;
-# - a lone surrogate is replaced by U+FFFD in Go, while Python keeps it
-#   and later fails to encode it as UTF-8.
+# Match the Go canonicalizer (which writes the receipts) byte for byte:
+# - U+2028 and U+2029 are escaped, as Go's encoding/json does (#9);
+# - a lone surrogate or a duplicate object key is rejected, as Go does
+#   since #27: canonicalizing either would change what the receiver saw.
 # Pinned by testdata/canonical_vectors.json on both sides.
 _SURROGATE_RE = re.compile("[\ud800-\udfff]")
 
 
 def _string(s: str) -> str:
-    out = json.dumps(_SURROGATE_RE.sub("\ufffd", s), ensure_ascii=False)
+    if _SURROGATE_RE.search(s):
+        raise ValueError("canonicalize: lone surrogate in string")
+    out = json.dumps(s, ensure_ascii=False)
     return out.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    out: dict[str, object] = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError(f"canonicalize: duplicate key {key!r}")
+        out[key] = value
+    return out
 
 
 def _write(parts: list[str], value: object) -> None:

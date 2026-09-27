@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -90,14 +91,23 @@ func (s *Store) SaveTools(upstream string, result json.RawMessage, at time.Time)
 	})
 }
 
-// LoadAllTools returns every recorded tools/list result, keyed by
-// upstream name.
-func (s *Store) LoadAllTools() (map[string]json.RawMessage, error) {
+// RecordedUpstream is one upstream's recorded tools/list result.
+type RecordedUpstream struct {
+	Name  string
+	Tools json.RawMessage
+}
+
+// LoadAllTools returns every recorded tools/list result, sorted by
+// upstream name. Replay builds its upstream list, and so the merged
+// tools/list the agent sees, in this order; sorting keeps it identical
+// across runs (docs/design.md section 8).
+func (s *Store) LoadAllTools() ([]RecordedUpstream, error) {
 	entries, err := os.ReadDir(s.Dir)
 	if err != nil {
 		return nil, fmt.Errorf("fixture: read dir: %w", err)
 	}
-	out := make(map[string]json.RawMessage)
+	var out []RecordedUpstream
+	seen := make(map[string]string) // upstream -> file
 	for _, e := range entries {
 		if !strings.HasPrefix(e.Name(), "tools_") || !strings.HasSuffix(e.Name(), ".json") {
 			continue
@@ -110,8 +120,13 @@ func (s *Store) LoadAllTools() (map[string]json.RawMessage, error) {
 		if err := json.Unmarshal(raw, &f); err != nil {
 			return nil, fmt.Errorf("fixture: parse %s: %w", e.Name(), err)
 		}
-		out[f.Upstream] = f.Result
+		if prev, dup := seen[f.Upstream]; dup {
+			return nil, fmt.Errorf("fixture: upstream %q recorded in both %s and %s", f.Upstream, prev, e.Name())
+		}
+		seen[f.Upstream] = e.Name()
+		out = append(out, RecordedUpstream{Name: f.Upstream, Tools: f.Result})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 

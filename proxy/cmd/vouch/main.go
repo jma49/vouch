@@ -1,7 +1,10 @@
 // Command vouch is the entry point for the vouch proxy.
 //
-//	vouch proxy --upstream "cmd args" [--upstream ...] \
+//	vouch proxy --upstream "[name=]cmd args" [--upstream ...] \
 //	    --receipts <dir> --schemas <dir> [--session <id>]
+//
+// An upstream's name defaults to its whole command; name= sets a short,
+// stable one. Names key record/replay fixtures and must be unique.
 //
 // The HMAC signing key is read from $VOUCH_HMAC_KEY. Verification of
 // answers against the receipt log is the Python side's job (vouch-verify).
@@ -14,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/jma49/vouch/proxy/internal/clock"
 	"github.com/jma49/vouch/proxy/internal/extract"
@@ -51,14 +55,14 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  vouch proxy --upstream "cmd args" [--upstream ...] --receipts <dir> --schemas <dir>
+  vouch proxy --upstream "[name=]cmd args" [--upstream ...] --receipts <dir> --schemas <dir>
   vouch version`)
 }
 
 func runProxy(args []string) error {
 	fs := flag.NewFlagSet("proxy", flag.ExitOnError)
 	var upstreams stringSlice
-	fs.Var(&upstreams, "upstream", "upstream MCP server command (repeatable)")
+	fs.Var(&upstreams, "upstream", "upstream MCP server as \"[name=]command\" (repeatable)")
 	receiptsDir := fs.String("receipts", "receipts", "directory for the receipt log")
 	schemasDir := fs.String("schemas", "schemas", "directory of fact-extraction sidecar configs")
 	session := fs.String("session", "", "session id (default: random)")
@@ -109,19 +113,23 @@ func runProxy(args []string) error {
 			return err
 		}
 		clk = &clock.Logical{Epoch: epoch}
-		for name, toolsResult := range tools {
+		for _, rec := range tools {
 			ups = append(ups, &proxy.Upstream{
-				Name:   name,
-				Client: &fixture.Replayer{Upstream: name, Store: fixStore, Tools: toolsResult},
+				Name:   rec.Name,
+				Client: &fixture.Replayer{Upstream: rec.Name, Store: fixStore, Tools: rec.Tools},
 			})
 		}
 	default: // live, record
-		for _, cmd := range upstreams {
-			u, err := proxy.Spawn(cmd)
+		specs, err := proxy.ParseUpstreams(upstreams)
+		if err != nil {
+			return err
+		}
+		defer func() { closeAll(ups) }()
+		for _, spec := range specs {
+			u, err := proxy.Spawn(spec)
 			if err != nil {
 				return err
 			}
-			defer u.Close()
 			if *mode == "record" {
 				u.Client = fixture.NewRecorder(u.Name, u.Client, fixStore, clk.Now)
 			}
@@ -141,6 +149,25 @@ func runProxy(args []string) error {
 	fmt.Fprintf(os.Stderr, "vouch proxy: mode %s, session %s, %d upstream(s), receipts in %s\n",
 		*mode, *session, len(ups), *receiptsDir)
 	return srv.Run()
+}
+
+// closeAll shuts upstreams down in parallel, so shutdown takes at most
+// one close timeout rather than one per upstream.
+func closeAll(ups []*proxy.Upstream) {
+	var wg sync.WaitGroup
+	for _, u := range ups {
+		if u.Close == nil {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := u.Close(); err != nil {
+				fmt.Fprintln(os.Stderr, "vouch:", err)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func randomHex(n int) string {

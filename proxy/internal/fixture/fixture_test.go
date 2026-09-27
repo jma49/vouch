@@ -137,7 +137,7 @@ func TestRecordThenReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools) != 1 || tools["fake"] == nil {
+	if len(tools) != 1 || tools[0].Name != "fake" {
 		t.Fatalf("recorded tools: %v", tools)
 	}
 	epoch, err := fs.Epoch()
@@ -147,7 +147,7 @@ func TestRecordThenReplay(t *testing.T) {
 	if !epoch.Equal(recordedAt) {
 		t.Fatalf("epoch %v, want %v", epoch, recordedAt)
 	}
-	repUp := &proxy.Upstream{Name: "fake", Client: &fixture.Replayer{Upstream: "fake", Store: fs, Tools: tools["fake"]}}
+	repUp := &proxy.Upstream{Name: "fake", Client: &fixture.Replayer{Upstream: "fake", Store: fs, Tools: tools[0].Tools}}
 
 	replayed := runSession(t, repUp, &clock.Logical{Epoch: epoch},
 		[]map[string]any{{"timeframe": "1d", "symbol": "NVDA"}})
@@ -161,6 +161,36 @@ func TestRecordThenReplay(t *testing.T) {
 	}
 	if !replayed[0].WallTime.Equal(epoch) {
 		t.Fatalf("replay wall_time %v, want frozen epoch %v", replayed[0].WallTime, epoch)
+	}
+}
+
+// TestLoadAllToolsKeepsEveryUpstreamInStableOrder pins replay's view
+// of the recorded upstreams: one entry per upstream, even when they
+// share an executable, in an order that does not depend on map
+// iteration, so the merged tools/list is the same on every run.
+func TestLoadAllToolsKeepsEveryUpstreamInStableOrder(t *testing.T) {
+	fs := &fixture.Store{Dir: t.TempDir()}
+	at := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	names := []string{"python3 fake.py tool_b", "python3 fake.py tool_a", "zeta", "alpha", "market"}
+	for _, name := range names {
+		if err := fs.SaveTools(name, json.RawMessage(`{"tools":[{"name":"`+name+`"}]}`), at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{"alpha", "market", "python3 fake.py tool_a", "python3 fake.py tool_b", "zeta"}
+	for run := 0; run < 20; run++ {
+		got, err := fs.LoadAllTools()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("got %d upstreams, want %d", len(got), len(want))
+		}
+		for i, u := range got {
+			if u.Name != want[i] || !strings.Contains(string(u.Tools), `"`+want[i]+`"`) {
+				t.Fatalf("run %d position %d: got %s %s, want %s", run, i, u.Name, u.Tools, want[i])
+			}
+		}
 	}
 }
 

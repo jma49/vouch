@@ -64,10 +64,24 @@ func (s *Server) logf(format string, args ...any) {
 	}
 }
 
-// Run serves the downstream connection until EOF.
+// Run serves the downstream connection until EOF. Only EOF or an I/O
+// error ends the session; a malformed frame is answered and skipped.
 func (s *Server) Run() error {
 	for {
 		m, err := s.Down.Read()
+		var fe *mcp.FrameError
+		if errors.As(err, &fe) {
+			// JSON-RPC 2.0 section 5.1: when the id cannot be read, the
+			// error response carries id null.
+			s.logf("proxy: %v", err)
+			if err := s.Down.Write(&mcp.Message{
+				ID:    json.RawMessage("null"),
+				Error: &mcp.Error{Code: fe.Code, Message: fe.Err.Error()},
+			}); err != nil {
+				return err
+			}
+			continue
+		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -81,10 +95,27 @@ func (s *Server) Run() error {
 }
 
 func (s *Server) dispatch(m *mcp.Message) error {
+	// JSON-RPC 2.0 section 4.1: a notification is never answered. A
+	// request method sent as a notification is dropped, not executed: a
+	// tools/call nobody can receive the result of would still produce a
+	// receipt attesting to data no agent saw. A message without a method
+	// is a response, and the proxy sends no requests downstream.
+	switch {
+	case m.Method == "":
+		s.logf("proxy: ignoring message without a method (id %s)", m.ID)
+		return nil
+	case m.IsNotification() && m.Method != "notifications/initialized":
+		s.logf("proxy: dropping notification %s", m.Method)
+		return nil
+	}
+
 	switch m.Method {
 	case "initialize":
 		return s.handleInitialize(m)
 	case "notifications/initialized":
+		if !m.IsNotification() {
+			return s.replyError(m, mcp.CodeInvalidRequest, "notifications/initialized must be a notification")
+		}
 		for _, u := range s.Upstreams {
 			if err := u.Client.Notify(m.Method, m.Params); err != nil {
 				s.logf("proxy: forward initialized to %s: %v", u.Name, err)
@@ -98,9 +129,6 @@ func (s *Server) dispatch(m *mcp.Message) error {
 	case "tools/call":
 		return s.handleToolsCall(m)
 	default:
-		if m.IsNotification() {
-			return nil // unknown notifications are dropped, per JSON-RPC
-		}
 		return s.replyError(m, mcp.CodeMethodNotFound, fmt.Sprintf("method %q not federated by vouch proxy", m.Method))
 	}
 }
@@ -186,6 +214,13 @@ func (s *Server) handleToolsCall(m *mcp.Message) error {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
 	}
+	// Params the proxy and the upstream could read differently are
+	// refused before the upstream runs: with a duplicate "name", Go would
+	// route and receipt the last value while the upstream may execute
+	// the first. Canonicalize is the strict reader (receipt package).
+	if _, err := receipt.Canonicalize(m.Params); len(m.Params) > 0 && err != nil {
+		return s.replyError(m, mcp.CodeInvalidParams, fmt.Sprintf("tools/call: params: %v", err))
+	}
 	if err := json.Unmarshal(m.Params, &params); err != nil || params.Name == "" {
 		return s.replyError(m, mcp.CodeInvalidParams, "tools/call: missing tool name")
 	}
@@ -228,9 +263,12 @@ func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int
 		return fmt.Errorf("canonicalize result: %w", err)
 	}
 
+	// A tool error is receipted, because the agent saw it, but it is not
+	// evidence: numbers in an error payload describe the failure, not
+	// data the tool returned, so it carries no facts.
 	var facts []receipt.Fact
 	var dataAsOf string
-	if schema, ok := s.Schemas[tool]; ok {
+	if schema, ok := s.Schemas[tool]; ok && !isToolError(result) {
 		facts, err = schema.Extract(resultCanon)
 		if err != nil {
 			return err
@@ -262,6 +300,15 @@ func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int
 	return nil
 }
 
+// isToolError reports whether an MCP tools/call result is flagged as a
+// tool-level error (isError: true).
+func isToolError(result json.RawMessage) bool {
+	var res struct {
+		IsError bool `json:"isError"`
+	}
+	return json.Unmarshal(result, &res) == nil && res.IsError
+}
+
 // resultPayload picks the JSON document facts are extracted from:
 // structuredContent when the upstream provides it, else the first text
 // content block when it parses as JSON, else the whole MCP result.
@@ -287,6 +334,9 @@ func resultPayload(result json.RawMessage) json.RawMessage {
 }
 
 func (s *Server) reply(m *mcp.Message, result json.RawMessage) error {
+	if m.IsNotification() {
+		return nil // dispatch filters these; never answer one regardless
+	}
 	return s.Down.Write(&mcp.Message{ID: m.ID, Result: result})
 }
 

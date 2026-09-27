@@ -62,9 +62,27 @@ func fakeUpstream(t *testing.T, conn *mcp.Conn) {
 	}
 }
 
+// session is one running proxy wired between an in-process fake
+// upstream and an agent-side connection. agent and raw share one Conn,
+// so a test may mix typed calls with raw frames as long as it does not
+// read from both concurrently.
+type session struct {
+	agent    *mcp.Client
+	raw      *mcp.Conn
+	send     io.Writer // raw bytes into the proxy's downstream reader
+	logPath  string
+	shutdown func()
+}
+
 // startProxy wires a Server between an in-process fake upstream and a
 // returned agent-side client.
 func startProxy(t *testing.T) (*mcp.Client, func(), string) {
+	t.Helper()
+	s := startSession(t)
+	return s.agent, s.shutdown, s.logPath
+}
+
+func startSession(t *testing.T) *session {
 	t.Helper()
 
 	upIn, proxyToUp := io.Pipe()   // proxy writes -> upstream reads
@@ -97,7 +115,7 @@ func startProxy(t *testing.T) (*mcp.Client, func(), string) {
 	done := make(chan error, 1)
 	go func() { done <- srv.Run() }()
 
-	agent := mcp.NewClient(mcp.NewConn(downOut, agentOut))
+	raw := mcp.NewConn(downOut, agentOut)
 	shutdown := func() {
 		agentOut.Close()
 		if err := <-done; err != nil {
@@ -105,7 +123,7 @@ func startProxy(t *testing.T) (*mcp.Client, func(), string) {
 		}
 		rlog.Close()
 	}
-	return agent, shutdown, logPath
+	return &session{agent: mcp.NewClient(raw), raw: raw, send: agentOut, logPath: logPath, shutdown: shutdown}
 }
 
 func TestFederationEndToEnd(t *testing.T) {
@@ -220,5 +238,58 @@ func TestResultPayloadFallbacks(t *testing.T) {
 	full := `{"content":[{"type":"text","text":"plain words"}]}`
 	if p := resultPayload(json.RawMessage(full)); string(p) != full {
 		t.Fatalf("fallback payload: %s", p)
+	}
+}
+
+// recordingServer is a Server with a real log and the repo schemas but
+// no transport, for exercising record directly.
+func recordingServer(t *testing.T) (*Server, string) {
+	t.Helper()
+	schemas, err := extract.LoadDir("../../../schemas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(t.TempDir(), "receipts.jsonl")
+	rlog, err := store.Open(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rlog.Close() })
+	return &Server{Schemas: schemas, Log: rlog, Key: key, SessionID: "s-rec", Clock: &clock.Wall{}, Logf: t.Logf}, logPath
+}
+
+// TestRecordFactsByResultKind pins which results become evidence. A
+// tool error is receipted (the agent saw it) but yields no facts: its
+// numbers describe a failure, not data the tool returned.
+func TestRecordFactsByResultKind(t *testing.T) {
+	cases := []struct {
+		name   string
+		result string
+		facts  int
+	}{
+		{"structured result", `{"structuredContent":{"symbol":"NVDA","rsi_14":62.3}}`, 1},
+		{"tool error with JSON text", `{"isError":true,"content":[{"type":"text","text":"{\"symbol\":\"NVDA\",\"rsi_14\":0}"}]}`, 0},
+		{"tool error with structured content", `{"isError":true,"structuredContent":{"symbol":"NVDA","rsi_14":0}}`, 0},
+		{"explicit isError false", `{"isError":false,"structuredContent":{"symbol":"NVDA","rsi_14":62.3}}`, 1},
+		{"null value", `{"structuredContent":{"symbol":"NVDA","rsi_14":null,"close":181.52}}`, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, logPath := recordingServer(t)
+			args := json.RawMessage(`{"symbol":"NVDA"}`)
+			if err := s.record("get_indicators", args, json.RawMessage(tc.result), 0); err != nil {
+				t.Fatalf("record: %v", err)
+			}
+			receipts, err := store.Scan(logPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(receipts) != 1 {
+				t.Fatalf("got %d receipts, want 1", len(receipts))
+			}
+			if got := len(receipts[0].Facts); got != tc.facts {
+				t.Fatalf("got %d facts, want %d: %+v", got, tc.facts, receipts[0].Facts)
+			}
+		})
 	}
 }
