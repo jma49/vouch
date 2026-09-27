@@ -25,6 +25,10 @@ class Report:
     as_of: str | None = None
     lookahead: tuple[LookAhead, ...] = ()
     answer: str = ""  # the text claim spans index into, for the HTML report
+    # False when the log was read without a public key: every report
+    # format says so, since a published report otherwise looks verified
+    # (#96).
+    signatures_verified: bool = True
 
     @property
     def counts(self) -> dict[str, int]:
@@ -54,6 +58,7 @@ def build_report(
     as_of: str | None = None,
     lookahead: list[LookAhead] | None = None,
     answer: str = "",
+    signatures_verified: bool = True,
 ) -> Report:
     del extraction  # all spans, resolved or not, are present in matched
     return Report(
@@ -62,6 +67,7 @@ def build_report(
         as_of=as_of,
         lookahead=tuple(lookahead or ()),
         answer=answer,
+        signatures_verified=signatures_verified,
     )
 
 
@@ -88,6 +94,7 @@ def to_json(report: Report) -> str:
             "coverage": report.coverage,
             "tier1_share": report.tier_share(1),
             "tier2_share": report.tier_share(2),
+            "signatures_verified": report.signatures_verified,
         },
         "tolerance_policy": {name: t.as_dict() for name, t in sorted(report.tolerances.items())},
     }
@@ -114,6 +121,11 @@ def md_cell(value: object) -> str:
         text.replace("\\", "\\\\")
         .replace("|", "\\|")
         .replace("`", "\\`")
+        # Link and image syntax: an upstream-supplied name must not
+        # render as a link or fetch an image in a viewer (#96).
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+        .replace("!", "\\!")
         .replace("\r", " ")
         .replace("\n", " ")
     )
@@ -130,6 +142,8 @@ def to_markdown(report: Report) -> str:
             lines.append(f"- {verdict.value}: {counts[verdict.value]}")
     lines.append(f"- Coverage (non-UNVERIFIABLE): {report.coverage:.0%}")
     lines.append(f"- Tier 1 (cited) share: {report.tier_share(1):.0%}")
+    if not report.signatures_verified:
+        lines.append("- **Signatures: not checked** (no public key was given)")
     lines.append("")
     if report.as_of is not None:
         lines.append("## Look-ahead")
@@ -305,6 +319,9 @@ def _highlighted(answer: str, matched: tuple[MatchedClaim, ...]) -> str:
     return "".join(out)
 
 
+_UNSIGNED_HTML = " <strong>Signatures not checked</strong>: no public key was given."
+
+
 def to_html(report: Report) -> str:
     """A self-contained page: the answer with every numeric span marked
     by verdict, then the details. The answer and everything from the
@@ -358,7 +375,8 @@ def to_html(report: Report) -> str:
         f"<title>vouch verdict report</title><style>{_CSS}</style></head><body><main>"
         "<h1>vouch verdict report</h1>"
         f'<p class="sub">{len(report.matched)} numeric claims; coverage {report.coverage:.0%}; '
-        f"Tier 1 (cited) {report.tier_share(1):.0%}.</p>"
+        f"Tier 1 (cited) {report.tier_share(1):.0%}."
+        f"{'' if report.signatures_verified else _UNSIGNED_HTML}</p>"
         f'<ul class="chips">{chips}</ul>'
         f'<h2>Answer</h2><div class="answer">{_highlighted(report.answer, report.matched)}</div>'
         f'<p class="legend">{_esc(legend)}. Hover or focus a number for details; select it for '

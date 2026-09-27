@@ -39,15 +39,19 @@ def parse_moment(text: str) -> datetime:
 
 
 def after(fact: Fact, as_of: datetime) -> bool:
-    """Whether a fact's data is from after the simulated moment. A fact
-    with no date or an unreadable one is not judged a violation here;
-    it is also never in any claim's time window."""
+    """Whether a fact's data may be from after the simulated moment. A
+    date the verifier cannot read counts as after: it cannot show the
+    data predates the moment, and passing it would be a guess (#96)."""
     if not fact.as_of:
         return False
+    return _later(fact.as_of, as_of)
+
+
+def _later(stamp: str, as_of: datetime) -> bool:
     try:
-        return parse_moment(fact.as_of) > as_of
+        return parse_moment(stamp) > as_of
     except ValueError:
-        return False
+        return True
 
 
 @dataclass(frozen=True)
@@ -60,16 +64,22 @@ class LookAhead:
 
 
 def find_lookahead(receipts: list[Receipt], as_of: datetime) -> list[LookAhead]:
+    """Every receipt whose data may be from after the moment. A fact is
+    dated as the matcher dates it: its own as_of, else the receipt's
+    data_asof, else when the call was made (#96), so the list and the
+    verdicts never disagree. An unreadable date counts as later."""
     out = []
     for r in receipts:
-        stamps = [s for s in (r.data_asof, *(f.as_of for f in r.facts)) if s]
-        future = []
-        for s in stamps:
-            try:
-                if parse_moment(s) > as_of:
-                    future.append(s)
-            except ValueError:
-                continue
+        dates = [f.as_of or r.data_asof or r.wall_time for f in r.facts]
+        stamps = [s for s in (r.data_asof, *dates) if s]
+        future = [s for s in stamps if _later(s, as_of)]
         if future:
-            out.append(LookAhead(r.receipt_id, r.tool_name, max(future, key=parse_moment)))
+            out.append(LookAhead(r.receipt_id, r.tool_name, max(future, key=_sort_key)))
     return out
+
+
+def _sort_key(stamp: str) -> str:
+    try:
+        return parse_moment(stamp).isoformat()
+    except ValueError:
+        return "~" + stamp  # unreadable dates sort last, as the most suspect
