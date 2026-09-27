@@ -10,6 +10,14 @@ examples/analytics/, and nothing in the proxy or the verifier knows
 this domain exists.
 
     python -m vouch_harness.analytics      # MCP over stdio
+
+What is receipted is not the query's output. The agent writes the SQL,
+so the agent could select a literal named `revenue` and have its own
+number receipted as a fact (#103). Instead, every result carries a
+`facts` array the server builds itself: for each (region, quarter) the
+rows mention, the true figures from the sales table. The schema maps
+only that array, so a fabricated number in `rows` is judged against the
+real one.
 """
 
 from __future__ import annotations
@@ -17,6 +25,7 @@ from __future__ import annotations
 import random
 import sqlite3
 import sys
+import time
 from datetime import date
 from functools import cache
 from typing import Any, TextIO
@@ -28,6 +37,10 @@ SERVER_NAME = "vouch-synthetic-analytics"
 # The last closed quarter; results are "as of" its end.
 AS_OF_DAY = date(2026, 6, 30)
 MAX_ROWS = 200
+# A query gets this long and this much memory per value (#103): a
+# recursive CTE or zeroblob() must not hang or exhaust the server.
+QUERY_SECONDS = 2.0
+MAX_VALUE_BYTES = 1_000_000
 
 REGIONS = ("AMER", "EMEA", "APAC", "LATAM")
 QUARTERS = (
@@ -44,8 +57,9 @@ SCHEMA_DOC = (
     "One table, sales(region TEXT, quarter TEXT, period_end TEXT, revenue REAL, "
     "orders INTEGER, returns INTEGER): one row per region and quarter. Regions: "
     f"{', '.join(REGIONS)}. Quarters: {', '.join(q for q, _ in QUARTERS)}. Revenue is in USD. "
-    "Name result columns region, period_end, revenue, orders, avg_order_value, "
-    "return_rate_pct where they mean those things."
+    "Include region and quarter (or period_end) in the result: the server then returns the "
+    "true revenue, orders, avg_order_value, and return_rate_pct for each region and quarter "
+    "your rows mention, under facts."
 )
 
 
@@ -67,6 +81,7 @@ def _database() -> sqlite3.Connection:
     """A fresh in-memory copy, read-only once loaded: a query cannot
     change what the next one sees."""
     db = sqlite3.connect(":memory:")
+    db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_VALUE_BYTES)
     db.execute(
         "CREATE TABLE sales (region TEXT, quarter TEXT, period_end TEXT, "
         "revenue REAL, orders INTEGER, returns INTEGER)"
@@ -78,9 +93,47 @@ def _database() -> sqlite3.Connection:
 
 
 def _cell(value: object) -> object:
-    # Round floats as a BI tool displays them: the receipt then records
-    # exactly what the agent was shown.
-    return round(value, 2) if isinstance(value, float) else value
+    # Round floats as a BI tool displays them, and show bytes as hex
+    # rather than failing to encode them as JSON.
+    if isinstance(value, float):
+        return round(value, 2)
+    if isinstance(value, bytes):
+        return "x'" + value.hex() + "'"
+    return value
+
+
+_PERIOD_ENDS = dict(QUARTERS)
+_QUARTERS_BY_END = {end: q for q, end in QUARTERS}
+
+
+def _facts(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """The true figures for every (region, quarter) the rows mention, by
+    region and period_end or quarter columns, from the server's own
+    table, in a fixed order."""
+    keys: set[tuple[str, str]] = set()
+    for row in rows:
+        region = row.get("region")
+        period = row.get("period_end")
+        if not isinstance(period, str) and isinstance(row.get("quarter"), str):
+            period = _PERIOD_ENDS.get(str(row["quarter"]))
+        if isinstance(region, str) and isinstance(period, str) and period in _QUARTERS_BY_END:
+            keys.add((region, period))
+    truth = {(r, end): (rev, orders, ret) for r, _, end, rev, orders, ret in _rows()}
+    out = []
+    for region, period in sorted(keys):
+        if (region, period) not in truth:
+            continue
+        revenue, orders, returns = truth[(region, period)]
+        out.append({
+            "region": region,
+            "quarter": _QUARTERS_BY_END[period],
+            "period_end": period,
+            "revenue": revenue,
+            "orders": orders,
+            "avg_order_value": round(revenue / orders, 2),
+            "return_rate_pct": round(returns * 100 / orders, 2),
+        })  # fmt: skip
+    return out
 
 
 def run_sql(sql: str) -> dict[str, Any]:
@@ -89,19 +142,26 @@ def run_sql(sql: str) -> dict[str, Any]:
     if not text.lower().startswith(("select", "with")):
         raise ValueError("only a single SELECT (or WITH ... SELECT) statement is allowed")
     db = _database()
+    deadline = time.monotonic() + QUERY_SECONDS
+    # A nonzero return aborts the statement ("interrupted").
+    db.set_progress_handler(lambda: int(time.monotonic() > deadline), 10_000)
     try:
         cursor = db.execute(text)  # sqlite3 refuses more than one statement
         columns = [d[0] for d in cursor.description or ()]
-        rows = cursor.fetchmany(MAX_ROWS + 1)
+        fetched = cursor.fetchmany(MAX_ROWS + 1)
     except sqlite3.Error as e:
+        if time.monotonic() > deadline:
+            raise ValueError(f"query exceeded {QUERY_SECONDS:g} s") from e
         raise ValueError(f"SQL error: {e}") from e
     finally:
         db.close()
+    rows = [dict(zip(columns, map(_cell, r), strict=True)) for r in fetched[:MAX_ROWS]]
     return {
         "as_of": AS_OF_DAY.isoformat(),
         "columns": columns,
-        "rows": [dict(zip(columns, map(_cell, r), strict=True)) for r in rows[:MAX_ROWS]],
-        "truncated": len(rows) > MAX_ROWS,
+        "rows": rows,
+        "truncated": len(fetched) > MAX_ROWS,
+        "facts": _facts(rows),
     }
 
 

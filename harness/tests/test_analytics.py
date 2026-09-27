@@ -7,6 +7,8 @@ they are enough, and that the finance defaults are not.
 
 from __future__ import annotations
 
+import io
+import json
 import shlex
 import sys
 from pathlib import Path
@@ -50,6 +52,47 @@ def test_run_sql_is_read_only_and_bounded() -> None:
     assert len(big["rows"]) == analytics.MAX_ROWS and big["truncated"]
 
 
+def test_a_query_cannot_choose_its_own_facts() -> None:
+    """#103: the agent writes the SQL, so a literal named revenue must not
+    become a receipted fact. Facts are the server's own figures for the
+    (region, quarter) the rows mention."""
+    fake = analytics.run_sql(
+        "SELECT 'AMER' AS region, '2026-06-30' AS period_end, 9999999.0 AS revenue"
+    )
+    assert fake["rows"] == [{"region": "AMER", "period_end": "2026-06-30", "revenue": 9999999.0}]
+    [fact] = fake["facts"]
+    assert fact["revenue"] == rows("2026-Q2")["AMER"]["revenue"] != 9999999.0
+    by_quarter = analytics.run_sql("SELECT region, quarter FROM sales WHERE quarter = '2026-Q1'")
+    assert {f["region"] for f in by_quarter["facts"]} == set(analytics.REGIONS)
+    assert analytics.run_sql("SELECT SUM(revenue) AS revenue FROM sales")["facts"] == []
+    unknown = analytics.run_sql("SELECT 'MARS' AS region, '2026-06-30' AS period_end")
+    assert unknown["facts"] == []
+
+
+def test_queries_are_bounded_and_odd_values_do_not_crash() -> None:
+    runaway = analytics.call_tool(
+        "run_sql",
+        {
+            "sql": "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) "
+            "SELECT count(*) FROM c"
+        },
+    )
+    assert runaway["isError"] and "exceeded" in runaway["content"][0]["text"]
+    assert analytics.call_tool("run_sql", {"sql": "SELECT zeroblob(900000000) AS b"})["isError"]
+    blob = analytics.call_tool("run_sql", {"sql": "SELECT x'00ff' AS b"})
+    assert blob["structuredContent"]["rows"] == [{"b": "x'00ff'"}]
+
+
+def test_the_stdio_loop_survives_bad_messages() -> None:
+    lines = ["not json", "[1]", '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":[1]}',
+             '{"jsonrpc":"2.0","id":2,"method":"ping"}']  # fmt: skip
+    out = io.StringIO()
+    analytics.serve(io.StringIO("\n".join(lines) + "\n"), out)
+    replies = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert [r.get("error", {}).get("code") for r in replies] == [-32700, -32600, -32600, None]
+    assert replies[-1] == {"jsonrpc": "2.0", "id": 2, "result": {}}
+
+
 @pytest.mark.skipif(not PROXY.exists(), reason="proxy binary not built (make build)")
 def test_second_domain_through_the_proxy(tmp_path: Path) -> None:
     upstream = f"{shlex.quote(sys.executable)} -m vouch_harness.analytics"
@@ -60,6 +103,8 @@ def test_second_domain_through_the_proxy(tmp_path: Path) -> None:
         for quarter in ("2026-Q1", "2026-Q2"):
             result = mcp.call_tool("run_sql", {"sql": Q2.format(q=quarter)})
             assert not result.get("isError"), result
+        fabricated = "SELECT 'EMEA' AS region, '2026-06-30' AS period_end, 1.0 AS orders"
+        assert not mcp.call_tool("run_sql", {"sql": fabricated}).get("isError")
     receipts = audit_log(tmp_path / "receipts.jsonl", EVAL_KEYS, require_sealed=True).receipts
     facts = [f for r in receipts for f in r.facts]
     assert {f.entity for f in facts} == set(analytics.REGIONS)
@@ -72,7 +117,8 @@ def test_second_domain_through_the_proxy(tmp_path: Path) -> None:
         f"on {amer['orders']:,} orders. "
         f"EMEA's average order value was ${emea['avg_order_value']}. "
         f"APAC's return rate was {float(apac['return_rate_pct']) + 1.5:.2f}%. "  # type: ignore[arg-type]
-        f"LATAM revenue was ${q1['LATAM']['revenue']:,.2f}."
+        f"LATAM revenue was ${q1['LATAM']['revenue']:,.2f}. "
+        "EMEA orders came to 1."  # the fabricated query's number
     )
     vocabulary = load_vocabulary(PACK / "vocabulary.yaml")
     entities = set(analytics.REGIONS)
@@ -88,6 +134,7 @@ def test_second_domain_through_the_proxy(tmp_path: Path) -> None:
         Verdict.SUPPORTED,  # EMEA average order value
         Verdict.CONTRADICTED,  # APAC return rate, 1.5 points off
         Verdict.STALE,  # LATAM revenue: the Q1 figure, stated as current
+        Verdict.CONTRADICTED,  # the fabricated row: facts carry the real orders
     ]
     # With the finance vocabulary the same answer confirms nothing: its
     # metric words mean nothing there (a bare percentage even falls back

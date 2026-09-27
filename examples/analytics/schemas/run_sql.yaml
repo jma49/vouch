@@ -1,11 +1,12 @@
-# Fact extraction for run_sql (vouch_harness.analytics): one fact per
-# known column per row, attributed to the row's region and dated by its
-# period_end. Columns the query did not return are simply absent, so any
-# query works; a metric column under another alias is not receipted.
+# Fact extraction for run_sql (vouch_harness.analytics). Only the
+# server's own `facts` array is receipted: one entry per (region,
+# quarter) the query's rows mention, with the true figures from the
+# server's table. The query's output columns are the agent's choice and
+# could be literals, so they are never facts (#103).
 tool: run_sql
 asof_ptr: /as_of
 facts:
-  - ptr: /rows
+  - ptr: /facts
     entity_ptr: /region
     each:
       - ptr: /revenue
