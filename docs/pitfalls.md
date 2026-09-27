@@ -17,9 +17,9 @@ inferred from source and not yet reproduced.
 - **Cause:** venvs hardcode absolute interpreter paths. The Makefile
   `$(VENV)` target only checks that the directory exists, so it never
   rebuilds a broken venv.
-- **Fix / workaround:** `rm -rf verifier/.venv && make install-py`.
-  Real fix tracked in roadmap Phase 0.
-- **Status:** open. Reproduced 2026-09-27.
+- **Fix / workaround:** `make install-py` now detects a venv that does
+  not import both packages from this checkout and rebuilds it.
+- **Status:** fixed in ddc76c4. Reproduced 2026-09-27.
 
 ### P-002 Editing canonicalization or receipt fields breaks the golden job
 - **Symptom:** CI job "cross-language golden log" fails with a diff in
@@ -30,6 +30,30 @@ inferred from source and not yet reproduced.
   `make golden`, commit the regenerated log in the same commit, and run
   both Python suites. If unintentional, you broke cross-language
   equality — fix the code, not the file.
+- **Status:** by design.
+
+### P-003 `make lint` could never fail on formatting
+- **Symptom:** unformatted Go files were listed by `make lint`, yet the
+  target exited 0.
+- **Cause:** `gofmt -l` prints offending files but exits 0.
+- **Fix / workaround:** the target now fails on any `gofmt -l` output.
+- **Status:** fixed in 95dbde8. Code reading.
+
+### P-004 Editor reports unresolved imports for `vouch_verifier`
+- **Symptom:** Pyright/Pylance flags `import vouch_verifier` and
+  `import pytest` as missing, though tests and mypy pass.
+- **Cause:** the editor's interpreter is not `verifier/.venv`, where
+  both packages are installed in editable mode.
+- **Fix / workaround:** select `verifier/.venv/bin/python` as the
+  workspace interpreter.
+- **Status:** by design (environment).
+
+### P-005 README generated sections go stale
+- **Symptom:** CI step "README is current" fails.
+- **Cause:** a change altered verifier or eval output, or someone
+  edited text between `BEGIN/END GENERATED` markers.
+- **Fix / workaround:** `make readme` and commit the result with the
+  change that caused it.
 - **Status:** by design.
 
 ---
@@ -139,6 +163,15 @@ Reproduced 2026-09-27 against `testdata/receipts_golden.jsonl`.
   tolerance. False negatives grow with receipt count.
 - **Status:** open. Code reading (`verifier/src/vouch_verifier/matcher.py`).
 
+### P-034 A percentage can be attributed to a price metric
+- **Symptom:** `AMD is down 1.35% on the day and is trading at 172.40.`
+  yields `1.35% → CONTRADICTED` against `last_price` 172.04.
+- **Cause:** `_nearest_keyword` picks the closest metric keyword
+  ("trading at") regardless of the number's unit; the percentage
+  fallback to `change_pct` only applies when no keyword is found.
+- **Status:** open. Reproduced 2026-09-27. Roadmap Phase 1. The README
+  example is phrased to avoid it.
+
 ---
 
 ## Evaluation
@@ -165,3 +198,12 @@ Reproduced 2026-09-27 against `testdata/receipts_golden.jsonl`.
 - **Cause:** synthesized answers contain no timeframe words, so the
   mutation has nothing to swap.
 - **Status:** open. Reproduced.
+
+### P-043 Every `match_claims` call leaked a SQLite connection
+- **Symptom:** ResourceWarnings ("unclosed database") under coverage;
+  one per gold case per eval run.
+- **Cause:** `with conn:` on a sqlite3 connection scopes a transaction,
+  it does not close the connection.
+- **Fix / workaround:** index scoped with `contextlib.closing`; pytest
+  now treats warnings as errors so a regression fails the suite.
+- **Status:** fixed in 0ead6f5. Reproduced.

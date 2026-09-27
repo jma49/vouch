@@ -151,8 +151,8 @@ Measurement before features. Full plan with exit criteria in [`docs/roadmap.md`]
 
 | Phase | Focus | Status |
 |---|---|---|
-| 0 | Hygiene: lint, strict typing, race detector, generated metrics | in progress |
-| 1 | Verifier correctness on real prose | planned |
+| 0 | Hygiene: lint, strict typing, race detector, generated metrics | done |
+| 1 | Verifier correctness on real prose | next |
 | 2 | Real evaluation: human-labeled claims from multiple models | planned |
 | 3 | Integrity: Ed25519, hash-chained log, tamper suite | planned |
 | 4 | RFC 8785 canonicalization with cross-language differential fuzzing | planned |
