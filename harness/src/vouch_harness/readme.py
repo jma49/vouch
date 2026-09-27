@@ -11,10 +11,12 @@ README is stale, which is how CI keeps hand edits out.
 from __future__ import annotations
 
 import argparse
+import json
 import random
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 from vouch_harness.eval import EvalResult, run_eval
 from vouch_harness.gold import build_gold_set
@@ -92,6 +94,35 @@ def render_example(answer: str, receipts: list[Receipt], tolerances: dict[str, T
     return "\n".join(lines) + "\n"
 
 
+def _duration(us: float) -> str:
+    return f"{us:.1f} µs" if us < 1000 else f"{us / 1000:.2f} ms"
+
+
+def render_latency(report: dict[str, Any]) -> str:
+    """The latency table, from docs/bench/latency.json (`make bench`).
+
+    Rendering is deterministic, so CI can check the README against the
+    committed file without re-running a hardware-dependent benchmark.
+    """
+    machine = report["machine"] or "unknown CPU"
+    rows = [
+        ("Agent to upstream, direct", report["direct"]),
+        ("Agent to upstream, through vouch", report["proxied"]),
+        ("of which: signed, fsynced log append", report["append"]),
+    ]
+    lines = [
+        f"Measured by `make bench` on {machine} ({report['goos']}/{report['goarch']}, "
+        f"{report['cpus']} CPUs, {report['go']}): {report['calls']} sequential `tools/call`s "
+        "against an in-memory upstream, so the numbers are the proxy's own cost.",
+        "",
+        "| Path | p50 | p99 |",
+        "|---|---|---|",
+    ]
+    for label, d in rows:
+        lines.append(f"| {label} | {_duration(d['p50_us'])} | {_duration(d['p99_us'])} |")
+    return "\n".join(lines) + "\n"
+
+
 def regenerate(readme: str, root: Path) -> str:
     # The golden log is always signed with the committed golden test key.
     keys = load_keyring([root / "testdata" / "keys" / "golden.pub.pem"])
@@ -101,7 +132,9 @@ def regenerate(readme: str, root: Path) -> str:
     answer = (root / "examples" / "answer.txt").read_text(encoding="utf-8")
 
     readme = splice(readme, "eval-metrics", render_metrics(result, receipts))
-    return splice(readme, "example-report", render_example(answer, receipts, tolerances))
+    readme = splice(readme, "example-report", render_example(answer, receipts, tolerances))
+    latency = json.loads((root / "docs" / "bench" / "latency.json").read_text(encoding="utf-8"))
+    return splice(readme, "latency", render_latency(latency))
 
 
 def main(argv: list[str] | None = None) -> int:

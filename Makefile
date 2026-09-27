@@ -8,7 +8,7 @@ STAMP := $(VENV)/.installed
 VENV_OK := $(PY) -c 'import sys, vouch_verifier, vouch_harness; \
 	sys.exit(not vouch_verifier.__file__.startswith("$(CURDIR)/"))'
 
-.PHONY: test test-go test-py test-harness fuzz integration lint lint-go lint-py fmt cover build install-py eval golden readme readme-check agent eval-real clean
+.PHONY: test test-go test-py test-harness fuzz integration bench lint lint-go lint-py fmt cover build install-py eval golden readme readme-check agent eval-real clean
 
 test: test-go test-py test-harness
 
@@ -31,6 +31,17 @@ $(MCP_EVERYTHING):
 integration: $(MCP_EVERYTHING)
 	cd proxy && VOUCH_MCP_EVERYTHING="node '$(CURDIR)/$(MCP_EVERYTHING)' stdio" \
 		go test -race -count=1 -v ./internal/integration
+
+# What the proxy adds to a tools/call, on this machine (docs/roadmap.md
+# Phase 5). Writes docs/bench/latency.json, which the README's latency
+# table is rendered from; commit both. Not run in CI: the numbers
+# describe the hardware they ran on.
+BENCH_MACHINE := $(shell sysctl -n machdep.cpu.brand_string 2>/dev/null || \
+	sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo 2>/dev/null | head -1)
+bench: install-py
+	cd proxy && VOUCH_BENCH_OUT="$(CURDIR)/docs/bench/latency.json" VOUCH_BENCH_MACHINE="$(BENCH_MACHINE)" \
+		go test -count=1 -run '^TestLatencyReport$$' -v ./internal/bench
+	$(PY) -m vouch_harness.readme README.md
 
 # Grow the Go fuzz corpus, then check the new entries against Python.
 # Commit what lands in proxy/internal/receipt/testdata/fuzz.

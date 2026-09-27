@@ -112,6 +112,20 @@ make eval-real                                  # verifier vs. labels, misreport
 - **Pay once.** Every model response is cached by request hash, and completed runs are skipped.
 - **Blind labels.** The labeling tool never shows the verifier's verdict. [`docs/labeling.md`](docs/labeling.md) defines every label, and agreement between labelers is reported as Cohen's kappa.
 
+## Overhead
+
+<!-- BEGIN GENERATED latency: do not edit; run `make bench` -->
+Measured by `make bench` on Apple M1 Pro (darwin/arm64, 8 CPUs, go1.27.1): 5000 sequential `tools/call`s against an in-memory upstream, so the numbers are the proxy's own cost.
+
+| Path | p50 | p99 |
+|---|---|---|
+| Agent to upstream, direct | 6.6 µs | 14.4 µs |
+| Agent to upstream, through vouch | 4.89 ms | 8.02 ms |
+| of which: signed, fsynced log append | 4.08 ms | 7.59 ms |
+<!-- END GENERATED latency -->
+
+Most of it is the fsync that makes each receipt durable before the agent sees the result: a call whose receipt cannot be written fails instead (invariant 2 in [`AGENTS.md`](AGENTS.md)). That cost belongs to the storage, so it varies by file system and disk; run `make bench` on your own hardware. Appends are serialized, one fsync each, so under concurrent load receipts queue on the disk; batching them (group commit) is not built.
+
 ## Engineering principles
 
 - **Fail closed.** If a receipt cannot be written, the tool call fails. vouch never passes through data it could not later verify.
@@ -182,7 +196,7 @@ Measurement before features. Full plan with exit criteria in [`docs/roadmap.md`]
 | 2 | Real evaluation: human-labeled claims from multiple models | tooling done, collecting data |
 | 3 | Integrity: Ed25519, hash-chained log, tamper suite, [threat model](docs/threat-model.md) | done |
 | 4 | Canonical JSON: specified contract, cross-language differential fuzzing, number-normalized fixture keys | done |
-| 5 | Proxy protocol completeness and latency benchmarks | planned |
+| 5 | Proxy protocol completeness, reference-server integration tests, latency benchmarks | in progress: HTTP transport left |
 
 ## Repository layout
 
@@ -207,6 +221,7 @@ make readme   # regenerate the measured sections of this README
 make golden   # regenerate the Go-written golden receipt log
 make fuzz     # grow the Go fuzz corpus, then replay it through Python
 make integration  # the proxy against the official MCP reference server (needs Node)
+make bench    # measure the proxy's latency on this machine; updates the README
 ```
 
 Contribution rules for humans and coding agents alike (invariants, commit conventions, which docs to keep current) live in [`AGENTS.md`](AGENTS.md).

@@ -1,0 +1,20 @@
+{
+  "calls": 5000,
+  "machine": "Apple M1 Pro",
+  "goos": "darwin",
+  "goarch": "arm64",
+  "cpus": 8,
+  "go": "go1.27.1",
+  "direct": {
+    "p50_us": 6.583,
+    "p99_us": 14.417
+  },
+  "proxied": {
+    "p50_us": 4894.917,
+    "p99_us": 8021.917
+  },
+  "append": {
+    "p50_us": 4080.542,
+    "p99_us": 7588.292
+  }
+}

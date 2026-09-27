@@ -155,6 +155,27 @@ entry whenever a choice closes off an alternative (AGENTS.md).
 - `tools/list_changed` refreshes routes before the agent is told; a
   refresh that finds a name collision keeps the old routes and logs.
 
+**Durability over latency: one fsync per receipt** (#77)
+- Measured: on an M1 Pro, the proxy adds about 4.9 ms p50 and 8 ms p99
+  per call, of which the signed, fsynced append is about 4.1 ms p50.
+- Chosen: keep fsync before replying (invariant 2: an acknowledged
+  result has a durable receipt).
+- Rejected for now: group commit (batch concurrent appends into one
+  fsync; worth it only under concurrent load, and adds a window where
+  several calls wait on one flush); no fsync (a crash would lose
+  receipts for results the agent already acted on).
+- Cost: appends are serialized, so concurrent calls queue on the disk.
+- Revisit when: a real agent's call rate makes the queue visible; group
+  commit is then the change, not dropping fsync.
+
+**Benchmark numbers are committed, not measured in CI** (#77)
+- Chosen: `make bench` writes `docs/bench/latency.json` with the
+  machine it ran on; the README table renders from it, so
+  `readme-check` stays deterministic.
+- Rejected: measuring in CI (shared runners make p99 noise, and the
+  README would change on every run); hand-written numbers (invariant 7).
+- Cost: the published numbers are as fresh as the last `make bench`.
+
 **Integration tests: one pinned reference server, in-process proxy** (#75)
 - Chosen: `@modelcontextprotocol/server-everything` at a pinned
   version, installed by `make integration` with install scripts off,
