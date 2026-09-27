@@ -1,0 +1,420 @@
+# Adversarial regression corpus for Tier 2 extraction and matching
+# (docs/roadmap.md Phase 1).
+#
+# Unlike the harness gold set, these sentences are hand-written to read
+# like agent prose, not like the extractor's templates. Each case pins
+# the *complete* verdict list for its text: a spurious extra claim (a
+# year read as a price) fails the case as surely as a wrong verdict.
+#
+# Expectation syntax:  "<claim text> -> <VERDICT> [(<entity> [<metric>])]"
+# Claim text is the numeric token as the verifier reports it: digits
+# plus any attached %, magnitude word, or multiplier; no currency sign,
+# no trailing punctuation.
+#
+# Spec decisions encoded here:
+# - Dates, times, quarters, ordinals, and period lengths ("50-day",
+#   "5 sessions") are not claims.
+# - Display rounding is judged against the claim's own precision:
+#   "52.4 million" asserts 52.35M-52.45M; "182" asserts 181.5-182.5.
+# - A percentage only resolves to a percentage metric; a bare number
+#   never does. A percentage next to a non-price metric ("volume rose
+#   12%") is not a day change and stays UNVERIFIABLE.
+# - Entities bind within a clause, preferring the nearest preceding
+#   mention; a sentence opening with a pronoun ("It", "Its", "The
+#   stock") inherits the previous sentence's subject.
+# - With several receipted values for the same (entity, metric), a
+#   claim without a date is judged against the latest; a match only on
+#   an older value is STALE. A stated date selects that date's value.
+#
+# `xfail: P-0xx` marks a case the current code gets wrong, tied to the
+# pitfall that tracks it. Markers are strict: a fix that makes the case
+# pass must remove the marker in the same commit.
+
+receipts:
+  - id: r-nvda-ind
+    as_of: 2026-07-24T20:00:00Z
+    facts:
+      - [NVDA, rsi_14, 62.3]
+      - [NVDA, macd_hist, -0.42]
+  - id: r-nvda-quote
+    as_of: 2026-07-24T20:00:00Z
+    facts:
+      - [NVDA, close_price, 181.52]
+      - [NVDA, open_price, 179.80]
+      - [NVDA, change_pct, 1.92]
+      - [NVDA, volume, 187340000]
+  - id: r-nvda-ohlcv
+    facts:
+      - [NVDA, close_price, 176.45, 2026-07-22T20:00:00Z]
+      - [NVDA, close_price, 178.10, 2026-07-23T20:00:00Z]
+      - [NVDA, close_price, 181.52, 2026-07-24T20:00:00Z]
+  - id: r-amd-quote
+    as_of: 2026-07-24T20:00:00Z
+    facts:
+      - [AMD, last_price, 172.04]
+      - [AMD, change_pct, -1.35]
+      - [AMD, volume, 52410000]
+      - [AMD, rsi_14, 48.1]
+  - id: r-aapl-quote
+    as_of: 2026-07-24T20:00:00Z
+    facts:
+      - [AAPL, last_price, 214.30]
+      - [AAPL, volume, 48200000]
+  - id: r-msft-quote
+    as_of: 2026-07-24T20:00:00Z
+    facts:
+      - [MSFT, close_price, 502.66]
+      - [MSFT, rsi_14, 71.2]
+
+cases:
+  # --- baseline: behavior that already works and must keep working ---
+  - text: NVDA RSI is 62.3.
+    expect: ["62.3 -> SUPPORTED (NVDA rsi_14)"]
+  - text: NVDA RSI is 62.
+    expect: ["62 -> SUPPORTED"]
+  - text: NVDA RSI is 68.
+    expect: ["68 -> CONTRADICTED"]
+  - text: NVDA closed at 181.52.
+    expect: ["181.52 -> SUPPORTED (NVDA close_price)"]
+  - text: NVDA closed at 181.25.
+    expect: ["181.25 -> CONTRADICTED"]
+  - text: NVDA opened at 179.80.
+    expect: ["179.80 -> SUPPORTED (NVDA open_price)"]
+  - text: NVDA opened at 179.08.
+    expect: ["179.08 -> CONTRADICTED"]
+  - text: AMD last traded at 172.04.
+    expect: ["172.04 -> SUPPORTED (AMD last_price)"]
+  - text: AMD last traded at 172.40.
+    expect: ["172.40 -> CONTRADICTED"]
+  - text: AMD is down 1.35% on the day.
+    expect: ["1.35% -> SUPPORTED (AMD change_pct)"]
+  - text: AMD is up 1.35% on the day.
+    expect: ["1.35% -> CONTRADICTED"]
+  - text: AMD fell 1.35%.
+    expect: ["1.35% -> SUPPORTED"]
+  - text: AMD slid 1.35%.
+    expect: ["1.35% -> SUPPORTED"]
+  - text: AMD change is -1.35%.
+    expect: ["-1.35% -> SUPPORTED"]
+  - text: AMD change is +1.35%.
+    expect: ["+1.35% -> CONTRADICTED"]
+  - text: NVDA rose 1.92% today.
+    expect: ["1.92% -> SUPPORTED (NVDA change_pct)"]
+  - text: NVDA gained 1.9%.
+    expect: ["1.9% -> SUPPORTED"]
+  - text: NVDA gained 2.9%.
+    expect: ["2.9% -> CONTRADICTED"]
+  - text: NVDA declined 0.5%.
+    expect: ["0.5% -> CONTRADICTED"]
+  - text: AMD volume was 52,410,000 shares.
+    expect: ["52,410,000 -> SUPPORTED (AMD volume)"]
+  - text: AMD volume was 52,140,000 shares.
+    expect: ["52,140,000 -> CONTRADICTED"]
+  - text: AMD volume was 52410000.
+    expect: ["52410000 -> SUPPORTED"]
+  - text: MSFT closed at 502.66.
+    expect: ["502.66 -> SUPPORTED (MSFT close_price)"]
+  - text: MSFT RSI is 71.2.
+    expect: ["71.2 -> SUPPORTED"]
+  - text: MSFT RSI is 17.2.
+    expect: ["17.2 -> CONTRADICTED"]
+  - text: AAPL last price is 214.30.
+    expect: ["214.30 -> SUPPORTED (AAPL last_price)"]
+  - text: AAPL volume was 48,200,000.
+    expect: ["48,200,000 -> SUPPORTED"]
+  - text: NVDA MACD histogram is -0.42.
+    expect: ["-0.42 -> SUPPORTED (NVDA macd_hist)"]
+  - text: NVDA MACD histogram is 0.42.
+    expect: ["0.42 -> CONTRADICTED"]
+  - text: AMD RSI is 48.
+    expect: ["48 -> SUPPORTED (AMD rsi_14)"]
+  - text: NVDA's RSI(14) is 62.3 [[r:r-nvda-ind#/rsi_14]].
+    expect: ["62.3 -> SUPPORTED"]
+  - text: NVDA's RSI(14) is 66.3 [[r:r-nvda-ind#/rsi_14]].
+    expect: ["66.3 -> CONTRADICTED"]
+  - text: NVDA's RSI(14) is 62.3 [[r:deadbeef#/rsi_14]].
+    expect: ["62.3 -> UNSUPPORTED"]
+  - text: NVDA's RSI(14) is 62.3 [[r:r-nvda-ind#/rsi_9]].
+    expect: ["62.3 -> UNSUPPORTED"]
+  - text: AAPL RSI is 55.
+    expect: ["55 -> UNSUPPORTED (AAPL rsi_14)"]
+  - text: MSFT volume was 20,000,000.
+    expect: ["20,000,000 -> UNSUPPORTED"]
+  - text: AMD P/E is 48.
+    expect: ["48 -> UNVERIFIABLE"]
+  - text: Analysts see 3 catalysts for NVDA.
+    expect: ["3 -> UNVERIFIABLE"]
+  - text: NVDA closed at 181.52 and its RSI is 62.3.
+    expect: ["181.52 -> SUPPORTED", "62.3 -> SUPPORTED (NVDA rsi_14)"]
+  - text: NVDA closed at 181.52. AMD last traded at 172.04.
+    expect: ["181.52 -> SUPPORTED", "172.04 -> SUPPORTED"]
+  - text: RSI for NVDA is 62.3.
+    expect: ["62.3 -> SUPPORTED (NVDA rsi_14)"]
+  - text: At 62.3, NVDA RSI is elevated.
+    expect: ["62.3 -> SUPPORTED (NVDA rsi_14)"]
+  - text: NVDA RSI of 62.3 is elevated; AMD RSI of 48.1 is neutral.
+    expect: ["62.3 -> SUPPORTED (NVDA)", "48.1 -> SUPPORTED (AMD)"]
+  - text: NVDA RSI is 62.30.
+    expect: ["62.30 -> SUPPORTED"]
+  - text: NVDA closed at 181.520.
+    expect: ["181.520 -> SUPPORTED"]
+
+  # --- number tokenization: spans exclude trailing punctuation ---
+  - text: NVDA closed at 181.52, and its RSI is 62.3.
+    expect: ["181.52 -> SUPPORTED", "62.3 -> SUPPORTED"]
+  - text: NVDA closed at 181.52, with RSI at 62.3 and MACD histogram at -0.42.
+    expect: ["181.52 -> SUPPORTED", "62.3 -> SUPPORTED", "-0.42 -> SUPPORTED"]
+  - text: NVDA RSI is 62, well above AMD.
+    expect: ["62 -> SUPPORTED (NVDA rsi_14)"]
+    xfail: P-035
+  - text: AMD volume was 52,410,000, a heavy session.
+    expect: ["52,410,000 -> SUPPORTED"]
+    xfail: P-035
+  - text: MSFT RSI is 71.2, AMD RSI is 48.1, NVDA RSI is 62.3.
+    expect: ["71.2 -> SUPPORTED (MSFT)", "48.1 -> SUPPORTED (AMD)", "62.3 -> SUPPORTED (NVDA)"]
+    xfail: P-032
+  - text: AMD RSI is 71.2, MSFT RSI is 48.1.
+    expect: ["71.2 -> CONTRADICTED (AMD)", "48.1 -> CONTRADICTED (MSFT)"]
+    xfail: P-032
+
+  # --- dates, times, quarters, ordinals, periods are not claims ---
+  - text: As of 2026-07-24, NVDA closed at 181.52.
+    expect: ["181.52 -> SUPPORTED"]
+    xfail: P-030
+  - text: On July 24, 2026, NVDA closed at 181.52.
+    expect: ["181.52 -> SUPPORTED"]
+    xfail: P-030
+  - text: On 7/24/2026 NVDA closed at 181.52.
+    expect: ["181.52 -> SUPPORTED"]
+    xfail: P-030
+  - text: NVDA closed at 181.52 on 24 July 2026.
+    expect: ["181.52 -> SUPPORTED"]
+    xfail: P-030
+  - text: NVDA closed at 181.52 on Jul 24.
+    expect: ["181.52 -> SUPPORTED"]
+    xfail: P-030
+  - text: The 2026-07-24 close for NVDA was 181.52.
+    expect: ["181.52 -> SUPPORTED"]
+    xfail: P-030
+  - text: NVDA closed at 181.52 at 4:00 pm.
+    expect: ["181.52 -> SUPPORTED"]
+    xfail: P-030
+  - text: At 16:00 ET, NVDA closed at 181.52.
+    expect: ["181.52 -> SUPPORTED"]
+    xfail: P-030
+  - text: NVDA's 14-day RSI is 62.3.
+    expect: ["62.3 -> SUPPORTED"]
+    xfail: P-030
+  - text: NVDA closed at 181.52, above its 50-day moving average.
+    expect: ["181.52 -> SUPPORTED"]
+    xfail: P-030
+  - text: NVDA closed at 181.52, near its 52-week high.
+    expect: ["181.52 -> SUPPORTED"]
+    xfail: P-030
+  - text: In Q3 2026, NVDA closed at 181.52.
+    expect: ["181.52 -> SUPPORTED"]
+    xfail: P-030
+  - text: NVDA reports Q2 earnings on August 27; it closed at 181.52.
+    expect: ["181.52 -> SUPPORTED"]
+    xfail: P-030
+  - text: In 2026, NVDA RSI peaked; it is now 62.3.
+    expect: ["62.3 -> SUPPORTED"]
+    xfail: P-030
+  - text: NVDA, up sharply since 2024, closed at 181.52.
+    expect: ["181.52 -> SUPPORTED"]
+    xfail: P-030
+  - text: NVDA RSI is 62.3 on the 1d timeframe.
+    expect: ["62.3 -> SUPPORTED"]
+    xfail: P-030
+  - text: NVDA closed at 181.52 for the 3rd straight gain.
+    expect: ["181.52 -> SUPPORTED"]
+    xfail: P-030
+  - text: Over the past 5 sessions NVDA closed at 181.52.
+    expect: ["181.52 -> SUPPORTED"]
+    xfail: P-030
+  - text: AMD RSI is 48.1 as of July 24.
+    expect: ["48.1 -> SUPPORTED"]
+    xfail: P-030
+
+  # --- magnitude words and suffixes ---
+  - text: AMD volume was 52.4 million shares.
+    expect: ["52.4 million -> SUPPORTED (AMD volume)"]
+    xfail: P-031
+  - text: AMD volume was 52 million shares.
+    expect: ["52 million -> SUPPORTED"]
+    xfail: P-031
+  - text: AMD volume was 25.4 million shares.
+    expect: ["25.4 million -> CONTRADICTED"]
+    xfail: P-031
+  - text: AMD volume was 52.41M.
+    expect: ["52.41M -> SUPPORTED"]
+    xfail: P-031
+  - text: AMD volume was 52.4M shares.
+    expect: ["52.4M -> SUPPORTED"]
+    xfail: P-031
+  - text: NVDA volume hit 187.3 million.
+    expect: ["187.3 million -> SUPPORTED (NVDA volume)"]
+    xfail: P-031
+  - text: NVDA volume hit 178.3 million.
+    expect: ["178.3 million -> CONTRADICTED"]
+    xfail: P-031
+  - text: NVDA volume hit 0.19 billion.
+    expect: ["0.19 billion -> SUPPORTED"]
+    xfail: P-031
+  - text: NVDA volume was 187,340 thousand.
+    expect: ["187,340 thousand -> SUPPORTED"]
+    xfail: P-031
+  - text: AAPL volume was 48.2M.
+    expect: ["48.2M -> SUPPORTED"]
+    xfail: P-031
+  - text: AAPL volume was 4.82M.
+    expect: ["4.82M -> CONTRADICTED"]
+    xfail: P-031
+  - text: AAPL volume was 482 million.
+    expect: ["482 million -> CONTRADICTED"]
+    xfail: P-031
+  - text: MSFT volume was 20 million.
+    expect: ["20 million -> UNSUPPORTED"]
+    xfail: P-031
+  - text: NVDA volume was 187.3M; AMD volume was 52.4M.
+    expect: ["187.3M -> SUPPORTED (NVDA)", "52.4M -> SUPPORTED (AMD)"]
+    xfail: P-031
+
+  # --- display rounding against the claim's own precision ---
+  - text: NVDA closed at 182.
+    expect: ["182 -> SUPPORTED"]
+    xfail: P-036
+  - text: NVDA closed at 181.
+    expect: ["181 -> CONTRADICTED"]
+  - text: NVDA closed at 181.5.
+    expect: ["181.5 -> SUPPORTED"]
+    xfail: P-036
+  - text: NVDA's MACD histogram is -0.4.
+    expect: ["-0.4 -> SUPPORTED"]
+    xfail: P-036
+  - text: NVDA's MACD histogram is -0.5.
+    expect: ["-0.5 -> CONTRADICTED"]
+
+  # --- units constrain the metric ---
+  - text: AMD is down 1.35% on the day and is trading at 172.04.
+    expect: ["1.35% -> SUPPORTED (AMD change_pct)", "172.04 -> SUPPORTED (AMD last_price)"]
+    xfail: P-034
+  - text: AMD is down 1.35% and trading at 172.40.
+    expect: ["1.35% -> SUPPORTED (AMD change_pct)", "172.40 -> CONTRADICTED (AMD last_price)"]
+    xfail: P-034
+  - text: NVDA closed up 1.92%.
+    expect: ["1.92% -> SUPPORTED (NVDA change_pct)"]
+    xfail: P-034
+  - text: NVDA closed 1.92% higher at 181.52.
+    expect: ["1.92% -> SUPPORTED (NVDA change_pct)", "181.52 -> SUPPORTED (NVDA close_price)"]
+    xfail: P-034
+  - text: NVDA volume rose 12%.
+    expect: ["12% -> UNVERIFIABLE"]
+    xfail: P-034
+  - text: NVDA RSI rose 5%.
+    expect: ["5% -> UNVERIFIABLE"]
+    xfail: P-034
+  - text: AMD last traded at 172.04, down 1.35%.
+    expect: ["172.04 -> SUPPORTED (AMD last_price)", "1.35% -> SUPPORTED (AMD change_pct)"]
+    xfail: P-034
+  - text: AMD, trading at 172.04, fell 1.35%.
+    expect: ["172.04 -> SUPPORTED (AMD last_price)", "1.35% -> SUPPORTED (AMD change_pct)"]
+    xfail: P-034
+  - text: AMD change is 1.35.
+    expect: ["1.35 -> UNVERIFIABLE"]
+    xfail: P-034
+  - text: NVDA's price change was 1.92%.
+    expect: ["1.92% -> SUPPORTED (NVDA change_pct)"]
+  - text: AMD dropped 1.35 percent.
+    expect: ["1.35 percent -> SUPPORTED (AMD change_pct)"]
+    xfail: P-034
+  - text: NVDA closed at $181.52.
+    expect: ["181.52 -> SUPPORTED"]
+  - text: AMD last traded at $172.40.
+    expect: ["172.40 -> CONTRADICTED"]
+  - text: NVDA closed at 181.52 USD.
+    expect: ["181.52 -> SUPPORTED"]
+  - text: NVDA closed at USD 181.52.
+    expect: ["181.52 -> SUPPORTED"]
+
+  # --- entity attribution by clause, not character distance ---
+  - text: NVDA's RSI is 62, versus AMD's RSI of 48.
+    expect: ["62 -> SUPPORTED (NVDA rsi_14)", "48 -> SUPPORTED (AMD rsi_14)"]
+    xfail: P-032
+  - text: NVDA's RSI is 62.3 while AMD's is 48.1.
+    expect: ["62.3 -> SUPPORTED (NVDA rsi_14)", "48.1 -> SUPPORTED (AMD rsi_14)"]
+    xfail: P-032
+  - text: Compared with AMD, NVDA closed at 181.52.
+    expect: ["181.52 -> SUPPORTED (NVDA close_price)"]
+  - text: NVDA closed at 181.52, and AMD last traded at 172.04.
+    expect: ["181.52 -> SUPPORTED (NVDA)", "172.04 -> SUPPORTED (AMD)"]
+    xfail: P-032
+  - text: AMD last traded at 172.04; NVDA closed at 181.52.
+    expect: ["172.04 -> SUPPORTED (AMD)", "181.52 -> SUPPORTED (NVDA)"]
+    xfail: P-032
+  - text: Unlike AMD, which fell 1.35%, NVDA rose 1.92%.
+    expect: ["1.35% -> SUPPORTED (AMD)", "1.92% -> SUPPORTED (NVDA)"]
+    xfail: P-032
+  - text: AMD's RSI of 48.1 trails NVDA.
+    expect: ["48.1 -> SUPPORTED (AMD rsi_14)"]
+    xfail: P-032
+  - text: NVDA RSI is 62.3. Its MACD histogram is -0.42.
+    expect: ["62.3 -> SUPPORTED (NVDA)", "-0.42 -> SUPPORTED (NVDA macd_hist)"]
+    xfail: P-032
+  - text: AMD last traded at 172.04. It is down 1.35% on the day.
+    expect: ["172.04 -> SUPPORTED (AMD)", "1.35% -> SUPPORTED (AMD change_pct)"]
+    xfail: P-032
+  - text: AMD last traded at 172.04. The stock is down 1.35% on the day.
+    expect: ["172.04 -> SUPPORTED (AMD)", "1.35% -> SUPPORTED (AMD change_pct)"]
+    xfail: P-032
+  - text: NVDA closed at 181.52 and AMD at 172.04.
+    expect: ["181.52 -> SUPPORTED (NVDA)", "172.04 -> UNSUPPORTED (AMD close_price)"]
+    xfail: P-032
+  - text: NVDA's RSI (62.3) is above AMD's (48.1).
+    expect: ["62.3 -> SUPPORTED (NVDA rsi_14)", "48.1 -> SUPPORTED (AMD rsi_14)"]
+
+  # --- several receipted values: dates select, staleness is named ---
+  - text: NVDA closed at 178.10.
+    expect: ["178.10 -> STALE (NVDA close_price)"]
+    xfail: P-033
+  - text: On July 23, NVDA closed at 178.10.
+    expect: ["178.10 -> SUPPORTED"]
+    xfail: P-033
+  - text: On July 23, NVDA closed at 181.52.
+    expect: ["181.52 -> CONTRADICTED"]
+    xfail: P-033
+  - text: On July 21, NVDA closed at 175.00.
+    expect: ["175.00 -> UNSUPPORTED"]
+    xfail: P-033
+  - text: NVDA closed at 176.45 on 2026-07-22.
+    expect: ["176.45 -> SUPPORTED"]
+    xfail: P-033
+  - text: NVDA closed at 178.10 on July 22.
+    expect: ["178.10 -> CONTRADICTED"]
+    xfail: P-033
+  - text: NVDA closed at 179.00.
+    expect: ["179.00 -> CONTRADICTED"]
+  - text: NVDA RSI is 62.3 on the hourly chart.
+    expect: ["62.3 -> UNSUPPORTED (NVDA rsi_14)"]
+    xfail: P-033
+  - text: NVDA daily RSI is 62.3.
+    expect: ["62.3 -> SUPPORTED"]
+
+  # --- multipliers and ranges are not point claims ---
+  - text: NVDA volume was 3x its 50-day average.
+    expect: ["3x -> UNVERIFIABLE"]
+    xfail: P-037
+  - text: NVDA RSI is between 60 and 65.
+    expect: ["60 -> UNVERIFIABLE", "65 -> UNVERIFIABLE"]
+    xfail: P-037
+  - text: NVDA RSI is in the 60-65 range.
+    expect: ["60 -> UNVERIFIABLE", "65 -> UNVERIFIABLE"]
+    xfail: P-037
+  - text: NVDA is one of the top 5 holdings; it closed at 181.52.
+    expect: ["5 -> UNVERIFIABLE", "181.52 -> SUPPORTED"]
+    xfail: P-032
+
+  # --- known gaps, deliberately out of Phase 1 scope ---
+  - text: NVDA RSI is 62.3, below the 70 overbought line.
+    expect: ["62.3 -> SUPPORTED", "70 -> UNVERIFIABLE"]
+    xfail: known gap — threshold mentions read as claims

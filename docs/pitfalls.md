@@ -148,11 +148,15 @@ Reproduced 2026-09-27 against `testdata/receipts_golden.jsonl`.
 - **Cause:** `_parse_number` does not read scale words or suffixes.
 - **Status:** open. Reproduced. Roadmap Phase 1.
 
-### P-032 Entity attribution by character distance
+### P-032 Attribution ignores clause boundaries
 - **Symptom:** `NVDA's RSI is 62, versus AMD's RSI of 48.` attributes
-  `62` to AMD.
-- **Cause:** `_nearest_entity` picks the closest entity mention in
-  either direction.
+  `62` to AMD. `Unlike AMD, which fell 1.35%, NVDA rose 1.92%.` negates
+  NVDA's `1.92%` because "fell" appears earlier in the sentence.
+  `AMD last traded at 172.04; NVDA closed at 181.52.` reads `172.04` as
+  NVDA's close.
+- **Cause:** entity, metric keyword, and direction word are each chosen
+  by character distance (or mere presence) across the whole sentence,
+  in either direction, with no notion of clauses.
 - **Status:** open. Reproduced. Roadmap Phase 1.
 
 ### P-033 Any in-tolerance candidate makes a claim SUPPORTED
@@ -171,6 +175,30 @@ Reproduced 2026-09-27 against `testdata/receipts_golden.jsonl`.
   fallback to `change_pct` only applies when no keyword is found.
 - **Status:** open. Reproduced 2026-09-27. Roadmap Phase 1. The README
   example is phrased to avoid it.
+
+### P-035 An integer followed by a comma keeps the comma in its span
+- **Symptom:** `NVDA RSI is 62, well above AMD.` reports the claim text
+  as `62,`; report highlighting and mutations operate on the wrong span.
+- **Cause:** `_NUMBER_RE` uses `\d[\d,]*` for thousands separators,
+  which also swallows a trailing comma.
+- **Status:** open. Reproduced 2026-09-27.
+
+### P-036 Display rounding is judged by class, not by the claim's precision
+- **Symptom:** `NVDA closed at 182.` (actual 181.52) is CONTRADICTED;
+  `-0.4` for a MACD of -0.42 is CONTRADICTED.
+- **Cause:** tolerance is a per-class constant (`abs`, `rel`,
+  `display_rel`). A claim's own displayed precision — "182" asserts
+  181.5-182.5 — is never considered, so legitimate rounding outside
+  `display_rel` reads as a contradiction.
+- **Status:** open. Reproduced 2026-09-27.
+
+### P-037 Multipliers and ranges are judged as point values
+- **Symptom:** `NVDA volume was 3x its 50-day average.` yields
+  `3 -> UNSUPPORTED` against volume; `in the 60-65 range` yields
+  `60 -> CONTRADICTED`.
+- **Cause:** the tokenizer does not recognize `3x`, `60-65`, or
+  `between 60 and 65` as non-point expressions.
+- **Status:** open. Reproduced 2026-09-27.
 
 ---
 
