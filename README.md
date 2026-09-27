@@ -233,6 +233,7 @@ Measurement before features. Full plan with exit criteria in [`docs/roadmap.md`]
 ## Development
 
 ```bash
+make check    # everything CI checks: build, tests, lint, README and golden-log drift
 make test     # go vet + go test -race, then both Python suites
 make lint     # gofmt, go vet, ruff, mypy --strict
 make cover    # coverage report for Go and Python
