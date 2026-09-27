@@ -67,8 +67,8 @@ golden:
 	cd proxy && go test ./internal/store/ -run TestGoldenLog -update
 
 eval: install-py
-	VOUCH_HMAC_KEY=vouch-golden-key $(VENV)/bin/vouch-eval \
-		--receipts testdata/receipts_golden.jsonl --n 10 --tolerances tolerance.yaml
+	$(VENV)/bin/vouch-eval --receipts testdata/receipts_golden.jsonl --n 10 \
+		--tolerances tolerance.yaml --public-key testdata/keys/golden.pub.pem
 
 # Run a real model on the eval task set (docs/roadmap.md Phase 2). Costs
 # API calls: check the plan first with `make agent MODEL=... ARGS=--dry-run`.
@@ -85,10 +85,10 @@ eval-real: install-py
 # README metrics and the example report are generated, never hand-edited
 # (AGENTS.md invariant 7). readme-check is what CI runs.
 readme: install-py
-	VOUCH_HMAC_KEY=vouch-golden-key $(PY) -m vouch_harness.readme README.md
+	$(PY) -m vouch_harness.readme README.md
 
 readme-check: install-py
-	VOUCH_HMAC_KEY=vouch-golden-key $(PY) -m vouch_harness.readme README.md --check
+	$(PY) -m vouch_harness.readme README.md --check
 
 clean:
 	rm -rf $(VENV) proxy/bin proxy/coverage.out

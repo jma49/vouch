@@ -1,13 +1,19 @@
 // Command vouch is the entry point for the vouch proxy.
 //
-//	vouch proxy --upstream "[name=]cmd args" [--upstream ...] \
-//	    --receipts <dir> --schemas <dir> [--session <id>]
+//	vouch keygen [--out <dir>] [--name <name>]
+//	vouch proxy --signing-key <key.pem> --upstream "[name=]cmd args" \
+//	    [--upstream ...] --receipts <dir> --schemas <dir> [--session <id>]
+//	vouch receipts cat <log>
+//	vouch receipts verify --public-key <key.pub.pem> [--public-key ...] <log>
 //
 // An upstream's name defaults to its whole command; name= sets a short,
 // stable one. Names key record/replay fixtures and must be unique.
 //
-// The HMAC signing key is read from $VOUCH_HMAC_KEY. Verification of
-// answers against the receipt log is the Python side's job (vouch-verify).
+// Receipts are signed with an Ed25519 key (--signing-key, else
+// $VOUCH_SIGNING_KEY) in DSSE envelopes; anyone with the public key can
+// verify them, with `vouch receipts verify` or any Ed25519 library.
+// Judging an agent's answer against the log is the Python side's job
+// (vouch-verify).
 package main
 
 import (
@@ -24,6 +30,8 @@ import (
 	"github.com/jma49/vouch/proxy/internal/fixture"
 	"github.com/jma49/vouch/proxy/internal/mcp"
 	"github.com/jma49/vouch/proxy/internal/proxy"
+	"github.com/jma49/vouch/proxy/internal/receipt"
+	"github.com/jma49/vouch/proxy/internal/sign"
 	"github.com/jma49/vouch/proxy/internal/store"
 )
 
@@ -42,8 +50,11 @@ func main() {
 	switch os.Args[1] {
 	case "version":
 		fmt.Println("vouch", version)
-	case "proxy":
-		if err := runProxy(os.Args[2:]); err != nil {
+	case "proxy", "keygen", "receipts":
+		run := map[string]func([]string) error{
+			"proxy": runProxy, "keygen": runKeygen, "receipts": runReceipts,
+		}[os.Args[1]]
+		if err := run(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "vouch:", err)
 			os.Exit(1)
 		}
@@ -55,7 +66,11 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  vouch proxy --upstream "[name=]cmd args" [--upstream ...] --receipts <dir> --schemas <dir>
+  vouch keygen [--out <dir>] [--name <name>]
+  vouch proxy --signing-key <key.pem> --upstream "[name=]cmd args" [--upstream ...] \
+      --receipts <dir> --schemas <dir> [--session <id>]
+  vouch receipts cat <log>
+  vouch receipts verify --public-key <key.pub.pem> [--public-key ...] <log>
   vouch version`)
 }
 
@@ -68,6 +83,8 @@ func runProxy(args []string) error {
 	session := fs.String("session", "", "session id (default: random)")
 	mode := fs.String("mode", "live", "live | record | replay (docs/design.md section 8.1)")
 	fixturesDir := fs.String("fixtures", "fixtures", "fixture directory for record/replay")
+	keyPath := fs.String("signing-key", os.Getenv("VOUCH_SIGNING_KEY"),
+		"Ed25519 private key (PKCS#8 PEM, mode 0600) that signs receipts; default $VOUCH_SIGNING_KEY")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -77,10 +94,14 @@ func runProxy(args []string) error {
 	if len(upstreams) == 0 && *mode != "replay" {
 		return fmt.Errorf("at least one --upstream is required (except in replay mode)")
 	}
-	key := []byte(os.Getenv("VOUCH_HMAC_KEY"))
-	if len(key) == 0 {
-		return fmt.Errorf("VOUCH_HMAC_KEY is not set; receipts must be signed")
+	if *keyPath == "" {
+		return fmt.Errorf("no signing key: pass --signing-key or set VOUCH_SIGNING_KEY (create one with `vouch keygen`)")
 	}
+	priv, err := sign.LoadPrivateKey(*keyPath)
+	if err != nil {
+		return err
+	}
+	signer := sign.NewSigner(priv)
 	if *session == "" {
 		*session = "s-" + randomHex(8)
 	}
@@ -89,7 +110,7 @@ func runProxy(args []string) error {
 	if err != nil {
 		return err
 	}
-	rlog, err := store.Open(filepath.Join(*receiptsDir, "receipts.jsonl"))
+	rlog, err := store.Open(filepath.Join(*receiptsDir, "receipts.jsonl"), signer)
 	if err != nil {
 		return err
 	}
@@ -142,7 +163,6 @@ func runProxy(args []string) error {
 		Upstreams: ups,
 		Schemas:   schemas,
 		Log:       rlog,
-		Key:       key,
 		SessionID: *session,
 		Clock:     clk,
 	}
@@ -168,6 +188,79 @@ func closeAll(ups []*proxy.Upstream) {
 		}()
 	}
 	wg.Wait()
+}
+
+func runKeygen(args []string) error {
+	fs := flag.NewFlagSet("keygen", flag.ExitOnError)
+	out := fs.String("out", ".", "directory for the key files")
+	name := fs.String("name", "vouch", "file name stem: <name>.pem and <name>.pub.pem")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	privPath, pubPath, err := sign.GenerateFiles(*out, *name)
+	if err != nil {
+		return err
+	}
+	pub, err := sign.LoadPublicKey(pubPath)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("private key: %s (keep secret; mode 0600)\npublic key:  %s\nkey id:      %s\n",
+		privPath, pubPath, sign.KeyID(pub))
+	return nil
+}
+
+// runReceipts reads a receipt log for people: cat prints each receipt
+// body as one JSON line (for jq and grep, since envelope payloads are
+// base64), and verify checks every signature against trusted keys.
+func runReceipts(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("receipts: want a subcommand: cat or verify")
+	}
+	switch args[0] {
+	case "cat":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: vouch receipts cat <log>")
+		}
+		receipts, err := store.Scan(args[1])
+		if err != nil {
+			return err
+		}
+		for i := range receipts {
+			body, err := receipts[i].Body()
+			if err != nil {
+				return err
+			}
+			fmt.Println(string(body))
+		}
+		return nil
+	case "verify":
+		fs := flag.NewFlagSet("receipts verify", flag.ExitOnError)
+		var pubs stringSlice
+		fs.Var(&pubs, "public-key", "trusted Ed25519 public key PEM (repeatable)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 1 || len(pubs) == 0 {
+			return fmt.Errorf("usage: vouch receipts verify --public-key <key.pub.pem> [--public-key ...] <log>")
+		}
+		keys := sign.Keyring{}
+		for _, p := range pubs {
+			pub, err := sign.LoadPublicKey(p)
+			if err != nil {
+				return err
+			}
+			keys.Add(pub)
+		}
+		receipts, err := store.ScanVerified(fs.Arg(0), keys)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%d receipts verified (%s)\n", len(receipts), receipt.PayloadType)
+		return nil
+	default:
+		return fmt.Errorf("receipts: unknown subcommand %q", args[0])
+	}
 }
 
 func randomHex(n int) string {

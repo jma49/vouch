@@ -115,7 +115,7 @@ Goal: the receipt log's security claims are true and tested.
 
 | Item | Status |
 |---|---|
-| Ed25519 signatures (public-key verification enables genuine third-party audit); key id on each receipt; HMAC kept only if a reason remains | todo |
+| Ed25519 signatures in DSSE envelopes (public-key verification enables genuine third-party audit); key id on each receipt; HMAC removed | done (#53) |
 | Hash chain: each receipt carries `prev_digest`; deletion, truncation, reordering become detectable | todo |
 | Signed checkpoints (head digest + count) for sealing a session | todo |
 | Tamper test suite: delete, truncate, reorder, duplicate, edit fact, edit sig — each must be detected, in both Go and Python | todo |

@@ -5,9 +5,9 @@
 Each (model, task, sample) gets its own proxy session and run directory
 under --out. Completed runs are skipped and every model response is
 cached, so an interrupted or repeated invocation only pays for what it
-has not done yet. Receipts are signed with $VOUCH_HMAC_KEY when set,
-else the public evaluation key (vouch_harness.signing), and each run's
-meta.json records the key id.
+has not done yet. Receipts are signed with --signing-key, else
+$VOUCH_SIGNING_KEY, else the public evaluation key
+(vouch_harness.signing), and each run's meta.json records the key id.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
 import traceback
 from collections.abc import Callable
 from pathlib import Path
@@ -27,7 +28,7 @@ from vouch_harness.agent.llm import (
     load_models,
 )
 from vouch_harness.agent.runner import RunSpec, execute, load_tasks, run_dir
-from vouch_harness.signing import resolve_key
+from vouch_harness.signing import private_copy, resolve_signing_key
 
 _TURNS_ESTIMATE = 3  # typical requests per run: tool calls, then the answer
 
@@ -70,6 +71,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--cache", type=Path, default=Path("eval/.cache"))
     p.add_argument("--proxy", type=Path, default=Path("proxy/bin/vouch"))
     p.add_argument("--schemas", type=Path, default=Path("schemas"))
+    p.add_argument(
+        "--signing-key",
+        type=Path,
+        default=None,
+        help="Ed25519 private key PEM (default: $VOUCH_SIGNING_KEY, else the public eval key)",
+    )
     p.add_argument("--dry-run", action="store_true", help="list pending runs; call nothing")
     args = p.parse_args(argv)
 
@@ -103,13 +110,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"vouch-agent: {e}", file=sys.stderr)
         return 2
     client = CachedClient(inner, args.cache, identity=cache_identity(config))
-    env = {**os.environ, "VOUCH_HMAC_KEY": resolve_key()}
-
-    failed = run_batch(
-        pending,
-        lambda spec: execute(spec, client, args.out, args.proxy, args.schemas, env),
-        args.out,
-    )
+    signing_key = resolve_signing_key(args.signing_key)
+    with tempfile.TemporaryDirectory(prefix="vouch-agent-") as private_dir:
+        # A 0600 copy that lives only for this batch (signing.private_copy).
+        key_copy = private_copy(signing_key, Path(private_dir))
+        env = {**os.environ, "VOUCH_SIGNING_KEY": str(key_copy)}
+        failed = run_batch(
+            pending,
+            lambda spec: execute(spec, client, args.out, args.proxy, args.schemas, env),
+            args.out,
+        )
     print(
         f"vouch-agent: done; {failed} failed; cache {client.hits} hits, {client.misses} requests",
         file=sys.stderr,

@@ -9,11 +9,26 @@ import (
 	"time"
 
 	"github.com/jma49/vouch/proxy/internal/receipt"
+	"github.com/jma49/vouch/proxy/internal/sign"
 )
 
 var update = flag.Bool("update", false, "regenerate the cross-language golden receipt log")
 
-const goldenKey = "vouch-golden-key"
+// goldenSigner signs the golden log with the committed, public test key
+// (testdata/keys/README.md). Ed25519 is deterministic, so regenerating
+// the log is byte-stable and CI can fail on drift.
+func goldenSigner(t *testing.T) *sign.Signer {
+	t.Helper()
+	pemBytes, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "keys", "golden.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv, err := sign.ParsePrivateKeyPEM(pemBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sign.NewSigner(priv)
+}
 
 // goldenReceipts builds a fixed set of receipts covering the field
 // shapes the Python verifier must reproduce byte-for-byte: facts with
@@ -59,9 +74,6 @@ func goldenReceipts(t *testing.T) []*receipt.Receipt {
 			LogicalTime:       int64(turn + 1),
 			UpstreamLatencyMS: 87,
 		}
-		if err := r.Sign([]byte(goldenKey)); err != nil {
-			t.Fatal(err)
-		}
 		return r
 	}
 	return []*receipt.Receipt{
@@ -98,7 +110,7 @@ func TestGoldenLog(t *testing.T) {
 
 	if *update {
 		tmp := filepath.Join(t.TempDir(), "receipts.jsonl")
-		l, err := Open(tmp)
+		l, err := Open(tmp, goldenSigner(t))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,7 +130,8 @@ func TestGoldenLog(t *testing.T) {
 		t.Logf("regenerated %s", goldenPath)
 	}
 
-	got, err := Scan(goldenPath)
+	signer := goldenSigner(t)
+	got, err := ScanVerified(goldenPath, sign.Keyring{signer.KeyID(): signer.Public()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,9 +139,6 @@ func TestGoldenLog(t *testing.T) {
 		t.Fatalf("golden log has %d receipts, want %d (re-run with -update?)", len(got), len(receipts))
 	}
 	for i := range got {
-		if ok, err := got[i].Verify([]byte(goldenKey)); err != nil || !ok {
-			t.Fatalf("golden receipt %d signature: ok=%v err=%v", i, ok, err)
-		}
 		want, _ := json.Marshal(receipts[i])
 		wantCanon, _ := receipt.Canonicalize(want)
 		gotRaw, _ := json.Marshal(&got[i])

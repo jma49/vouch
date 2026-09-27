@@ -1,6 +1,10 @@
-# vouch: proxy, verifier, and harness in one image sharing a receipts
-# volume. VOUCH_HMAC_KEY must be set in the environment — receipts are
-# signed, and there is no default key on purpose.
+# vouch: proxy, verifier, and harness in one image, sharing a receipts
+# volume and a keys volume. Receipts are signed with Ed25519, and there is
+# no default key on purpose. Create one first:
+#   docker compose run --rm proxy keygen --out /app/keys
+# verify and eval use only the public key but mount the whole volume
+# read-only, private key included. For least privilege, copy
+# vouch.pub.pem into a separate volume and mount only that.
 services:
   # The proxy speaks MCP over stdio, so it is run attached rather than
   # as a background service:
@@ -8,10 +12,11 @@ services:
   proxy:
     build: .
     environment:
-      VOUCH_HMAC_KEY: ${VOUCH_HMAC_KEY:?set VOUCH_HMAC_KEY}
+      VOUCH_SIGNING_KEY: /app/keys/vouch.pem
     volumes:
       - receipts:/app/receipts
       - fixtures:/app/fixtures
+      - keys:/app/keys
     stdin_open: true
 
   # docker compose run --rm verify --answer /app/answer.txt \
@@ -20,9 +25,10 @@ services:
     build: .
     entrypoint: ["vouch-verify"]
     environment:
-      VOUCH_HMAC_KEY: ${VOUCH_HMAC_KEY:?set VOUCH_HMAC_KEY}
+      VOUCH_PUBLIC_KEY: /app/keys/vouch.pub.pem
     volumes:
       - receipts:/app/receipts
+      - keys:/app/keys:ro
       - ./answer.txt:/app/answer.txt:ro
 
   # docker compose run --rm eval --receipts /app/receipts/receipts.jsonl --n 10
@@ -30,10 +36,12 @@ services:
     build: .
     entrypoint: ["vouch-eval"]
     environment:
-      VOUCH_HMAC_KEY: ${VOUCH_HMAC_KEY:?set VOUCH_HMAC_KEY}
+      VOUCH_PUBLIC_KEY: /app/keys/vouch.pub.pem
     volumes:
       - receipts:/app/receipts
+      - keys:/app/keys:ro
 
 volumes:
   receipts:
   fixtures:
+  keys:

@@ -26,64 +26,38 @@ func sampleReceipt() *Receipt {
 	}
 }
 
-func TestSignVerifyRoundtrip(t *testing.T) {
-	key := []byte("test-key")
+func TestBodyIsCanonicalAndRoundTrips(t *testing.T) {
 	r := sampleReceipt()
 	r.ResultDigest = Digest(r.ResultCanonical)
-
-	if err := r.Sign(key); err != nil {
-		t.Fatalf("Sign: %v", err)
-	}
-	if r.Sig == "" {
-		t.Fatal("empty signature after Sign")
-	}
-	ok, err := r.Verify(key)
+	body, err := r.Body()
 	if err != nil {
-		t.Fatalf("Verify: %v", err)
+		t.Fatal(err)
 	}
-	if !ok {
-		t.Fatal("signature did not verify")
+	again, err := Canonicalize(body)
+	if err != nil || string(again) != string(body) {
+		t.Fatalf("body is not canonical: %s", body)
+	}
+	if second, _ := r.Body(); string(second) != string(body) {
+		t.Fatal("Body must be deterministic: its bytes are what gets signed")
+	}
+	parsed, err := ParseBody(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reencoded, err := parsed.Body()
+	if err != nil || string(reencoded) != string(body) {
+		t.Fatalf("ParseBody(Body()) changed the receipt:\n%s\n%s", body, reencoded)
 	}
 }
 
-func TestVerifyDetectsTampering(t *testing.T) {
-	key := []byte("test-key")
+func TestBodyCoversFacts(t *testing.T) {
+	// Signatures cover Body, so a changed fact must change the bytes.
 	r := sampleReceipt()
-	if err := r.Sign(key); err != nil {
-		t.Fatal(err)
-	}
+	before, _ := r.Body()
 	r.Facts[0].Value = 68.0 // the classic hallucination
-	ok, err := r.Verify(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ok {
-		t.Fatal("tampered receipt verified; it must not")
-	}
-}
-
-func TestVerifyRejectsWrongKey(t *testing.T) {
-	r := sampleReceipt()
-	if err := r.Sign([]byte("key-a")); err != nil {
-		t.Fatal(err)
-	}
-	ok, err := r.Verify([]byte("key-b"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ok {
-		t.Fatal("verified under wrong key")
-	}
-}
-
-func TestVerifyUnsignedIsFalse(t *testing.T) {
-	r := sampleReceipt()
-	ok, err := r.Verify([]byte("k"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ok {
-		t.Fatal("unsigned receipt must not verify")
+	after, _ := r.Body()
+	if string(before) == string(after) {
+		t.Fatal("a changed fact did not change the signed bytes")
 	}
 }
 

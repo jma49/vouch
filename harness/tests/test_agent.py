@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from keys import EVAL_KEY_ID, EVAL_KEYS, EVAL_PRIV, proxy_env
 
 from vouch_harness import market, signing
 from vouch_harness.agent import cli as agent_cli
@@ -467,11 +468,12 @@ def test_execute_writes_a_run_directory_and_resumes(tmp_path: Path) -> None:
 
 def test_execute_records_the_signing_key_id(tmp_path: Path) -> None:
     spec = runner.RunSpec("fake", runner.Task("t01", "q"), sample=0)
-    env = {"VOUCH_HMAC_KEY": "some-key"}
+    env = {"VOUCH_SIGNING_KEY": str(EVAL_PRIV)}
     d = runner.execute(
         spec, ScriptedClient([answer("ok")]), tmp_path, PROXY, ROOT, env, _in_process
     )
-    assert json.loads((d / "meta.json").read_text())["key_id"] == signing.key_id("some-key")
+    assert json.loads((d / "meta.json").read_text())["key_id"] == EVAL_KEY_ID
+    assert signing.signing_key_id(EVAL_PRIV) == EVAL_KEY_ID
 
 
 # A stand-in MCP server: answers initialize per its first argument, then
@@ -526,9 +528,9 @@ def test_end_to_end_through_the_go_proxy(tmp_path: Path) -> None:
             answer("Both moved."),
         ]
     )
-    env = {"VOUCH_HMAC_KEY": "vouch-eval-key", "PATH": "/usr/bin:/bin"}
+    env = proxy_env(tmp_path)
     d = runner.execute(spec, client, tmp_path, PROXY, ROOT / "schemas", env)
-    receipts = load_log(d / "receipts.jsonl", key=b"vouch-eval-key")
+    receipts = load_log(d / "receipts.jsonl", EVAL_KEYS)
     assert [r.session_id for r in receipts] == ["fake.t08.s0"] * 2
     assert {f.entity for r in receipts for f in r.facts} == {"NVDA", "AMD"}
     nvda_last = next(f for f in receipts[0].facts if f.metric == "last_price")
@@ -546,7 +548,7 @@ def test_end_to_end_malformed_calls_do_not_end_the_run(tmp_path: Path) -> None:
             answer("NVDA moved."),
         ]
     )
-    env = {"VOUCH_HMAC_KEY": "vouch-eval-key", "PATH": "/usr/bin:/bin"}
+    env = proxy_env(tmp_path)
     d = runner.execute(spec, client, tmp_path, PROXY, ROOT / "schemas", env)
     meta = json.loads((d / "meta.json").read_text())
     assert meta["finished"] and meta["tool_calls"] == 3
@@ -554,5 +556,5 @@ def test_end_to_end_malformed_calls_do_not_end_the_run(tmp_path: Path) -> None:
     assert tool_msgs[0].startswith("ERROR:") and "get_price" in tool_msgs[0]
     assert tool_msgs[1].startswith("ERROR:")
     assert json.loads(tool_msgs[2])["symbol"] == "NVDA"
-    receipts = load_log(d / "receipts.jsonl", key=b"vouch-eval-key")
+    receipts = load_log(d / "receipts.jsonl", EVAL_KEYS)
     assert "NVDA" in {f.entity for r in receipts for f in r.facts}

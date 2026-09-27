@@ -11,7 +11,6 @@ README is stale, which is how CI keeps hand edits out.
 from __future__ import annotations
 
 import argparse
-import os
 import random
 import re
 import sys
@@ -24,6 +23,7 @@ from vouch_verifier.claims import extract_claims
 from vouch_verifier.matcher import load_tolerances, match_claims
 from vouch_verifier.receipts import Receipt, load_log
 from vouch_verifier.report import md_cell
+from vouch_verifier.signing import load_keyring
 from vouch_verifier.verdict import Tolerance
 
 EVAL_RUNS = 10
@@ -92,8 +92,10 @@ def render_example(answer: str, receipts: list[Receipt], tolerances: dict[str, T
     return "\n".join(lines) + "\n"
 
 
-def regenerate(readme: str, root: Path, key: bytes) -> str:
-    receipts = load_log(root / "testdata" / "receipts_golden.jsonl", key=key)
+def regenerate(readme: str, root: Path) -> str:
+    # The golden log is always signed with the committed golden test key.
+    keys = load_keyring([root / "testdata" / "keys" / "golden.pub.pem"])
+    receipts = load_log(root / "testdata" / "receipts_golden.jsonl", keys)
     tolerances = load_tolerances(root / "tolerance.yaml")
     result = run_eval(receipts, n=EVAL_RUNS, seed=EVAL_SEED, tolerances=tolerances)
     answer = (root / "examples" / "answer.txt").read_text(encoding="utf-8")
@@ -108,13 +110,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--check", action="store_true", help="fail if the README is stale")
     args = p.parse_args(argv)
 
-    key = os.environ.get("VOUCH_HMAC_KEY", "").encode()
-    if not key:
-        print("readme: VOUCH_HMAC_KEY must be set to verify the golden log", file=sys.stderr)
-        return 2
-
     current = args.readme.read_text(encoding="utf-8")
-    updated = regenerate(current, args.readme.resolve().parent, key)
+    updated = regenerate(current, args.readme.resolve().parent)
     if args.check:
         if updated != current:
             print("readme: generated sections are stale; run `make readme`", file=sys.stderr)

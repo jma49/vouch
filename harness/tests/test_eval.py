@@ -4,6 +4,7 @@ import random
 from pathlib import Path
 
 import pytest
+from keys import GOLDEN_KEYS, GOLDEN_PUB
 
 from vouch_harness.cli import main
 from vouch_harness.eval import EvalResult, run_eval, summarize
@@ -11,12 +12,11 @@ from vouch_harness.report import to_json, to_markdown
 from vouch_verifier.receipts import Receipt, load_log
 
 GOLDEN = Path(__file__).parent.parent.parent / "testdata" / "receipts_golden.jsonl"
-KEY = b"vouch-golden-key"
 
 
 @pytest.fixture(scope="module")
 def receipts() -> list[Receipt]:
-    return load_log(GOLDEN, key=KEY)
+    return load_log(GOLDEN, GOLDEN_KEYS)
 
 
 @pytest.fixture(scope="module")
@@ -75,7 +75,7 @@ def test_cli_refuses_single_run(capsys: pytest.CaptureFixture[str]) -> None:
 def test_cli_end_to_end(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("VOUCH_HMAC_KEY", KEY.decode())
+    monkeypatch.setenv("VOUCH_PUBLIC_KEY", str(GOLDEN_PUB))
     rc = main(["--receipts", str(GOLDEN), "--n", "2"])
     assert rc == 0
     out = capsys.readouterr().out

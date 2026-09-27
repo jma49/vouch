@@ -13,10 +13,11 @@ import (
 	"github.com/jma49/vouch/proxy/internal/fixture"
 	"github.com/jma49/vouch/proxy/internal/mcp"
 	"github.com/jma49/vouch/proxy/internal/proxy"
+	"github.com/jma49/vouch/proxy/internal/sign/signtest"
 	"github.com/jma49/vouch/proxy/internal/store"
 )
 
-var key = []byte("test-key")
+var signer = signtest.Signer(1)
 
 func fakeUpstream(t *testing.T, conn *mcp.Conn) {
 	t.Helper()
@@ -68,14 +69,14 @@ func runSession(t *testing.T, up *proxy.Upstream, clk clock.Clock, calls []map[s
 		t.Fatal(err)
 	}
 	logPath := filepath.Join(t.TempDir(), "receipts.jsonl")
-	rlog, err := store.Open(logPath)
+	rlog, err := store.Open(logPath, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	srv := &proxy.Server{
 		Down: mcp.NewConn(downIn, proxyOut), Upstreams: []*proxy.Upstream{up},
-		Schemas: schemas, Log: rlog, Key: key, SessionID: "s-fix", Clock: clk, Logf: t.Logf,
+		Schemas: schemas, Log: rlog, SessionID: "s-fix", Clock: clk, Logf: t.Logf,
 	}
 	done := make(chan error, 1)
 	go func() { done <- srv.Run() }()
@@ -95,7 +96,7 @@ func runSession(t *testing.T, up *proxy.Upstream, clk clock.Clock, calls []map[s
 	}
 	rlog.Close()
 
-	receipts, err := store.Scan(logPath)
+	receipts, err := store.ScanVerified(logPath, signtest.Keyring(signer))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,9 +105,6 @@ func runSession(t *testing.T, up *proxy.Upstream, clk clock.Clock, calls []map[s
 		WallTime time.Time
 	}, len(receipts))
 	for i, r := range receipts {
-		if ok, err := r.Verify(key); err != nil || !ok {
-			t.Fatalf("receipt %d signature: ok=%v err=%v", i, ok, err)
-		}
 		out[i].Digest = r.ResultDigest
 		out[i].WallTime = r.WallTime
 	}

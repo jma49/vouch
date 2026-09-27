@@ -5,7 +5,7 @@ description = "Eval harness for vouch: mutation injection, gold sets, repeated-r
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-dependencies = ["vouch-verifier", "pyyaml>=6"]
+dependencies = ["vouch-verifier", "pyyaml>=6", "cryptography>=42"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.16", "mypy>=1.10", "types-PyYAML", "pytest-cov>=5"]

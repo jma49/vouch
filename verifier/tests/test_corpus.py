@@ -75,7 +75,6 @@ def _receipts(raw: list[dict[str, Any]]) -> list[Receipt]:
                 wall_time="2026-07-24T20:00:00Z",
                 logical_time=turn,
                 upstream_latency_ms=0,
-                sig="",
             )
         )
     return out

@@ -30,10 +30,11 @@ from vouch_harness.eval import Stats, summarize
 from vouch_harness.label import store
 from vouch_harness.label.agreement import agreement
 from vouch_harness.label.runs import discover
-from vouch_harness.signing import key_id, resolve_key
+from vouch_harness.signing import resolve_public_keys
 from vouch_verifier.claims import extract_claims
 from vouch_verifier.matcher import load_tolerances, match_claims
 from vouch_verifier.receipts import ReceiptError, load_log
+from vouch_verifier.signing import Keyring, load_keyring
 from vouch_verifier.verdict import FAILURES, Tolerance
 
 # A human label that means the answer misreports its tools.
@@ -76,7 +77,7 @@ def score_runs(
     runs_dir: Path,
     labels: dict[store.SpanKey, store.LabelRecord],
     tolerances: dict[str, Tolerance],
-    key: bytes | None,
+    keys: Keyring | None,
 ) -> list[RunScore]:
     human: dict[str, dict[tuple[int, int], str]] = defaultdict(dict)
     for (run, start, end), rec in labels.items():
@@ -85,15 +86,16 @@ def score_runs(
     for run_id in discover(runs_dir):
         d = runs_dir / run_id
         signed_by = json.loads((d / "meta.json").read_text(encoding="utf-8")).get("key_id")
-        if key is not None and signed_by and signed_by != key_id(key):
+        if keys is not None and signed_by and signed_by not in keys:
             raise ReceiptError(
-                f"{run_id}: signed with key id {signed_by}, verifying with key id "
-                f"{key_id(key)}; set VOUCH_HMAC_KEY or --key to the key that signed it"
+                f"{run_id}: signed with key id {signed_by}, but only "
+                f"{', '.join(sorted(keys))} are trusted; pass its public key with "
+                "--public-key or VOUCH_PUBLIC_KEY"
             )
         answer = (d / "answer.txt").read_text(encoding="utf-8").rstrip("\n")
         try:
             receipts = (
-                load_log(d / "receipts.jsonl", key=key) if (d / "receipts.jsonl").exists() else []
+                load_log(d / "receipts.jsonl", keys) if (d / "receipts.jsonl").exists() else []
             )
         except ReceiptError as e:
             raise ReceiptError(f"{run_id}: {e}") from e
@@ -323,9 +325,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--labels", type=Path, default=Path("eval/labels"))
     p.add_argument("--tolerances", type=Path, default=Path("tolerance.yaml"))
     p.add_argument(
-        "--key",
-        default=None,
-        help="receipt HMAC key (default: $VOUCH_HMAC_KEY, else the public eval key)",
+        "--public-key",
+        type=Path,
+        action="append",
+        default=[],
+        help="trusted Ed25519 public key PEM (repeatable; default: $VOUCH_PUBLIC_KEY, "
+        "else the public eval key)",
     )
     p.add_argument("--format", choices=["md", "json"], default="md")
     args = p.parse_args(argv)
@@ -336,10 +341,10 @@ def main(argv: list[str] | None = None) -> int:
         for path in sorted(args.labels.glob("*.jsonl"))
         if path.stem != args.labeler
     }
-    key = resolve_key(args.key).encode("utf-8")
     try:
-        scores = score_runs(args.runs, primary, load_tolerances(args.tolerances), key)
-    except ReceiptError as e:
+        keys = load_keyring(list(resolve_public_keys(args.public_key)))
+        scores = score_runs(args.runs, primary, load_tolerances(args.tolerances), keys)
+    except (ReceiptError, OSError, ValueError) as e:
         print(f"vouch-eval-real: {e}", file=sys.stderr)
         return 2
     if args.format == "json":

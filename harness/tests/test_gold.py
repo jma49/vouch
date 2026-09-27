@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from keys import GOLDEN_KEYS
 
 from vouch_harness.answers import synthesize
 from vouch_harness.gold import build_gold_set
@@ -13,12 +14,11 @@ from vouch_verifier.receipts import Receipt, load_log
 from vouch_verifier.verdict import FAILURES, Verdict
 
 GOLDEN = Path(__file__).parent.parent.parent / "testdata" / "receipts_golden.jsonl"
-KEY = b"vouch-golden-key"
 
 
 @pytest.fixture(scope="module")
 def receipts() -> list[Receipt]:
-    return load_log(GOLDEN, key=KEY)
+    return load_log(GOLDEN, GOLDEN_KEYS)
 
 
 def entities(receipts: list[Receipt]) -> set[str]:

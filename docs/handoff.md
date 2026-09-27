@@ -72,7 +72,7 @@ entry whenever a choice closes off an alternative (AGENTS.md).
 - Revisit when: an external system requires JCS. Then add a JCS
   projection at the publishing layer; do not change the evidence.
 
-**Signatures: Ed25519 replaces HMAC outright** (#53, in progress)
+**Signatures: Ed25519 replaces HMAC outright** (#53)
 - Chosen: Ed25519 only, keys via `vouch keygen`, verifier keyring.
 - Rejected: supporting HMAC and Ed25519 side by side.
 - Why: HMAC cannot give third-party verification (whoever verifies can
@@ -83,15 +83,15 @@ entry whenever a choice closes off an alternative (AGENTS.md).
 - Revisit when: never for HMAC; key storage beyond files (KMS, HSM)
   when a real deployment needs it.
 
-**Envelope: DSSE, signing exact payload bytes** (#53, in progress)
+**Envelope: DSSE, signing exact payload bytes** (#53)
 - Chosen: each log line is a DSSE envelope; the signature covers the
   base64 payload bytes.
 - Rejected: signing a canonical re-serialization of the receipt, as
   HMAC did.
 - Why: a third party verifies with any Ed25519 library, without our
   canonicalizer; DSSE is the format Sigstore and in-toto use.
-- Cost: the log is no longer human-readable or greppable (base64); we
-  need a small decode tool.
+- Cost: the log is no longer human-readable or greppable (base64).
+  Mitigated by `vouch receipts cat`, which decodes a log to JSON lines.
 - Revisit when: readability becomes a daily pain; the answer is
   tooling, not a weaker format.
 
@@ -113,6 +113,37 @@ entry whenever a choice closes off an alternative (AGENTS.md).
 - Revisit when: the hash chain lands (#54). An entry that was never
   acknowledged may be better dropped so the chain states only what was
   delivered.
+
+**Committed, public test keys** (#53)
+- Chosen: `testdata/keys/{golden,eval}.pem` are in the repository.
+- Rejected: generating keys in CI, or keeping the eval key secret.
+- Why: the golden log and the eval runs must be reproducible by anyone;
+  Ed25519 is deterministic, so a fixed key makes regeneration
+  byte-stable.
+- Cost: those receipts prove integrity of published data, not who
+  produced it; a README next to the keys says so. The proxy refuses
+  keys readable by other users and git does not keep file modes, so the
+  harness copies the eval key to a private 0600 file per batch.
+- Revisit when: published eval results need to prove authorship; sign
+  those with a maintainer key kept out of the repository.
+
+**The log reader checks structure, not signatures** (#53)
+- Chosen: the proxy's store decodes envelopes on startup without
+  verifying them; `vouch receipts verify` and the Python verifier do.
+- Rejected: verifying in the store with the proxy's own key.
+- Why: trust belongs to whoever reads the log, with their own keyring;
+  the proxy would only be checking its own signatures.
+- Cost: a proxy restarted on a tampered log keeps appending to it; the
+  tampering is caught when the log is verified, not before.
+- Revisit when: the hash chain lands (#54), since appending then
+  extends a chain whose head the proxy should trust.
+
+**docker-compose mounts the whole key volume into verify and eval**
+- Chosen: one `keys` volume, read-write for the proxy, read-only for
+  the containers that only need the public key.
+- Cost: those containers can read the private key.
+- Revisit when: compose is used beyond local runs; split the public key
+  into its own volume.
 
 ### Verifier heuristics
 

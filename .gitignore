@@ -34,3 +34,7 @@ coverage.out
 
 # Model response cache for the real-agent eval (regenerable; runs are the artifact)
 /eval/.cache/
+
+# Private signing keys (test keys under testdata/keys are the exception)
+*.pem
+!testdata/keys/*.pem

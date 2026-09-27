@@ -5,7 +5,7 @@ description = "Verifier for vouch: matches numeric claims in agent answers again
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-dependencies = ["pyyaml>=6"]
+dependencies = ["pyyaml>=6", "cryptography>=42"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.16", "mypy>=1.10", "types-PyYAML", "pytest-cov>=5", "hypothesis>=6.100"]

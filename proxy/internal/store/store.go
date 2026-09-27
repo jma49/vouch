@@ -18,14 +18,18 @@ import (
 	"sync"
 
 	"github.com/jma49/vouch/proxy/internal/receipt"
+	"github.com/jma49/vouch/proxy/internal/sign"
 )
 
-// Log is an append-only receipt log backed by a single JSONL file.
-// Appends are serialized and fsynced; (session_id, turn_index) pairs
-// are unique across the life of the log (replay protection, design
-// section 3.1).
+// Log is an append-only receipt log backed by a single JSONL file, one
+// signed DSSE envelope per line. Appends are serialized and fsynced;
+// (session_id, turn_index) pairs are unique across the life of the log
+// (replay protection, design section 3.1). The log reads envelopes
+// structurally and never judges signatures: trust is the verifier's
+// decision, made with its own keyring.
 type Log struct {
 	mu     sync.Mutex
+	signer *sign.Signer
 	f      logFile
 	path   string
 	size   int64                  // bytes of complete, acknowledged lines
@@ -52,8 +56,10 @@ type sessionTurn struct {
 }
 
 // Open opens (or creates) the receipt log at path and rebuilds the
-// uniqueness index from existing entries.
-func Open(path string) (*Log, error) {
+// uniqueness index from existing entries. signer signs every appended
+// receipt; a log opened with a nil signer can be read but refuses
+// appends.
+func Open(path string, signer *sign.Signer) (*Log, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("store: mkdir: %w", err)
 	}
@@ -61,7 +67,7 @@ func Open(path string) (*Log, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: open: %w", err)
 	}
-	l := &Log{f: f, path: path, seen: make(map[sessionTurn]string)}
+	l := &Log{f: f, path: path, signer: signer, seen: make(map[sessionTurn]string)}
 	if err := l.rebuild(); err != nil {
 		f.Close()
 		return nil, err
@@ -92,8 +98,8 @@ func (l *Log) rebuild() error {
 		}
 		terminated := raw[len(raw)-1] == '\n'
 		if body := bytes.TrimSpace(raw); len(body) > 0 {
-			var r receipt.Receipt
-			if err := json.Unmarshal(body, &r); err != nil {
+			r, err := decodeLine(body)
+			if err != nil {
 				if terminated {
 					return fmt.Errorf("store: %s line %d: %w", l.path, line, err)
 				}
@@ -129,19 +135,23 @@ func (l *Log) rebuild() error {
 	return nil
 }
 
-// Append canonicalizes, appends, and fsyncs one signed receipt.
-// It rejects unsigned receipts and (session_id, turn_index) reuse.
+// Append signs one receipt, then appends and fsyncs its envelope as a
+// single line. It rejects (session_id, turn_index) reuse.
 func (l *Log) Append(r *receipt.Receipt) error {
-	if r.Sig == "" {
-		return fmt.Errorf("store: refusing to append unsigned receipt %s", r.ReceiptID)
+	if l.signer == nil {
+		return fmt.Errorf("store: log %s was opened without a signing key", l.path)
 	}
-	raw, err := json.Marshal(r)
+	body, err := r.Body()
 	if err != nil {
-		return fmt.Errorf("store: marshal receipt %s: %w", r.ReceiptID, err)
+		return fmt.Errorf("store: %w", err)
+	}
+	raw, err := json.Marshal(l.signer.Sign(receipt.PayloadType, body))
+	if err != nil {
+		return fmt.Errorf("store: marshal envelope for %s: %w", r.ReceiptID, err)
 	}
 	line, err := receipt.Canonicalize(raw)
 	if err != nil {
-		return fmt.Errorf("store: canonicalize receipt %s: %w", r.ReceiptID, err)
+		return fmt.Errorf("store: canonicalize envelope for %s: %w", r.ReceiptID, err)
 	}
 
 	l.mu.Lock()
@@ -185,8 +195,40 @@ func (l *Log) Close() error {
 	return l.f.Close()
 }
 
-// Scan reads every receipt in the log at path, in append order.
+// decodeLine reads one log line: a DSSE envelope whose payload is a
+// receipt body. The signature is not checked (see Log).
+func decodeLine(line []byte) (*receipt.Receipt, error) {
+	var env sign.Envelope
+	if err := json.Unmarshal(line, &env); err != nil {
+		return nil, fmt.Errorf("not an envelope: %w", err)
+	}
+	if env.PayloadType != receipt.PayloadType {
+		return nil, fmt.Errorf("payload type %q, want %q", env.PayloadType, receipt.PayloadType)
+	}
+	body, err := sign.Decode(env)
+	if err != nil {
+		return nil, err
+	}
+	return receipt.ParseBody(body)
+}
+
+// Scan reads every receipt in the log at path, in append order,
+// without verifying signatures.
 func Scan(path string) ([]receipt.Receipt, error) {
+	return scan(path, nil)
+}
+
+// ScanVerified reads every receipt in the log at path and requires each
+// envelope to carry a valid signature from a key in keys. It is the Go
+// counterpart of the Python verifier's load_log.
+func ScanVerified(path string, keys sign.Keyring) ([]receipt.Receipt, error) {
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("store: no trusted keys to verify %s with", path)
+	}
+	return scan(path, keys)
+}
+
+func scan(path string, keys sign.Keyring) ([]receipt.Receipt, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("store: open: %w", err)
@@ -194,23 +236,38 @@ func Scan(path string) ([]receipt.Receipt, error) {
 	defer f.Close()
 
 	var out []receipt.Receipt
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1<<20), 16<<20)
-	line := 0
-	for sc.Scan() {
-		line++
-		raw := bytes.TrimSpace(sc.Bytes())
-		if len(raw) == 0 {
-			continue
+	br := bufio.NewReaderSize(f, 1<<20)
+	for line := 1; ; line++ {
+		raw, err := br.ReadBytes('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("store: scan %s: %w", path, err)
 		}
-		var r receipt.Receipt
-		if err := json.Unmarshal(raw, &r); err != nil {
-			return nil, fmt.Errorf("store: %s line %d: %w", path, line, err)
+		if trimmed := bytes.TrimSpace(raw); len(trimmed) > 0 {
+			r, err := readLine(trimmed, keys)
+			if err != nil {
+				return nil, fmt.Errorf("store: %s line %d: %w", path, line, err)
+			}
+			out = append(out, *r)
 		}
-		out = append(out, r)
+		if err != nil {
+			return out, nil
+		}
 	}
-	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("store: scan %s: %w", path, err)
+}
+
+// readLine decodes one log line and, when keys is non-nil, requires a
+// valid signature from one of them.
+func readLine(line []byte, keys sign.Keyring) (*receipt.Receipt, error) {
+	if keys == nil {
+		return decodeLine(line)
 	}
-	return out, nil
+	var env sign.Envelope
+	if err := json.Unmarshal(line, &env); err != nil {
+		return nil, fmt.Errorf("not an envelope: %w", err)
+	}
+	body, _, err := sign.Open(env, receipt.PayloadType, keys)
+	if err != nil {
+		return nil, err
+	}
+	return receipt.ParseBody(body)
 }
