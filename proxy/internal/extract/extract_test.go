@@ -270,3 +270,31 @@ func TestLoadExamplePacks(t *testing.T) {
 		t.Fatalf("run_sql schema: %+v", schemas)
 	}
 }
+
+// TestExtractSkipsUnderflowAndRejectsBarePointers pins #102.
+func TestExtractSkipsUnderflowAndRejectsBarePointers(t *testing.T) {
+	s, err := LoadSchema(writeSchema(t, "get_indicators.yaml", indicatorsSchema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := s.Extract([]byte(`{"symbol":"NVDA","rsi_14":1e-400,"close":0e5,"macd":{"histogram":0.0}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]float64{}
+	for _, f := range facts {
+		got[f.Metric] = f.Value
+	}
+	if _, ok := got["rsi_14"]; ok {
+		t.Fatal("an underflowed literal was receipted as 0")
+	}
+	if len(got) != 2 {
+		t.Fatalf("zeros written as zeros must stay: %v", got)
+	}
+	for _, bad := range []string{"close", "/a~2b", "/a~"} {
+		body := "tool: x\nfacts:\n  - ptr: " + bad + "\n    metric: m\n    tol_class: price\n"
+		if _, err := LoadSchema(writeSchema(t, "bad.yaml", body)); err == nil || !strings.Contains(err.Error(), "JSON pointer") {
+			t.Errorf("ptr %q: %v", bad, err)
+		}
+	}
+}

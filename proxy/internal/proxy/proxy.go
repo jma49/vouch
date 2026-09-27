@@ -642,9 +642,9 @@ func (s *Server) handleToolsCall(ctx context.Context, m *mcp.Message) error {
 		return s.replyError(m, mcp.CodeInvalidParams, fmt.Sprintf("tools/call: unknown tool %q", params.Name))
 	}
 
-	start := s.Clock.Now()
+	elapsed := s.Clock.Stopwatch()
 	result, err := u.Client.CallContext(ctx, "tools/call", json.RawMessage(m.Params))
-	latency := s.Clock.Now().Sub(start).Milliseconds()
+	latency := elapsed().Milliseconds()
 	if cancelled(ctx, err) {
 		return nil // no response, and no receipt: the agent saw nothing
 	}
