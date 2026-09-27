@@ -200,3 +200,63 @@ func TestReplayMissingFixtureFails(t *testing.T) {
 		t.Fatalf("got %v, want no-fixture error", err)
 	}
 }
+
+// TestKeyComparesArgumentsAsValues pins #64: literals of one number
+// share a fixture, and different values never do, including integers
+// that float64 would round to the same value.
+func TestKeyComparesArgumentsAsValues(t *testing.T) {
+	key := func(args string) string {
+		t.Helper()
+		k, err := fixture.Key("get_bars", []byte(args))
+		if err != nil {
+			t.Fatalf("Key(%s): %v", args, err)
+		}
+		return k
+	}
+	same := [][]string{
+		{`{"limit":5}`, `{"limit":5.0}`, `{"limit":5e0}`, `{"limit":50e-1}`, `{"limit":0.5E+1}`, `{"limit":500E-2}`},
+		{`{"x":0}`, `{"x":-0}`, `{"x":0.000}`, `{"x":0e10}`},
+		{`{"x":[1,{"y":2.50}]}`, `{"x":[1.0,{"y":2.5}]}`},
+		{`{"x":-1.5}`, `{"x":-15e-1}`},
+	}
+	for _, group := range same {
+		for _, args := range group[1:] {
+			if key(args) != key(group[0]) {
+				t.Errorf("%s and %s should share a fixture", group[0], args)
+			}
+		}
+	}
+	differ := [][2]string{
+		{`{"limit":5}`, `{"limit":6}`},
+		{`{"limit":5}`, `{"limit":"5"}`},
+		{`{"x":1.5}`, `{"x":-1.5}`},
+		{`{"x":12345678901234567890}`, `{"x":12345678901234567891}`},
+		{`{"x":1e2}`, `{"x":1e-2}`},
+	}
+	for _, d := range differ {
+		if key(d[0]) == key(d[1]) {
+			t.Errorf("%s and %s must not share a fixture", d[0], d[1])
+		}
+	}
+	if k1, k2 := key(`{"limit":5}`), func() string {
+		k, _ := fixture.Key("get_quote", []byte(`{"limit":5}`))
+		return k
+	}(); k1 == k2 {
+		t.Error("different tools must not share a fixture")
+	}
+}
+
+// TestReplayMatchesANumberSpelledDifferently is #64 end to end: a call
+// recorded with 5 replays when the agent sends 5.0.
+func TestReplayMatchesANumberSpelledDifferently(t *testing.T) {
+	fs := &fixture.Store{Dir: t.TempDir()}
+	at := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	if err := fs.SaveCall("get_bars", json.RawMessage(`{"limit":5}`), json.RawMessage(`{"content":[]}`), at); err != nil {
+		t.Fatal(err)
+	}
+	rep := &fixture.Replayer{Upstream: "fake", Store: fs, Tools: json.RawMessage(`{"tools":[]}`)}
+	params := map[string]any{"name": "get_bars", "arguments": map[string]any{"limit": json.Number("5.0")}}
+	if _, err := rep.Call("tools/call", params); err != nil {
+		t.Fatalf("replay of limit=5.0 against a limit=5 recording: %v", err)
+	}
+}

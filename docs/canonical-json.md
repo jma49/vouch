@@ -84,7 +84,10 @@ A canonical document is produced from a parsed JSON value as follows.
   either may be what an agent saw.
 - Where semantic equality is what matters, the caller normalizes before
   canonicalizing. Fixture replay keys are the case for this today:
-  `"limit": 5` and `"limit": 5.0` from an agent are the same request.
+  `"limit": 5` and `"limit": 5.0` from an agent are the same request,
+  so the key spells every number as `<digits>e<exponent>` before
+  hashing (`5`, `5.0`, and `50e-1` all become `5e0`), exactly and
+  without going through a double (#64).
 - The rules are a strict subset of what JSON permits, so a canonical
   document is valid JSON and canonicalizing it again returns it
   unchanged.

@@ -244,7 +244,7 @@ Directly responding to the benchmark-reliability problem: evaluators must be rep
 
 ### 8.1 Fixture record/replay
 
-Upstream responses are recorded once and content-addressed by `hash(tool + canonical_args)`, then replayed for all subsequent runs (VCR/cassette pattern). The proxy has a `--mode=record|replay|live` flag. Replay mode never touches the network.
+Upstream responses are recorded once and content-addressed by `hash(tool + canonical_args)`, then replayed for all subsequent runs (VCR/cassette pattern). The key compares arguments as values: numbers are normalized first, so `5` and `5.0` hit the same fixture (#64). The proxy has a `--mode=record|replay|live` flag. Replay mode never touches the network.
 
 ### 8.2 Clock injection
 

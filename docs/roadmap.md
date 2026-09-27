@@ -128,7 +128,7 @@ rewritten to match.
 
 ---
 
-## Phase 4 — Canonicalization done properly — contract specified, fuzzing done; fixture keys todo
+## Phase 4 — Canonicalization done properly — done
 
 Goal: the canonical form is precisely specified, and cross-language
 equality is proven by fuzzing rather than by a handful of vectors.
@@ -146,7 +146,7 @@ handoff.md.
 | Vectors pin number literals and code-point key order | done (issue #52) |
 | Differential fuzzing: `go test -fuzz` corpus replayed through Python; Hypothesis-generated JSON replayed through Go; outputs byte-equal | done (#63); found #61 (Go accepted a stray `}` after the value) and #62 (no shared nesting limit; Python crashed past ~1000 levels) |
 | Fuzz corpus committed; CI runs a short fuzz pass | done (#63): `proxy/internal/receipt/testdata/fuzz`, 30 s in CI, `make fuzz` to grow it |
-| Fixture replay keys normalize numbers in arguments (`5` vs `5.0`) | todo (#64) |
+| Fixture replay keys normalize numbers in arguments (`5` vs `5.0`) | done (#64) |
 
 Exit criteria: differential fuzz runs clean for a fixed budget in CI.
 

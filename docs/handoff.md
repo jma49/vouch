@@ -83,6 +83,21 @@ entry whenever a choice closes off an alternative (AGENTS.md).
   exist outside test data, which was regenerated).
 - Revisit when: a real upstream legitimately nests deeper.
 
+**Fixture keys normalize numbers exactly, as decimal strings** (#64)
+- Chosen: the replay key hashes the arguments with every number
+  rewritten as `<digits>e<exponent>` (no leading or trailing zeros);
+  the fixture file still stores the literal arguments.
+- Rejected: parsing numbers as float64 (integers above 2^53 and long
+  decimals would collide, replaying one request's data for another);
+  normalizing in the receipt (the receipt must keep the literal).
+- Why: an agent that sends `5.0` where it once sent `5` is making the
+  same request, and a replay miss aborts a whole eval run.
+- Cost: fixtures recorded before #64 are keyed differently and must be
+  re-recorded (none were committed). Exponents beyond ±2^40 are left
+  as written, so absurd spellings of one value may still miss.
+- Revisit when: a tool treats `5` and `5.0` differently (then the key
+  must be per-tool configurable).
+
 **Differential fuzzing runs through a CLI, not a shared library** (#63)
 - Chosen: `vouch canon --lines` (base64 in, base64 or `!error` out);
   the Python test batches documents through it. The Go fuzz target
