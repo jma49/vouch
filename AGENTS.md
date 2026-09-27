@@ -149,8 +149,13 @@ beyond status marks.
 
 `docs/handoff.md` rules: overwrite the "Current state" and "Next
 steps" sections each session (it is a snapshot, not a log); append one
-line to "Session log". Keep it under ~150 lines. Record facts: what is
-done and verified, what is in progress, what is blocked and why.
+line to "Session log". "Decisions and trade-offs" is cumulative:
+whenever a choice closes off an alternative, add an entry stating what
+was chosen, what was rejected, why, the cost accepted, and when to
+revisit. A trade-off mentioned only in a commit message or PR is not
+recorded. Keep everything except "Decisions and trade-offs" under ~150
+lines. Record facts: what is done and verified, what is in progress,
+what is blocked and why.
 
 `docs/pitfalls.md` rules: one entry per trap, with **Symptom**,
 **Cause**, **Fix / workaround**, and **Status** (`open`, `fixed in

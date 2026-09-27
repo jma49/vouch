@@ -38,8 +38,8 @@ Snapshot of where work stands, for the next session. Overwrite
 2. Work that needs no model calls, in suggested order:
    - Phase 3: Ed25519 signatures with key ids, hash chain
      (`prev_digest`), tamper suite, `docs/threat-model.md`.
-   - Phase 4: decide JCS vs documented literal-preserving contract;
-     differential fuzzing Go <-> Python.
+   - Phase 4: differential fuzzing Go <-> Python (the contract is now
+     specified; JCS was decided against, see below).
    - Phase 5: concurrent upstream client (P-021), session resume
      (P-020), server-to-client request forwarding (P-022).
    - P-044: citation channel so agents can cite receipts.
@@ -48,9 +48,120 @@ Snapshot of where work stands, for the next session. Overwrite
 
 - Phase 2: when can a Gemini run happen, and is committing its outputs
   under `eval/runs/` acceptable?
-- Phase 3: replace HMAC with Ed25519 outright, or support both?
-- Phase 4: implement real JCS, or document the literal-preserving
-  contract and drop the RFC 8785 claim?
+
+## Decisions and trade-offs
+
+Every decision that gave something up. Format: what was chosen, the
+alternative, why, the cost we accepted, and when to revisit. Add an
+entry whenever a choice closes off an alternative (AGENTS.md).
+
+### Integrity and formats
+
+**Canonical JSON: vouch's own contract, not RFC 8785 (JCS)** (#52)
+- Chosen: number literals copied exactly; keys by code point; spec in
+  `docs/canonical-json.md`.
+- Rejected: JCS, which parses numbers as doubles.
+- Why: a receipt must record what the tool returned. JCS would change
+  integers above 2^53, long decimals (18-decimal token amounts), and
+  trailing zeros (`181.50`), so receipts would attest to numbers the
+  agent never saw.
+- Cost: no off-the-shelf library reproduces our digests; we maintain a
+  one-page spec and two implementations; numerically equal payloads
+  written differently digest differently, so fixture keys must
+  normalize numbers themselves.
+- Revisit when: an external system requires JCS. Then add a JCS
+  projection at the publishing layer; do not change the evidence.
+
+**Signatures: Ed25519 replaces HMAC outright** (#53, in progress)
+- Chosen: Ed25519 only, keys via `vouch keygen`, verifier keyring.
+- Rejected: supporting HMAC and Ed25519 side by side.
+- Why: HMAC cannot give third-party verification (whoever verifies can
+  forge). No external data uses HMAC yet, so there is nothing to stay
+  compatible with, and dual support would double the test surface.
+- Cost: a new Python dependency (`cryptography`; the stdlib has no
+  Ed25519); key files to manage (the private key must stay 0600).
+- Revisit when: never for HMAC; key storage beyond files (KMS, HSM)
+  when a real deployment needs it.
+
+**Envelope: DSSE, signing exact payload bytes** (#53, in progress)
+- Chosen: each log line is a DSSE envelope; the signature covers the
+  base64 payload bytes.
+- Rejected: signing a canonical re-serialization of the receipt, as
+  HMAC did.
+- Why: a third party verifies with any Ed25519 library, without our
+  canonicalizer; DSSE is the format Sigstore and in-toto use.
+- Cost: the log is no longer human-readable or greppable (base64); we
+  need a small decode tool.
+- Revisit when: readability becomes a daily pain; the answer is
+  tooling, not a weaker format.
+
+**Receipts store the full response the agent received** (#20, #50)
+- Chosen: `response_canonical` plus digest, signed with the payload.
+- Rejected: signing only the extraction payload.
+- Why: the signature must cover what the model read (a text block can
+  disagree with the structured payload).
+- Cost: roughly twice the size for text-block payloads.
+- Revisit when: logs get large; store the response in a
+  content-addressed blob and keep only its digest in the receipt.
+
+**Crash recovery keeps a complete but unterminated last line** (#46)
+- Chosen: restore its newline and keep the receipt.
+- Rejected: truncating it like an unparsable fragment.
+- Why: it is a faithful, signed record of what the upstream returned.
+- Cost: by Append's contract that receipt was never acknowledged, so
+  the agent may not have received that result.
+- Revisit when: the hash chain lands (#54). An entry that was never
+  acknowledged may be better dropped so the chain states only what was
+  delivered.
+
+### Verifier heuristics
+
+Each follows invariant 3 (never guess toward SUPPORTED); each can be
+wrong in the stated way.
+
+- **Parentheses negate only signed metrics** (#10). "(1.35%)" is
+  negative for a change or MACD; "(62.3)" is an aside for RSI, a price,
+  or volume. Wrong if an agent writes an aside around a change value.
+- **A minute timeframe needs a chart word** (#11). "15m chart" is a
+  timeframe, "52.4m shares" is 52.4 million. A bare "15m RSI" stays
+  ambiguous and is read as a magnitude.
+- **"from X to Y" is a move, not a range.** Its endpoint is a price
+  claim (#39). "between X and Y" and "X-Y" are ranges.
+- **Bare four-digit numbers are not masked as years.** "closed at 2026"
+  can be a price; years are masked only after a temporal word.
+- **Stacked citations with too few numbers bind nothing** (#12), rather
+  than pairing arbitrarily; those numbers fall back to Tier 2.
+- **Cited claims check units, not metric words** (#13). "volume was
+  1.92% [[..change_pct]]" passes, because trusting the keyword table
+  over an explicit citation misfires for schemas it does not know.
+- **Undated facts take their receipt's date** (#14): `data_asof`, else
+  the call's wall time. Wrong for an upstream that returns stale data
+  with no date.
+- **Rounding is judged at the claim's own precision; ties go both ways**
+  (pitfall P-036, issue #42). "182" covers 181.5-182.5.
+
+### Evaluation
+
+- **Synthetic upstream with real tickers** (Phase 2). Chosen over
+  recorded real data for reproducibility and redistributability; real
+  tickers make a model's recalled real-world prices visible as
+  UNSUPPORTED. Cost: no claim about real-market behavior; every payload
+  says it is synthetic.
+- **One OpenAI-compatible client for all providers.** Chosen over
+  vendor SDKs for breadth and zero dependencies. Cost: provider-specific
+  features (for example Gemini thinking budgets, Anthropic-native tool
+  semantics) are only reachable through `params`.
+- **A broken MCP session ends that run** (#29). A run in which every
+  later tool call fails would be misleading data; the batch records the
+  error and continues.
+- **Unsaved hand-added spans are lost on page reload** (#36). Saving on
+  add would need a placeholder label that leaks into label files and
+  agreement statistics.
+
+### Process
+
+- **Merge commits, never squash or rebase.** Docs cite commit hashes.
+  Cost: a noisier history.
 
 ## Session log
 

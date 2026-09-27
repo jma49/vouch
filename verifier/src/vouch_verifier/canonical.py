@@ -1,17 +1,13 @@
 """Canonical JSON serialization, matching the Go proxy byte-for-byte.
 
-Seed contract (see docs/design.md section 7):
-  - object keys sorted lexicographically, recursively
-  - compact output, no insignificant whitespace
-  - UTF-8 passthrough (ensure_ascii=False)
-  - number literals preserved as they appeared in the source document
-
 Implementation mirrors the Go side: parse with number-literal
 preservation, then walk the tree with an explicit recursive writer.
 (A json.JSONEncoder subclass is not used deliberately: CPython's
 C-accelerated encoder bypasses __repr__ overrides on float subclasses,
-which silently reformats numbers.) Full RFC 8785 number normalization
-is a tracked follow-up; cross-language behavior is pinned by
+which silently reformats numbers.) The rules are vouch canonical JSON v1
+(docs/canonical-json.md), deliberately not RFC 8785: JCS rewrites
+numbers as doubles, and a receipt must record the numbers a tool
+actually returned. Cross-language behavior is pinned by
 testdata/canonical_vectors.json.
 """
 

@@ -1,18 +1,14 @@
 // Package receipt implements vouch's receipt model: canonical JSON
 // serialization, fact-carrying receipts, and HMAC signing.
 //
-// Canonicalization contract (seed version):
-//   - object keys sorted lexicographically, recursively
-//   - compact output: no insignificant whitespace
-//   - UTF-8 passthrough: no HTML escaping, no \uXXXX for printable unicode
-//   - number literals preserved as they appeared in the source document
-//   - input with duplicate object keys, invalid UTF-8, or lone-surrogate
-//     \u escapes is rejected, never normalized
-//
-// Preserving source number literals keeps digests stable without a full
-// number-normalization pass. Full RFC 8785 (JCS) number handling is a
-// tracked follow-up; until then, cross-language behavior is pinned by the
-// shared vectors in testdata/canonical_vectors.json.
+// Canonicalize implements vouch canonical JSON v1, specified in
+// docs/canonical-json.md and pinned, byte for byte against the Python
+// verifier, by testdata/canonical_vectors.json. In short: keys sorted by
+// code point, compact output, number literals copied exactly as written,
+// and input with duplicate keys, invalid UTF-8, or lone-surrogate escapes
+// rejected rather than repaired. It is deliberately not RFC 8785 (JCS):
+// JCS rewrites numbers as doubles, and a receipt must record the numbers
+// a tool actually returned.
 package receipt
 
 import (
