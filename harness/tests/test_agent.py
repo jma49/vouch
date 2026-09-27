@@ -3,9 +3,13 @@ directories, and an end-to-end run through the real Go proxy."""
 
 from __future__ import annotations
 
+import gc
 import json
+import os
+import signal
 import socket
 import struct
+import sys
 import threading
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
@@ -27,7 +31,7 @@ from vouch_harness.agent.llm import (
     Reply,
     load_models,
 )
-from vouch_harness.agent.mcp_client import RPCError
+from vouch_harness.agent.mcp_client import MCPError, RPCError, StdioMCPClient
 from vouch_verifier.receipts import load_log
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -443,6 +447,48 @@ def test_execute_records_the_signing_key_id(tmp_path: Path) -> None:
         spec, ScriptedClient([answer("ok")]), tmp_path, PROXY, ROOT, env, _in_process
     )
     assert json.loads((d / "meta.json").read_text())["key_id"] == signing.key_id("some-key")
+
+
+# A stand-in MCP server: answers initialize per its first argument, then
+# ignores stdin EOF (the cue to exit) and stays alive until killed.
+_STUBBORN_SERVER = """
+import json, sys, time
+open(sys.argv[2], "w").write(str(__import__("os").getpid()))
+req = json.loads(sys.stdin.readline())
+if sys.argv[1] == "fail":
+    reply = {"jsonrpc": "2.0", "id": req["id"], "error": {"code": -1, "message": "no"}}
+else:
+    reply = {"jsonrpc": "2.0", "id": req["id"], "result": {}}
+sys.stdout.write(json.dumps(reply) + "\\n")
+sys.stdout.flush()
+while True:
+    time.sleep(1)
+"""
+
+
+def _reaped(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)  # an unreaped zombie still accepts signal 0
+    except ProcessLookupError:
+        return True
+    return False
+
+
+def test_failed_handshake_kills_and_reaps_the_server(tmp_path: Path) -> None:
+    pidfile = tmp_path / "pid"
+    argv = [sys.executable, "-c", _STUBBORN_SERVER, "fail", str(pidfile)]
+    with pytest.raises(MCPError, match="initialize: no"):
+        StdioMCPClient(argv, stderr=tmp_path / "server.log")
+    assert _reaped(int(pidfile.read_text()))
+    gc.collect()  # unclosed pipes or log file would warn here, and warnings are errors
+
+
+def test_close_kills_a_server_that_does_not_exit(tmp_path: Path) -> None:
+    pidfile = tmp_path / "pid"
+    argv = [sys.executable, "-c", _STUBBORN_SERVER, "ok", str(pidfile)]
+    client = StdioMCPClient(argv, stderr=tmp_path / "server.log")
+    assert client.close(timeout=0.5) == -signal.SIGKILL
+    assert _reaped(int(pidfile.read_text()))
 
 
 @pytest.mark.skipif(not PROXY.exists(), reason="proxy binary not built (make build)")

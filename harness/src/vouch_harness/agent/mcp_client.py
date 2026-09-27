@@ -7,6 +7,7 @@ proxy's transport (proxy/internal/mcp).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import subprocess
 from collections.abc import Sequence
@@ -39,23 +40,37 @@ class StdioMCPClient:
         self, argv: Sequence[str], *, env: dict[str, str] | None = None, stderr: Path | None = None
     ) -> None:
         self._stderr: IO[bytes] | None = stderr.open("wb") if stderr else None
-        self._proc = subprocess.Popen(
-            list(argv),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=self._stderr or subprocess.DEVNULL,
-            env=env,
-        )
+        try:
+            self._proc = subprocess.Popen(
+                list(argv),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=self._stderr or subprocess.DEVNULL,
+                env=env,
+            )
+        except BaseException:
+            if self._stderr:
+                self._stderr.close()
+            raise
         self._next_id = 0
-        self._request(
-            "initialize",
-            {
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {"name": "vouch-agent", "version": "0.1.0"},
-            },
-        )
-        self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        # The caller gets no object to close() if the handshake fails, so
+        # the child is killed here: otherwise every failed run leaks a
+        # live proxy (and its upstream) plus three file handles.
+        try:
+            self._request(
+                "initialize",
+                {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "vouch-agent", "version": "0.1.0"},
+                },
+            )
+            self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        except BaseException:
+            self._proc.kill()
+            self._proc.wait()
+            self._release()
+            raise
 
     def _send(self, msg: dict[str, Any]) -> None:
         assert self._proc.stdin is not None
@@ -90,16 +105,26 @@ class StdioMCPClient:
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return self._request("tools/call", {"name": name, "arguments": arguments})
 
-    def close(self) -> int:
-        """Close stdin (the server's cue to exit), reap it, release pipes."""
+    def close(self, timeout: float = 30.0) -> int:
+        """Close stdin (the server's cue to exit), reap it, release pipes.
+        A server still running after timeout seconds is killed."""
+        # A server that already exited makes the flush hit a closed pipe.
         if self._proc.stdin:
-            self._proc.stdin.close()
-        code = self._proc.wait(timeout=30)
-        if self._proc.stdout:
-            self._proc.stdout.close()
-        if self._stderr:
-            self._stderr.close()
+            with contextlib.suppress(OSError):
+                self._proc.stdin.close()
+        try:
+            code = self._proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+            code = self._proc.wait()
+        self._release()
         return code
+
+    def _release(self) -> None:
+        for f in (self._proc.stdin, self._proc.stdout, self._stderr):
+            if f:
+                with contextlib.suppress(OSError):
+                    f.close()
 
     def __enter__(self) -> StdioMCPClient:
         return self
