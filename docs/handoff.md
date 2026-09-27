@@ -423,6 +423,16 @@ wrong in the stated way.
   leak nothing).
 - Cost: `title` tooltips are plain text and slow to appear.
 
+**Analytics facts come from the server, not the agent's query** (#103)
+- Chosen: `run_sql` returns the query's rows plus a server-built `facts`
+  array with the true figures for each (region, quarter) the rows
+  mention; the schema receipts only `facts`. Queries get 2 s and 1 MB
+  per value.
+- Rejected: receipting query columns (the audited agent picks them and
+  can select literals); SQL provenance analysis (fragile).
+- Cost: aggregates across quarters and custom metrics are not facts, so
+  claims about them are UNSUPPORTED.
+
 **A domain is two config files; finance stays the default** (#88)
 - Chosen: schemas gain a per-element `entity_ptr`; the verifier's
   finance constants become a `Vocabulary` (synonyms, units, signed
