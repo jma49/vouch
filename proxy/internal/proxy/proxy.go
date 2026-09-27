@@ -51,7 +51,7 @@ type Upstream struct {
 // Server federates upstreams behind a single MCP endpoint and records
 // one receipt per tools/call.
 type Server struct {
-	Down      *mcp.Conn
+	Down      mcp.Transport
 	Upstreams []*Upstream
 	Schemas   map[string]*extract.Schema
 	Log       *store.Log

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
@@ -137,6 +138,29 @@ func joinCommand(words []string) string {
 		quoted[i] = "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
 	}
 	return strings.Join(quoted, " ")
+}
+
+// IsURL reports whether an upstream command is the URL of an MCP server
+// reached over Streamable HTTP rather than a program to run.
+func (s UpstreamSpec) IsURL() bool {
+	return strings.HasPrefix(s.Command, "http://") || strings.HasPrefix(s.Command, "https://")
+}
+
+// Connect starts or reaches one upstream: a URL is dialed over
+// Streamable HTTP, with header added to every request; anything else is
+// spawned. header must be empty for a spawned upstream.
+func Connect(spec UpstreamSpec, header http.Header) (*Upstream, error) {
+	if !spec.IsURL() {
+		if len(header) > 0 {
+			return nil, fmt.Errorf("proxy: upstream %s: headers apply only to HTTP upstreams", spec.Name)
+		}
+		return Spawn(spec)
+	}
+	if strings.ContainsAny(spec.Command, " \t") {
+		return nil, fmt.Errorf("proxy: upstream %s: a URL takes no arguments", spec.Name)
+	}
+	hc := mcp.NewHTTPClient(spec.Command, header, nil)
+	return &Upstream{Name: spec.Name, Client: mcp.NewClient(hc), Close: hc.Close}, nil
 }
 
 // Spawn starts an upstream MCP server as a subprocess speaking stdio.

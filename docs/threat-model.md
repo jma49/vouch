@@ -106,3 +106,8 @@ any system of this shape; the rest are open work.
   or `vouch-verify` with the same options.
 - Rotate keys by adding the new public key to verifiers' keyrings
   before switching the proxy; keyrings accept any trusted signature.
+- Keep `--listen` on a loopback address. The HTTP endpoint checks
+  browser origins (against DNS rebinding) but has no authentication:
+  anyone who can reach it can make calls that get receipted. Pass
+  upstream credentials as `env:VAR`, not literally, so they stay out of
+  the process list.

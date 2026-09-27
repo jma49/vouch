@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -239,4 +240,21 @@ func FuzzSplitJoin(f *testing.F) {
 			t.Fatalf("%q: split %q, join %q, split again %q (%v)", s, words, joinCommand(words), again, err)
 		}
 	})
+}
+
+func TestConnectChoosesTheTransport(t *testing.T) {
+	u, err := Connect(UpstreamSpec{Name: "remote", Command: "https://example.test/mcp"}, http.Header{"Authorization": {"Bearer t"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Name != "remote" || u.Close == nil {
+		t.Fatalf("HTTP upstream %+v", u)
+	}
+	u.Close()
+	if _, err := Connect(UpstreamSpec{Name: "r", Command: "https://example.test/mcp --flag"}, nil); err == nil || !strings.Contains(err.Error(), "no arguments") {
+		t.Fatalf("URL with arguments: %v", err)
+	}
+	if _, err := Connect(UpstreamSpec{Name: "local", Command: "python3 srv.py"}, http.Header{"A": {"b"}}); err == nil || !strings.Contains(err.Error(), "only to HTTP") {
+		t.Fatalf("headers on a spawned upstream: %v", err)
+	}
 }

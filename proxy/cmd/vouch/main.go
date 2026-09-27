@@ -2,7 +2,8 @@
 //
 //	vouch keygen [--out <dir>] [--name <name>]
 //	vouch proxy --signing-key <key.pem> --upstream "[name=]cmd args" \
-//	    [--upstream ...] --receipts <dir> --schemas <dir> [--session <id>]
+//	    [--upstream "[name=]https://host/mcp" --upstream-header "name=H: v"] \
+//	    [--listen 127.0.0.1:8765] --receipts <dir> --schemas <dir> [--session <id>]
 //	vouch receipts cat <log>
 //	vouch canon [--lines] < input
 //	vouch receipts verify --public-key <key.pub.pem> [--public-key ...] \
@@ -19,13 +20,21 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/jma49/vouch/proxy/internal/clock"
 	"github.com/jma49/vouch/proxy/internal/extract"
@@ -69,7 +78,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   vouch keygen [--out <dir>] [--name <name>]
   vouch proxy --signing-key <key.pem> --upstream "[name=]cmd args" [--upstream ...] \
-      --receipts <dir> --schemas <dir> [--session <id>]
+      [--upstream "[name=]https://host/mcp" --upstream-header "name=Header: value"] \
+      [--listen 127.0.0.1:8765] --receipts <dir> --schemas <dir> [--session <id>]
   vouch receipts cat <log>
   vouch receipts verify --public-key <key.pub.pem> [--public-key ...] \
       [--require-sealed] [--expect-head <digest>] <log>
@@ -80,7 +90,10 @@ func usage() {
 func runProxy(args []string) error {
 	fs := flag.NewFlagSet("proxy", flag.ExitOnError)
 	var upstreams stringSlice
-	fs.Var(&upstreams, "upstream", "upstream MCP server as \"[name=]command\" (repeatable)")
+	fs.Var(&upstreams, "upstream", "upstream MCP server as \"[name=]command\" or \"[name=]https://host/mcp\" (repeatable)")
+	var headers stringSlice
+	fs.Var(&headers, "upstream-header", "header for an HTTP upstream as \"name=Header: value\"; a value of env:VAR reads $VAR (repeatable)")
+	listen := fs.String("listen", "", "serve the agent over Streamable HTTP at http://ADDR/mcp instead of stdio")
 	receiptsDir := fs.String("receipts", "receipts", "directory for the receipt log")
 	schemasDir := fs.String("schemas", "schemas", "directory of fact-extraction sidecar configs")
 	session := fs.String("session", "", "session id (default: random)")
@@ -148,9 +161,13 @@ func runProxy(args []string) error {
 		if err != nil {
 			return err
 		}
+		byName, err := parseHeaders(headers, specs)
+		if err != nil {
+			return err
+		}
 		defer func() { closeAll(ups) }()
 		for _, spec := range specs {
-			u, err := proxy.Spawn(spec)
+			u, err := proxy.Connect(spec, byName[spec.Name])
 			if err != nil {
 				return err
 			}
@@ -161,8 +178,17 @@ func runProxy(args []string) error {
 		}
 	}
 
+	var down mcp.Transport = mcp.NewConn(os.Stdin, os.Stdout)
+	if *listen != "" {
+		hs, stop, err := serveHTTP(*listen)
+		if err != nil {
+			return err
+		}
+		defer stop()
+		down = hs
+	}
 	srv := &proxy.Server{
-		Down:      mcp.NewConn(os.Stdin, os.Stdout),
+		Down:      down,
 		Upstreams: ups,
 		Schemas:   schemas,
 		Log:       rlog,
@@ -289,4 +315,76 @@ func randomHex(n int) string {
 		panic(err)
 	}
 	return hex.EncodeToString(b)
+}
+
+// parseHeaders reads --upstream-header values into per-upstream
+// headers. A value of env:VAR is read from the environment, so a token
+// need not appear in the process list.
+func parseHeaders(values []string, specs []proxy.UpstreamSpec) (map[string]http.Header, error) {
+	known := make(map[string]bool)
+	for _, s := range specs {
+		known[s.Name] = true
+	}
+	out := make(map[string]http.Header)
+	for _, v := range values {
+		name, header, ok := strings.Cut(v, "=")
+		key, value, ok2 := strings.Cut(header, ":")
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+		if !ok || !ok2 || key == "" {
+			return nil, fmt.Errorf("--upstream-header %q: want name=Header: value", v)
+		}
+		if !known[name] {
+			return nil, fmt.Errorf("--upstream-header %q: no upstream named %q (name it with name=URL)", v, name)
+		}
+		if env, ok := strings.CutPrefix(value, "env:"); ok {
+			value = os.Getenv(env)
+			if value == "" {
+				return nil, fmt.Errorf("--upstream-header %q: $%s is empty", v, env)
+			}
+		}
+		if out[name] == nil {
+			out[name] = http.Header{}
+		}
+		out[name].Add(key, value)
+	}
+	return out, nil
+}
+
+// serveHTTP serves one agent session over Streamable HTTP at /mcp. A
+// signal ends the session as DELETE would, so the log is sealed. A
+// non-loopback address is allowed but warned about: the endpoint has no
+// authentication of its own.
+func serveHTTP(addr string) (*mcp.HTTPServer, func(), error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listen: %w", err)
+	}
+	if host, _, _ := net.SplitHostPort(ln.Addr().String()); !net.ParseIP(host).IsLoopback() {
+		fmt.Fprintf(os.Stderr, "vouch proxy: warning: listening on %s, beyond this machine; the endpoint has no authentication\n", ln.Addr())
+	}
+	hs := mcp.NewHTTPServer(nil)
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", hs)
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		if err := server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fmt.Fprintln(os.Stderr, "vouch proxy:", err)
+			hs.Close()
+		}
+	}()
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		if _, ok := <-signals; ok {
+			hs.Close()
+		}
+	}()
+	fmt.Fprintf(os.Stderr, "vouch proxy: serving http://%s/mcp\n", ln.Addr())
+	return hs, func() {
+		signal.Stop(signals)
+		close(signals)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+	}, nil
 }

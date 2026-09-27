@@ -29,7 +29,7 @@ $(MCP_EVERYTHING):
 	npm install --prefix $(MCP_EVERYTHING_DIR) --ignore-scripts --no-audit --no-fund \
 		@modelcontextprotocol/server-everything@$(MCP_EVERYTHING_VERSION)
 integration: $(MCP_EVERYTHING)
-	cd proxy && VOUCH_MCP_EVERYTHING="node '$(CURDIR)/$(MCP_EVERYTHING)' stdio" \
+	cd proxy && VOUCH_MCP_EVERYTHING="$(CURDIR)/$(MCP_EVERYTHING)" \
 		go test -race -count=1 -v ./internal/integration
 
 # What the proxy adds to a tools/call, on this machine (docs/roadmap.md
