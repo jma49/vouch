@@ -84,8 +84,11 @@ One receipt per tool call, appended to the log. Immutable after write.
   "turn_index": 3,
   "tool_name": "get_indicators",
   "args_canonical": { ... },            // canonicalized JSON (see §7)
-  "result_canonical": { ... },          // canonicalized JSON
+  "result_canonical": { ... },          // the payload facts come from, canonicalized
   "result_digest": "sha256:...",        // over result_canonical
+  "payload_source": "structuredContent",// or "content/<i>/text", or "result"
+  "response_canonical": { ... },        // the whole tools/call result the agent received
+  "response_digest": "sha256:...",      // over response_canonical
   "facts": [ Fact, ... ],               // extracted at write time (§3.2)
   "data_asof": "2026-07-24T20:00:00Z",  // timestamp OF THE DATA, not of the call
   "wall_time": "2026-07-25T01:12:09Z",
@@ -94,6 +97,8 @@ One receipt per tool call, appended to the log. Immutable after write.
   "sig": "hmac-sha256:..."              // over canonical(receipt minus sig)
 }
 ```
+
+**Payload and response.** Facts are extracted from one JSON document, the payload: `structuredContent` when present, else the first text block that parses as a JSON object or array, else the whole result. But what the model reads can differ from the payload (a prose text block next to structured content, or several blocks), so the receipt also stores the whole result as received, and the signature covers both. Without that, a receipt could sign 62.3 while the model had read "12.0" (#20). The cost is size: for text-block payloads the data appears twice.
 
 **On the HMAC signature — what it is for and what it is not for.** In a single-process setup the LLM cannot write to our storage anyway; the signature is *not* protecting against the model. Its actual value: (a) tamper-evidence when receipts cross process/machine boundaries or rest on disk, (b) making eval results reproducible and auditable — a third party can re-verify that a verdict report was computed against unmodified receipts, (c) replay protection via `(session_id, turn_index)` uniqueness. We keep it, and we are honest about its threat model.
 

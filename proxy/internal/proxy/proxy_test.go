@@ -10,6 +10,7 @@ import (
 	"github.com/jma49/vouch/proxy/internal/clock"
 	"github.com/jma49/vouch/proxy/internal/extract"
 	"github.com/jma49/vouch/proxy/internal/mcp"
+	"github.com/jma49/vouch/proxy/internal/receipt"
 	"github.com/jma49/vouch/proxy/internal/store"
 )
 
@@ -228,16 +229,62 @@ func TestUnfederatedMethodRejected(t *testing.T) {
 	}
 }
 
-func TestResultPayloadFallbacks(t *testing.T) {
-	// Text content that parses as JSON is used as the payload.
-	p := resultPayload(json.RawMessage(`{"content":[{"type":"text","text":"{\"x\":1}"}]}`))
-	if string(p) != `{"x":1}` {
-		t.Fatalf("text payload: %s", p)
+func TestResultPayloadSelection(t *testing.T) {
+	cases := []struct {
+		name, result, payload, source string
+	}{
+		{"structured content wins", `{"structuredContent":{"x":1},"content":[{"type":"text","text":"{\"x\":2}"}]}`, `{"x":1}`, "structuredContent"},
+		{"JSON object text", `{"content":[{"type":"text","text":"{\"x\":1}"}]}`, `{"x":1}`, "content/0/text"},
+		{"JSON array text", `{"content":[{"type":"text","text":"[1,2]"}]}`, `[1,2]`, "content/0/text"},
+		// A scalar is valid JSON but not a document facts can come from;
+		// taking it used to hide the real payload in a later block (#20).
+		{"scalar text skipped", `{"content":[{"type":"text","text":"1"},{"type":"text","text":"{\"x\":1}"}]}`, `{"x":1}`, "content/1/text"},
+		{"null structured content ignored", `{"structuredContent":null,"content":[{"type":"text","text":"{\"x\":1}"}]}`, `{"x":1}`, "content/0/text"},
+		{"plain text falls back to the result", `{"content":[{"type":"text","text":"plain words"}]}`, `{"content":[{"type":"text","text":"plain words"}]}`, "result"},
 	}
-	// Non-JSON text falls back to the whole result.
-	full := `{"content":[{"type":"text","text":"plain words"}]}`
-	if p := resultPayload(json.RawMessage(full)); string(p) != full {
-		t.Fatalf("fallback payload: %s", p)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, source := resultPayload(json.RawMessage(tc.result))
+			if string(p) != tc.payload || source != tc.source {
+				t.Fatalf("got %s from %q, want %s from %q", p, source, tc.payload, tc.source)
+			}
+		})
+	}
+}
+
+// TestReceiptBindsTheResponse pins #20: the signed receipt covers the
+// whole result the agent received, not only the payload facts come
+// from. Here the text the model reads says 12.0 while the structured
+// payload says 62.3; both must be under the signature.
+func TestReceiptBindsTheResponse(t *testing.T) {
+	s, logPath := recordingServer(t)
+	result := json.RawMessage(`{"content":[{"type":"text","text":"NVDA RSI is 12.0"}],` +
+		`"structuredContent":{"symbol":"NVDA","rsi_14":62.3}}`)
+	if err := s.record("get_indicators", json.RawMessage(`{"symbol":"NVDA"}`), result, 0); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	receipts, err := store.Scan(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := receipts[0]
+	want, err := receipt.Canonicalize(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(r.ResponseCanonical) != string(want) {
+		t.Fatalf("response_canonical = %s, want %s", r.ResponseCanonical, want)
+	}
+	if r.ResponseDigest != receipt.Digest(want) {
+		t.Fatalf("response_digest = %s", r.ResponseDigest)
+	}
+	if r.PayloadSource != "structuredContent" || !strings.Contains(string(r.ResponseCanonical), "12.0") {
+		t.Fatalf("payload_source = %q; response = %s", r.PayloadSource, r.ResponseCanonical)
+	}
+	// Tampering with the response breaks the signature.
+	r.ResponseCanonical = json.RawMessage(strings.Replace(string(r.ResponseCanonical), "12.0", "62.3", 1))
+	if ok, err := r.Verify(key); err != nil || ok {
+		t.Fatalf("tampered response verified: ok=%v err=%v", ok, err)
 	}
 }
 

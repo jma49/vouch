@@ -30,6 +30,18 @@ func goldenReceipts(t *testing.T) []*receipt.Receipt {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// The response the agent received, shaped like a real MCP result:
+		// the payload as structured content plus a text block, so the
+		// golden log exercises response binding (#20) across languages.
+		text, err := json.Marshal(string(resC))
+		if err != nil {
+			t.Fatal(err)
+		}
+		respC, err := receipt.Canonicalize([]byte(`{"content":[{"type":"text","text":` + string(text) +
+			`}],"structuredContent":` + result + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
 		r := &receipt.Receipt{
 			ReceiptID:         id,
 			SessionID:         "s-golden",
@@ -38,6 +50,9 @@ func goldenReceipts(t *testing.T) []*receipt.Receipt {
 			ArgsCanonical:     argsC,
 			ResultCanonical:   resC,
 			ResultDigest:      receipt.Digest(resC),
+			PayloadSource:     "structuredContent",
+			ResponseCanonical: respC,
+			ResponseDigest:    receipt.Digest(respC),
 			Facts:             facts,
 			DataAsOf:          asof,
 			WallTime:          time.Date(2026, 7, 25, 1, 12, 9, 0, time.UTC).Add(time.Duration(turn) * time.Minute),

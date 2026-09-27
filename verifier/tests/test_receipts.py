@@ -94,3 +94,22 @@ def test_index_lookup() -> None:
         # Timeframe None matches any timeframe.
         assert len(facts_for(conn, "AMD", "last_price")) == 1
         assert facts_for(conn, "TSLA", "rsi_14") == []
+
+
+def test_golden_receipts_bind_the_response() -> None:
+    # Issue #20: the Go proxy records the whole result the agent saw.
+    receipts = load_log(GOLDEN, key=KEY)
+    for r in receipts:
+        assert r.payload_source == "structuredContent"
+        assert r.response_canonical is not None and r.response_digest is not None
+        assert r.result_canonical in r.response_canonical
+
+
+def test_tampered_response_is_rejected_without_a_key(tmp_path: Path) -> None:
+    line = GOLDEN.read_text(encoding="utf-8").splitlines()[0]
+    tree = json.loads(line)
+    tree["response_canonical"]["content"][0]["text"] = "NVDA RSI is 12.0"
+    bad = tmp_path / "receipts.jsonl"
+    bad.write_text(json.dumps(tree) + "\n")
+    with pytest.raises(ReceiptError, match="response_digest"):
+        load_log(bad)

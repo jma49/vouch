@@ -10,6 +10,7 @@
 package proxy
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -257,7 +258,11 @@ func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int
 	if err != nil {
 		return fmt.Errorf("canonicalize args: %w", err)
 	}
-	payload := resultPayload(result)
+	responseCanon, err := receipt.Canonicalize(result)
+	if err != nil {
+		return fmt.Errorf("canonicalize response: %w", err)
+	}
+	payload, source := resultPayload(result)
 	resultCanon, err := receipt.Canonicalize(payload)
 	if err != nil {
 		return fmt.Errorf("canonicalize result: %w", err)
@@ -284,6 +289,9 @@ func (s *Server) record(tool string, args, result json.RawMessage, latencyMS int
 		ArgsCanonical:     argsCanon,
 		ResultCanonical:   resultCanon,
 		ResultDigest:      receipt.Digest(resultCanon),
+		PayloadSource:     source,
+		ResponseCanonical: responseCanon,
+		ResponseDigest:    receipt.Digest(responseCanon),
 		Facts:             facts,
 		DataAsOf:          dataAsOf,
 		WallTime:          s.Clock.Now(),
@@ -312,7 +320,7 @@ func isToolError(result json.RawMessage) bool {
 // resultPayload picks the JSON document facts are extracted from:
 // structuredContent when the upstream provides it, else the first text
 // content block when it parses as JSON, else the whole MCP result.
-func resultPayload(result json.RawMessage) json.RawMessage {
+func resultPayload(result json.RawMessage) (json.RawMessage, string) {
 	var res struct {
 		StructuredContent json.RawMessage `json:"structuredContent"`
 		Content           []struct {
@@ -321,16 +329,20 @@ func resultPayload(result json.RawMessage) json.RawMessage {
 		} `json:"content"`
 	}
 	if err := json.Unmarshal(result, &res); err == nil {
-		if len(res.StructuredContent) > 0 {
-			return res.StructuredContent
+		if sc := bytes.TrimSpace(res.StructuredContent); len(sc) > 0 && !bytes.Equal(sc, []byte("null")) {
+			return res.StructuredContent, "structuredContent"
 		}
-		for _, c := range res.Content {
-			if c.Type == "text" && json.Valid([]byte(c.Text)) {
-				return json.RawMessage(c.Text)
+		for i, c := range res.Content {
+			// Only a JSON object or array is a document facts can come
+			// from; a scalar such as "1" is valid JSON but would shadow
+			// the real payload in a later block (#20).
+			text := bytes.TrimSpace([]byte(c.Text))
+			if c.Type == "text" && len(text) > 0 && (text[0] == '{' || text[0] == '[') && json.Valid(text) {
+				return json.RawMessage(c.Text), fmt.Sprintf("content/%d/text", i)
 			}
 		}
 	}
-	return result
+	return result, "result"
 }
 
 func (s *Server) reply(m *mcp.Message, result json.RawMessage) error {
