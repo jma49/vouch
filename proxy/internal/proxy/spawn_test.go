@@ -89,6 +89,16 @@ func TestParseUpstreams(t *testing.T) {
 		{"equals inside a path is not a name", []string{"/opt/a=b/bin/srv --x=1"}, []UpstreamSpec{
 			{Name: "/opt/a=b/bin/srv --x=1", Command: "/opt/a=b/bin/srv --x=1"},
 		}, ""},
+		{"quoted path with a space", []string{`python3 '/opt/my server/srv.py' --name "a b"`}, []UpstreamSpec{
+			{Name: `python3 '/opt/my server/srv.py' --name 'a b'`, Command: `python3 '/opt/my server/srv.py' --name 'a b'`},
+		}, ""},
+		{"named and quoted", []string{`market=python3 "my srv.py"`}, []UpstreamSpec{
+			{Name: "market", Command: `python3 'my srv.py'`},
+		}, ""},
+		{"needless quotes normalize away", []string{`"python3" 'a.py'`}, []UpstreamSpec{
+			{Name: "python3 a.py", Command: "python3 a.py"},
+		}, ""},
+		{"unterminated quote", []string{`python3 'a.py`}, nil, "unterminated single quote"},
 		{"empty", []string{"  "}, nil, "empty upstream command"},
 		{"name without command", []string{"market="}, nil, "empty upstream command"},
 		{"duplicate command", []string{"python3 a.py", "python3  a.py"}, nil, "duplicate upstream name"},
@@ -177,4 +187,55 @@ func TestOversizedUpstreamFrameFailsOnlyThatCall(t *testing.T) {
 	if !strings.Contains(string(res), `"ok"`) {
 		t.Fatalf("second call result: %.200s", res)
 	}
+}
+
+// TestSplitCommand pins the word-splitting rules of #70 against what a
+// POSIX shell does with the same input, minus every kind of expansion.
+func TestSplitCommand(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+		err  string
+	}{
+		{`python3 -m market`, []string{"python3", "-m", "market"}, ""},
+		{"  a \t b\n", []string{"a", "b"}, ""},
+		{`'/a b/c' d`, []string{"/a b/c", "d"}, ""},
+		{`"a b" "c\"d" "e\\f" "g\nh" "$HOME"`, []string{"a b", `c"d`, `e\f`, `g\nh`, "$HOME"}, ""},
+		{`a\ b c\'d`, []string{"a b", "c'd"}, ""},
+		{`x'y'"z" ''`, []string{"xyz", ""}, ""},
+		{`echo a|b >c ~ *`, []string{"echo", "a|b", ">c", "~", "*"}, ""},
+		{`'it'\''s'`, []string{"it's"}, ""},
+		{`"a`, nil, "unterminated double quote"},
+		{`a\`, nil, "trailing backslash"},
+	}
+	for _, tc := range cases {
+		got, err := splitCommand(tc.in)
+		if tc.err != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.err) {
+				t.Errorf("splitCommand(%q) = %q, %v; want error %q", tc.in, got, err, tc.err)
+			}
+			continue
+		}
+		if err != nil || strings.Join(got, "\x00") != strings.Join(tc.want, "\x00") || len(got) != len(tc.want) {
+			t.Errorf("splitCommand(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+		}
+	}
+}
+
+// FuzzSplitJoin pins that joinCommand is splitCommand's inverse: the
+// normalized command stored in UpstreamSpec re-splits to the same argv.
+func FuzzSplitJoin(f *testing.F) {
+	for _, s := range []string{`a b`, `'a b' "c\"d"`, `x\ y`, `''`, `it'\''s`} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		words, err := splitCommand(s)
+		if err != nil {
+			return
+		}
+		again, err := splitCommand(joinCommand(words))
+		if err != nil || strings.Join(again, "\x00") != strings.Join(words, "\x00") || len(again) != len(words) {
+			t.Fatalf("%q: split %q, join %q, split again %q (%v)", s, words, joinCommand(words), again, err)
+		}
+	})
 }
