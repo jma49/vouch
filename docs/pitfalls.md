@@ -141,7 +141,7 @@ Reproduced 2026-09-27 against `testdata/receipts_golden.jsonl`.
   `2026 → CONTRADICTED` against `close_price`.
 - **Cause:** `_NUMBER_RE` accepts any digit run; the sentence has an
   entity and a metric keyword, so Tier 2 resolves it.
-- **Status:** open. Reproduced. Roadmap Phase 1.
+- **Status:** fixed in `fix(verifier): tokenize numeric spans before resolving claims`. Reproduced. Roadmap Phase 1.
 
 ### P-031 Magnitude words are ignored
 - **Symptom:** `NVDA volume is 12 million shares.` claims `12`.
@@ -181,7 +181,7 @@ Reproduced 2026-09-27 against `testdata/receipts_golden.jsonl`.
   as `62,`; report highlighting and mutations operate on the wrong span.
 - **Cause:** `_NUMBER_RE` uses `\d[\d,]*` for thousands separators,
   which also swallows a trailing comma.
-- **Status:** open. Reproduced 2026-09-27.
+- **Status:** fixed in `fix(verifier): tokenize numeric spans before resolving claims`. Reproduced 2026-09-27.
 
 ### P-036 Display rounding is judged by class, not by the claim's precision
 - **Symptom:** `NVDA closed at 182.` (actual 181.52) is CONTRADICTED;
@@ -198,7 +198,7 @@ Reproduced 2026-09-27 against `testdata/receipts_golden.jsonl`.
   `60 -> CONTRADICTED`.
 - **Cause:** the tokenizer does not recognize `3x`, `60-65`, or
   `between 60 and 65` as non-point expressions.
-- **Status:** open. Reproduced 2026-09-27.
+- **Status:** fixed in `fix(verifier): tokenize numeric spans before resolving claims`. Reproduced 2026-09-27.
 
 ---
 

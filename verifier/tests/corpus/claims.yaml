@@ -166,10 +166,8 @@ cases:
     expect: ["181.52 -> SUPPORTED", "62.3 -> SUPPORTED", "-0.42 -> SUPPORTED"]
   - text: NVDA RSI is 62, well above AMD.
     expect: ["62 -> SUPPORTED (NVDA rsi_14)"]
-    xfail: P-035
   - text: AMD volume was 52,410,000, a heavy session.
     expect: ["52,410,000 -> SUPPORTED"]
-    xfail: P-035
   - text: MSFT RSI is 71.2, AMD RSI is 48.1, NVDA RSI is 62.3.
     expect: ["71.2 -> SUPPORTED (MSFT)", "48.1 -> SUPPORTED (AMD)", "62.3 -> SUPPORTED (NVDA)"]
     xfail: P-032
@@ -180,61 +178,42 @@ cases:
   # --- dates, times, quarters, ordinals, periods are not claims ---
   - text: As of 2026-07-24, NVDA closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]
-    xfail: P-030
   - text: On July 24, 2026, NVDA closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]
-    xfail: P-030
   - text: On 7/24/2026 NVDA closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]
-    xfail: P-030
   - text: NVDA closed at 181.52 on 24 July 2026.
     expect: ["181.52 -> SUPPORTED"]
-    xfail: P-030
   - text: NVDA closed at 181.52 on Jul 24.
     expect: ["181.52 -> SUPPORTED"]
-    xfail: P-030
   - text: The 2026-07-24 close for NVDA was 181.52.
     expect: ["181.52 -> SUPPORTED"]
-    xfail: P-030
   - text: NVDA closed at 181.52 at 4:00 pm.
     expect: ["181.52 -> SUPPORTED"]
-    xfail: P-030
   - text: At 16:00 ET, NVDA closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]
-    xfail: P-030
   - text: NVDA's 14-day RSI is 62.3.
     expect: ["62.3 -> SUPPORTED"]
-    xfail: P-030
   - text: NVDA closed at 181.52, above its 50-day moving average.
     expect: ["181.52 -> SUPPORTED"]
-    xfail: P-030
   - text: NVDA closed at 181.52, near its 52-week high.
     expect: ["181.52 -> SUPPORTED"]
-    xfail: P-030
   - text: In Q3 2026, NVDA closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]
-    xfail: P-030
   - text: NVDA reports Q2 earnings on August 27; it closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]
-    xfail: P-030
   - text: In 2026, NVDA RSI peaked; it is now 62.3.
     expect: ["62.3 -> SUPPORTED"]
-    xfail: P-030
   - text: NVDA, up sharply since 2024, closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]
-    xfail: P-030
   - text: NVDA RSI is 62.3 on the 1d timeframe.
     expect: ["62.3 -> SUPPORTED"]
-    xfail: P-030
   - text: NVDA closed at 181.52 for the 3rd straight gain.
     expect: ["181.52 -> SUPPORTED"]
-    xfail: P-030
   - text: Over the past 5 sessions NVDA closed at 181.52.
     expect: ["181.52 -> SUPPORTED"]
-    xfail: P-030
   - text: AMD RSI is 48.1 as of July 24.
     expect: ["48.1 -> SUPPORTED"]
-    xfail: P-030
 
   # --- magnitude words and suffixes ---
   - text: AMD volume was 52.4 million shares.
@@ -379,7 +358,6 @@ cases:
     xfail: P-033
   - text: On July 23, NVDA closed at 178.10.
     expect: ["178.10 -> SUPPORTED"]
-    xfail: P-033
   - text: On July 23, NVDA closed at 181.52.
     expect: ["181.52 -> CONTRADICTED"]
     xfail: P-033
@@ -388,7 +366,6 @@ cases:
     xfail: P-033
   - text: NVDA closed at 176.45 on 2026-07-22.
     expect: ["176.45 -> SUPPORTED"]
-    xfail: P-033
   - text: NVDA closed at 178.10 on July 22.
     expect: ["178.10 -> CONTRADICTED"]
     xfail: P-033
@@ -403,13 +380,10 @@ cases:
   # --- multipliers and ranges are not point claims ---
   - text: NVDA volume was 3x its 50-day average.
     expect: ["3x -> UNVERIFIABLE"]
-    xfail: P-037
   - text: NVDA RSI is between 60 and 65.
     expect: ["60 -> UNVERIFIABLE", "65 -> UNVERIFIABLE"]
-    xfail: P-037
   - text: NVDA RSI is in the 60-65 range.
     expect: ["60 -> UNVERIFIABLE", "65 -> UNVERIFIABLE"]
-    xfail: P-037
   - text: NVDA is one of the top 5 holdings; it closed at 181.52.
     expect: ["5 -> UNVERIFIABLE", "181.52 -> SUPPORTED"]
     xfail: P-032

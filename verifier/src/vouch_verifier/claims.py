@@ -18,6 +18,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from vouch_verifier.tokens import Kind, NumberToken, tokenize
+
 
 @dataclass(frozen=True)
 class Citation:
@@ -40,6 +42,7 @@ class Claim:
     unit: str | None = None
     timeframe: str | None = None
     citation: Citation | None = None
+    kind: Kind = "point"  # "multiple" and "range" are never judged as points
 
 
 @dataclass(frozen=True)
@@ -58,7 +61,6 @@ class Extraction:
 
 
 _CITATION_RE = re.compile(r"\[\[r:([A-Za-z0-9_-]+)#((?:/[^/\]\s]*)+|/?)\]\]")
-_NUMBER_RE = re.compile(r"(?<![\w.\-+])[-+]?\d[\d,]*(?:\.\d+)?(?:\s?%)?")
 _SENTENCE_SPLIT_RE = re.compile(r"[.!?\n](?:\s|$)")
 
 # Deterministic keyword -> metric mapping, longest match first. This is
@@ -93,16 +95,6 @@ _PCT_FALLBACK_METRIC = "change_pct"
 _NEGATION_RE = re.compile(r"\b(down|fell|dropped|declined|lost|slid)\b", re.IGNORECASE)
 
 
-def _parse_number(text: str) -> tuple[float, str | None]:
-    """Parse one matched numeric span into (value, unit)."""
-    unit = None
-    cleaned = text.strip()
-    if cleaned.endswith("%"):
-        unit = "pct"
-        cleaned = cleaned[:-1].strip()
-    return float(cleaned.replace(",", "")), unit
-
-
 def _sentence_bounds(answer: str, pos: int) -> tuple[int, int]:
     start = 0
     for m in _SENTENCE_SPLIT_RE.finditer(answer, 0, pos):
@@ -135,6 +127,39 @@ def _nearest_entity(sentence: str, offset: int, num_start: int, entities: set[st
     return best[1] if best else None
 
 
+def _resolve(
+    answer: str,
+    m: NumberToken,
+    known_entities: set[str] | frozenset[str],
+    synonyms: dict[str, str],
+) -> Claim:
+    """Attach entity and metric to one Tier 2 numeric token."""
+    value, unit = m.value, m.unit
+    sent_start, sent_end = _sentence_bounds(answer, m.start)
+    sentence = answer[sent_start:sent_end]
+    if (
+        unit == "pct"
+        and value > 0
+        and not m.text.startswith(("+", "-"))
+        and _NEGATION_RE.search(sentence[: m.start - sent_start])
+    ):
+        value = -value
+    entity = _nearest_entity(sentence, sent_start, m.start, set(known_entities))
+    metric = _nearest_keyword(sentence, sent_start, m.start, synonyms)
+    if metric is None and unit == "pct":
+        metric = _PCT_FALLBACK_METRIC
+    return Claim(
+        value=value,
+        span=(m.start, m.end),
+        text=m.text,
+        tier=2,
+        entity=entity,
+        metric=metric,
+        unit=unit,
+        kind=m.kind,
+    )
+
+
 def extract_claims(
     answer: str,
     known_entities: set[str] | frozenset[str] = frozenset(),
@@ -143,49 +168,36 @@ def extract_claims(
     """Extract numeric claims from an answer, Tier 1 then Tier 2."""
     synonyms = DEFAULT_METRIC_SYNONYMS if metric_synonyms is None else metric_synonyms
 
-    def is_parameter(m: re.Match[str]) -> bool:
-        # "RSI(14)": a number in function-call-style parens names the
-        # metric's parameter, it is not a claim.
-        return (
-            m.start() >= 2
-            and answer[m.start() - 1] == "("
-            and answer[m.start() - 2].isalnum()
-            and answer[m.end() : m.end() + 1] == ")"
-        )
-
-    numbers = [
-        m
-        for m in _NUMBER_RE.finditer(answer)
-        # Numbers inside a citation marker are not claims.
-        if not any(c.start() <= m.start() < c.end() for c in _CITATION_RE.finditer(answer))
-        and not is_parameter(m)
-    ]
+    citations = list(_CITATION_RE.finditer(answer))
+    numbers = tokenize(answer, exclude=[c.span() for c in citations])
     consumed: set[int] = set()
     claims: list[Claim] = []
     unresolved: list[Claim] = []
 
     # Tier 1: each citation binds to the nearest preceding number in the
     # same sentence.
-    for cit in _CITATION_RE.finditer(answer):
+    for cit in citations:
         sent_start, _ = _sentence_bounds(answer, cit.start())
         candidates = [
             i
             for i, m in enumerate(numbers)
-            if i not in consumed and sent_start <= m.start() and m.end() <= cit.start()
+            if i not in consumed
+            and m.kind == "point"
+            and sent_start <= m.start
+            and m.end <= cit.start()
         ]
         if not candidates:
             continue  # dangling citation; the matcher flags it via coverage
         i = candidates[-1]
         m = numbers[i]
         consumed.add(i)
-        value, unit = _parse_number(m.group())
         claims.append(
             Claim(
-                value=value,
-                span=(m.start(), m.end()),
-                text=m.group(),
+                value=m.value,
+                span=(m.start, m.end),
+                text=m.text,
                 tier=1,
-                unit=unit,
+                unit=m.unit,
                 citation=Citation(receipt_id=cit.group(1), json_ptr=cit.group(2) or "/"),
             )
         )
@@ -194,30 +206,8 @@ def extract_claims(
     for i, m in enumerate(numbers):
         if i in consumed:
             continue
-        value, unit = _parse_number(m.group())
-        sent_start, sent_end = _sentence_bounds(answer, m.start())
-        sentence = answer[sent_start:sent_end]
-        if (
-            unit == "pct"
-            and value > 0
-            and not m.group().lstrip().startswith(("+", "-"))
-            and _NEGATION_RE.search(sentence[: m.start() - sent_start])
-        ):
-            value = -value
-        entity = _nearest_entity(sentence, sent_start, m.start(), set(known_entities))
-        metric = _nearest_keyword(sentence, sent_start, m.start(), synonyms)
-        if metric is None and unit == "pct":
-            metric = _PCT_FALLBACK_METRIC
-        claim = Claim(
-            value=value,
-            span=(m.start(), m.end()),
-            text=m.group(),
-            tier=2,
-            entity=entity,
-            metric=metric,
-            unit=unit,
-        )
-        if entity is None or metric is None:
+        claim = _resolve(answer, m, known_entities, synonyms)
+        if claim.kind != "point" or claim.entity is None or claim.metric is None:
             unresolved.append(claim)
         else:
             claims.append(claim)

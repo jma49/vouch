@@ -88,6 +88,16 @@ def _match_cited(
     )
 
 
+_KIND_NOTES = {
+    "multiple": "a multiplier is not a point value",
+    "range": "a range is not a point value",
+}
+
+
+def _unresolved_note(claim: Claim) -> str:
+    return _KIND_NOTES.get(claim.kind, "no entity/metric resolution (Tier 3 not enabled)")
+
+
 def match_claims(
     extraction: Extraction,
     receipts: list[Receipt],
@@ -148,10 +158,6 @@ def match_claims(
                 )
 
     for claim in extraction.unresolved:
-        out.append(
-            MatchedClaim(
-                claim, Verdict.UNVERIFIABLE, note="no entity/metric resolution (Tier 3 not enabled)"
-            )
-        )
+        out.append(MatchedClaim(claim, Verdict.UNVERIFIABLE, note=_unresolved_note(claim)))
     out.sort(key=lambda mc: mc.claim.span)
     return out
