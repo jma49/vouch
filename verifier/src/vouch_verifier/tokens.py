@@ -63,6 +63,9 @@ _PERIOD_UNIT = (
     r"(?:days?|weeks?|months?|years?|sessions?|hours?|minutes?|mins?|quarters?|periods?|bars?)"
 )
 
+# A minute chart timeframe: "15m chart", "5 min candles" (issue #11).
+MINUTE_TIMEFRAME = r"\b\d+\s?(?:m|min)\b(?=[\s-]+(?:charts?|candles?|bars?|timeframe|interval))"
+
 # Spans that are structure, not claims. A pattern with a group named
 # "m" masks only that group. Order does not matter; overlaps are merged.
 _MASKS = [
@@ -81,12 +84,23 @@ _MASKS = [
         r"(?P<m>(?:19|20)\d{2})\b",
         re.IGNORECASE,
     ),
+    # List markers: "1. ", "2) " at the start of a line (issue #15)
+    re.compile(r"(?m)^[ \t]*(?P<m>\d+)[.)](?=[ \t])"),
     # Ordinals: 3rd, 52nd
     re.compile(r"\b\d+(?:st|nd|rd|th)\b", re.IGNORECASE),
     # Period lengths: 50-day, 52-week, 5 sessions, 14 days
     re.compile(rf"\b\d+(?:\.\d+)?[-\s]{_PERIOD_UNIT}\b", re.IGNORECASE),
-    # Chart timeframes: 1d, 4h, 1w
+    # Chart timeframes: 1d, 4h, 1w; and minute charts, "15m chart", only
+    # when a chart word follows, since "52.4m shares" is 52.4 million
     re.compile(r"\b\d+[hdw]\b"),
+    re.compile(MINUTE_TIMEFRAME, re.IGNORECASE),
+    # Indicator parameters: "RSI (14)", "MACD(12, 26, 9)"; the unspaced
+    # single-argument form is also caught by _is_parameter
+    re.compile(
+        r"\b(?:rsi|ema|sma|wma|ma|atr|adx|cci|roc|mfi|macd|stoch(?:astic)?|bollinger|bb)"
+        r"\s*\(\s*\d+(?:\s*,\s*\d+)*\s*\)",
+        re.IGNORECASE,
+    ),
 ]
 
 # Ranges: "60-65", "between 60 and 65". "from 55 to 62" is deliberately
@@ -113,8 +127,17 @@ _MAGNITUDES = {
     "t": 1e12,
 }
 
+# Minus signs agents and renderers actually emit, besides the ASCII
+# hyphen: U+2212 MINUS SIGN, U+2012 FIGURE DASH, U+2013 EN DASH, U+FE63
+# SMALL HYPHEN-MINUS, U+FF0D FULLWIDTH HYPHEN-MINUS. Dropping one reads
+# a negative value as positive (issue #8).
+MINUS_SIGNS = "-\u2212\u2012\u2013\ufe63\uff0d"
+# Inside a character class the ASCII hyphen must be escaped, or it
+# forms a range with its neighbors.
+_MINUS_CLASS = "\\-" + MINUS_SIGNS[1:]
+
 _TOKEN_RE = re.compile(
-    rf"(?<![\w.\-+/:])(?P<sign>[-+])?(?P<num>{_NUM})"
+    rf"(?<![\w.+/:{_MINUS_CLASS}])(?P<sign>[+{_MINUS_CLASS}])?(?P<num>{_NUM})"
     r"(?P<mag>\s(?:thousand|million|mln|mn|billion|bn|trillion)\b|(?:bn|[kKmMbBtT])(?!\w))?"
     r"(?P<pct>\s?%|\s(?:percent|per cent|pct)\b)?(?P<mult>[x\u00d7](?!\w))?"
 )
@@ -135,6 +158,10 @@ class NumberToken:
     unit: str | None  # "pct", "USD", or None
     kind: Kind
     resolution: float  # unit of the last displayed digit: 0.1 for "62.3"
+    signed: bool = False  # written with an explicit + or minus sign
+    # Wrapped in parentheses, "(1.35%)": an accounting negative or an
+    # aside, which only the metric can tell apart (see claims._resolve).
+    parenthesized: bool = False
 
 
 def _merge(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -250,7 +277,7 @@ def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberT
         value = _value(m["num"])
         scale = _MAGNITUDES[m["mag"].strip().lower()] if m["mag"] else 1.0
         value *= scale
-        if m["sign"] == "-":
+        if m["sign"] and m["sign"] != "+":
             value = -value
         kind: Kind = "multiple" if m["mult"] else "point"
         unit = "pct" if m["pct"] else None
@@ -268,6 +295,10 @@ def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberT
                 unit=unit,
                 kind=kind,
                 resolution=_resolution(m["num"]) * scale,
+                signed=m["sign"] is not None,
+                parenthesized=m.start() > 0
+                and text[m.start() - 1] == "("
+                and text[m.end() : m.end() + 1] == ")",
             )
         )
 
