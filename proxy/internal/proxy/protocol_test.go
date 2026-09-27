@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -88,6 +90,50 @@ func TestNoReplyWithoutRequest(t *testing.T) {
 				t.Fatalf("got %d receipts, want none", len(receipts))
 			}
 		})
+	}
+}
+
+// TestAmbiguousToolsCallParamsRejected pins that params the proxy and
+// the upstream could read differently are refused before the upstream
+// is called: with a duplicate "name", Go routes and receipts the last
+// value while the upstream may execute the first.
+func TestAmbiguousToolsCallParamsRejected(t *testing.T) {
+	cases := []struct {
+		name   string
+		params string
+	}{
+		{"duplicate tool name", `{"name":"nope","name":"get_indicators","arguments":{"symbol":"NVDA"}}`},
+		{"duplicate argument", `{"name":"get_indicators","arguments":{"symbol":"AMD","symbol":"NVDA"}}`},
+		{"lone surrogate argument", `{"name":"get_indicators","arguments":{"symbol":"\ud800"}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := startSession(t)
+			if _, err := s.agent.Call("initialize", map[string]any{"protocolVersion": "2025-06-18"}); err != nil {
+				t.Fatal(err)
+			}
+			_, err := s.agent.Call("tools/call", json.RawMessage(tc.params))
+			var rpcErr *mcp.Error
+			if !errors.As(err, &rpcErr) || rpcErr.Code != mcp.CodeInvalidParams {
+				t.Fatalf("got %v, want invalid params", err)
+			}
+			s.shutdown()
+			if receipts, err := store.Scan(s.logPath); err != nil || len(receipts) != 0 {
+				t.Fatalf("receipts: %d, %v; want none", len(receipts), err)
+			}
+		})
+	}
+}
+
+// TestAmbiguousResultFailsCall pins invariant 2 for results: a payload
+// that cannot be canonicalized without changing its meaning yields no
+// receipt, so the call fails.
+func TestAmbiguousResultFailsCall(t *testing.T) {
+	s, _ := recordingServer(t)
+	result := json.RawMessage(`{"content":[{"type":"text","text":"{\"rsi_14\":99,\"rsi_14\":10}"}]}`)
+	err := s.record("get_indicators", json.RawMessage(`{"symbol":"NVDA"}`), result, 0)
+	if err == nil || !strings.Contains(err.Error(), "duplicate key") {
+		t.Fatalf("got %v, want duplicate key error", err)
 	}
 }
 

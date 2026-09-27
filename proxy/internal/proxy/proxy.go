@@ -214,6 +214,13 @@ func (s *Server) handleToolsCall(m *mcp.Message) error {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
 	}
+	// Params the proxy and the upstream could read differently are
+	// refused before the upstream runs: with a duplicate "name", Go would
+	// route and receipt the last value while the upstream may execute
+	// the first. Canonicalize is the strict reader (receipt package).
+	if _, err := receipt.Canonicalize(m.Params); len(m.Params) > 0 && err != nil {
+		return s.replyError(m, mcp.CodeInvalidParams, fmt.Sprintf("tools/call: params: %v", err))
+	}
 	if err := json.Unmarshal(m.Params, &params); err != nil || params.Name == "" {
 		return s.replyError(m, mcp.CodeInvalidParams, "tools/call: missing tool name")
 	}

@@ -222,7 +222,7 @@ Both `args_canonical` and `result_canonical` — and the digest and signature ov
 - No insignificant whitespace
 - UTC ISO-8601 timestamps with explicit `Z`
 
-**Implemented today (literal-preserving contract):** keys sorted recursively, compact output, UTF-8 passthrough with no HTML escaping, and number literals *preserved exactly as the upstream wrote them*. There is no number normalization and no NFC pass, so `62.30` and `62.3` digest differently (pitfalls P-010). The contract is internally consistent and pinned across Go and Python by `testdata/canonical_vectors.json` and a CI job that regenerates the Go-written golden log and fails on drift. Closing the gap to JCS, with differential fuzzing between the two implementations, is roadmap Phase 4.
+**Implemented today (literal-preserving contract):** keys sorted recursively, compact output, UTF-8 passthrough with no HTML escaping, and number literals *preserved exactly as the upstream wrote them*. The Go writer rejects, rather than normalizes, input with duplicate object keys, invalid UTF-8, or lone-surrogate `\u` escapes: the tool call fails (invariant 2) instead of signing a document that means something other than what the agent received. There is no number normalization and no NFC pass, so `62.30` and `62.3` digest differently (pitfalls P-010). The contract is internally consistent and pinned across Go and Python by `testdata/canonical_vectors.json` and a CI job that regenerates the Go-written golden log and fails on drift. Closing the gap to JCS, with differential fuzzing between the two implementations, is roadmap Phase 4.
 
 This is the part that silently breaks cross-language (Go writes, Python verifies) if hand-rolled inconsistently.
 
