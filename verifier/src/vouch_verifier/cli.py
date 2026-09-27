@@ -50,7 +50,11 @@ from vouch_verifier.vocabulary import FINANCE, load_vocabulary
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="vouch-verify", description=__doc__)
+    p = argparse.ArgumentParser(
+        prog="vouch-verify",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p.add_argument("--answer", required=True, help="file containing the agent's final answer")
     p.add_argument("--receipts", required=True, help="receipt log (JSONL)")
     p.add_argument("--tolerances", help="tolerance policy YAML (default: built-in policy)")

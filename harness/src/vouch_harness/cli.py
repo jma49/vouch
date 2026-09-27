@@ -20,7 +20,9 @@ from vouch_verifier.signing import load_keyring
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="vouch-eval", description=__doc__)
+    p = argparse.ArgumentParser(
+        prog="vouch-eval", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("--receipts", required=True, help="receipt log (JSONL)")
     p.add_argument("--n", type=int, default=10, help="number of runs (minimum 2)")
     p.add_argument("--seed", type=int, default=0)

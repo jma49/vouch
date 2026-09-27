@@ -103,12 +103,6 @@ _SENTENCE_SPLIT_RE = re.compile(r"[.!?](?:\s|$)|\n")
 _TABLE_ROW_RE = re.compile(r"^[ \t]*\|.*\|[ \t]*$")
 _TABLE_SEPARATOR_RE = re.compile(r"^[ \t]*\|(?:[ \t]*:?-{3,}:?[ \t]*\|)+[ \t]*$")
 
-# The finance vocabulary is the default; see vouch_verifier.vocabulary.
-# These names stay for callers that read the default tables.
-DEFAULT_METRIC_SYNONYMS: dict[str, str] = dict(FINANCE.synonyms)
-DEFAULT_METRIC_UNITS: dict[str, str | None] = dict(FINANCE.units)
-DEFAULT_SIGNED_METRICS: frozenset[str] = FINANCE.signed
-
 # "fell 1.35% to 172.04", "rose from 170 to 172.04": a bare number after
 # a move and "to" is the resulting price (issue #39). Only used when no
 # price keyword resolves it first, so "closed up 1.92% at 181.52" still

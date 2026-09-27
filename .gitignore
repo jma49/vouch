@@ -41,3 +41,4 @@ coverage.out
 
 # Pinned MCP reference servers for `make integration` (regenerable)
 /.cache/
+.mypy_cache/

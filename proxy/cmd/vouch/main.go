@@ -3,7 +3,8 @@
 //	vouch keygen [--out <dir>] [--name <name>]
 //	vouch proxy --signing-key <key.pem> --upstream "[name=]cmd args" \
 //	    [--upstream "[name=]https://host/mcp" --upstream-header "name=H: v"] \
-//	    [--listen 127.0.0.1:8765] [--cite] --receipts <dir> --schemas <dir> [--session <id>]
+//	    [--listen 127.0.0.1:8766] [--cite] --receipts <dir> --schemas <dir> [--session <id>]
+//	    [--mode live|record|replay --fixtures <dir>]
 //	vouch receipts cat <log>
 //	vouch canon [--lines] < input
 //	vouch receipts verify --public-key <key.pub.pem> [--public-key ...] \
@@ -79,12 +80,15 @@ func usage() {
   vouch keygen [--out <dir>] [--name <name>]
   vouch proxy --signing-key <key.pem> --upstream "[name=]cmd args" [--upstream ...] \
       [--upstream "[name=]https://host/mcp" --upstream-header "name=Header: value"] \
-      [--listen 127.0.0.1:8765] [--cite] --receipts <dir> --schemas <dir> [--session <id>]
+      [--listen 127.0.0.1:8766] [--cite] --receipts <dir> --schemas <dir> [--session <id>]
+      [--mode live|record|replay --fixtures <dir>]
   vouch receipts cat <log>
   vouch receipts verify --public-key <key.pub.pem> [--public-key ...] \
       [--require-sealed] [--expect-head <digest>] <log>
   vouch canon [--lines] < input
-  vouch version`)
+  vouch version
+
+Run a command with -h for every flag it takes.`)
 }
 
 func runProxy(args []string) error {
