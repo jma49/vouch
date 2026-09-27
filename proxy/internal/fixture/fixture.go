@@ -252,7 +252,7 @@ func canonicalCallArgs(params any) (tool string, argsCanonical []byte, err error
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
 	}
-	if err := json.Unmarshal(raw, &p); err != nil {
+	if err := receipt.DecodeStrict(raw, &p); err != nil {
 		return "", nil, fmt.Errorf("fixture: parse tools/call params: %w", err)
 	}
 	if len(p.Arguments) == 0 {

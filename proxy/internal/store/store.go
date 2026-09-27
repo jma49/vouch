@@ -323,9 +323,27 @@ func (l *Log) Close() error {
 // signature from one of them before trusting the payload; without, it
 // only decodes.
 func decodeEntry(line []byte, keys sign.Keyring) (*Entry, error) {
+	// Exactly the DSSE keys, in both languages: a line with "payload"
+	// and "Payload" would otherwise be one log to Go and another to the
+	// Python verifier (#98).
+	if _, err := receipt.Canonicalize(line); err != nil {
+		return nil, fmt.Errorf("not an envelope: %w", err)
+	}
+	if err := receipt.ExactKeys(line, "payload", "payloadType", "signatures"); err != nil {
+		return nil, fmt.Errorf("not an envelope: %w", err)
+	}
 	var env sign.Envelope
 	if err := json.Unmarshal(line, &env); err != nil {
 		return nil, fmt.Errorf("not an envelope: %w", err)
+	}
+	var sigs []json.RawMessage
+	if err := json.Unmarshal(extractRaw(line, "signatures"), &sigs); err != nil {
+		return nil, fmt.Errorf("not an envelope: signatures: %w", err)
+	}
+	for i, s := range sigs {
+		if err := receipt.ExactKeys(s, "keyid", "sig"); err != nil {
+			return nil, fmt.Errorf("not an envelope: signature %d: %w", i, err)
+		}
 	}
 	if env.PayloadType != receipt.PayloadType && env.PayloadType != receipt.CheckpointType {
 		return nil, fmt.Errorf("unknown payload type %q", env.PayloadType)
@@ -344,7 +362,7 @@ func decodeEntry(line []byte, keys sign.Keyring) (*Entry, error) {
 	e := &Entry{Payload: payload, KeyID: keyID}
 	if env.PayloadType == receipt.CheckpointType {
 		var cp receipt.Checkpoint
-		if err := json.Unmarshal(payload, &cp); err != nil {
+		if err := receipt.DecodeStrict(payload, &cp); err != nil {
 			return nil, fmt.Errorf("parse checkpoint: %w", err)
 		}
 		e.Checkpoint = &cp
@@ -450,4 +468,12 @@ func walk(path string, keys sign.Keyring, visit func(*Entry) error) error {
 			return nil
 		}
 	}
+}
+
+// extractRaw returns the raw value of key in a JSON object already
+// checked by receipt.ExactKeys.
+func extractRaw(obj []byte, key string) json.RawMessage {
+	var m map[string]json.RawMessage
+	_ = json.Unmarshal(obj, &m)
+	return m[key]
 }

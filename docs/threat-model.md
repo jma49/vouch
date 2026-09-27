@@ -44,7 +44,7 @@ to that statement.
 | P5 | The receipt covers what the agent actually received, not only the extracted payload; under `--cite` the agent also sees a block the proxy derives from the receipt itself (#81) | a misleading upstream response | `response_canonical` and its digest, signed (#20) | `TestReceiptBindsTheResponse`; `test_tampered_response_is_rejected_without_a_key` |
 | P6 | Numbers are recorded exactly as the tool wrote them; ambiguous input is refused | canonicalization drift | vouch canonical JSON v2: literals verbatim; duplicate keys, lone surrogates, and nesting past 256 levels rejected in both languages (#9, #27, #52, #62) | `testdata/canonical_vectors.json` in Go and Python; differential fuzzing (`test_differential.py`, `FuzzCanonicalize`) |
 | P7 | A (session, turn) is recorded once | replay within a log | uniqueness checked by the store and the verifier | duplicate tests, including a validly signed replay |
-| P8 | Anyone can verify, without a secret and without vouch's code | n/a (a capability) | public keys; DSSE verification needs only base64 and Ed25519 | cross-language golden log, checked by Go and Python in CI |
+| P8 | Anyone can verify, without a secret and without vouch's code, and every verifier reads the same log | a log crafted to parse differently per reader | public keys; DSSE verification needs only base64 and Ed25519; envelopes and bodies read by exact key in both languages (#98) | cross-language golden log, checked by Go and Python in CI; tamper suites' key-case cases |
 
 ## Not protected
 
