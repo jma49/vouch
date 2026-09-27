@@ -78,7 +78,7 @@ def to_markdown(result: EvalResult, seed: int = 0) -> str:
 def to_json(result: EvalResult, seed: int = 0) -> str:
     rng = random.Random(seed)
 
-    def dump(s: Stats) -> dict:
+    def dump(s: Stats) -> dict[str, object]:
         return {"mean": s.mean, "std": s.std, "min": s.lo, "max": s.hi, "ci95": [s.ci_lo, s.ci_hi]}
 
     payload = {

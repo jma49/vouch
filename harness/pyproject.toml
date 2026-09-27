@@ -8,7 +8,7 @@ license = { text = "MIT" }
 dependencies = ["vouch-verifier", "pyyaml>=6"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.16"]
+dev = ["pytest>=8", "ruff>=0.16", "mypy>=1.10", "types-PyYAML"]
 
 [project.scripts]
 vouch-eval = "vouch_harness.cli:main"
@@ -22,3 +22,10 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]

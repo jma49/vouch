@@ -107,8 +107,8 @@ def _sentence_bounds(answer: str, pos: int) -> tuple[int, int]:
     start = 0
     for m in _SENTENCE_SPLIT_RE.finditer(answer, 0, pos):
         start = m.end()
-    m = _SENTENCE_SPLIT_RE.search(answer, pos)
-    return start, m.start() + 1 if m else len(answer)
+    end = _SENTENCE_SPLIT_RE.search(answer, pos)
+    return start, end.start() + 1 if end else len(answer)
 
 
 def _nearest_keyword(

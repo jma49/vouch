@@ -17,7 +17,7 @@ GOLDEN = Path(__file__).parent.parent.parent / "testdata" / "receipts_golden.jso
 KEY = b"vouch-golden-key"
 
 
-def test_load_golden_log_with_signatures():
+def test_load_golden_log_with_signatures() -> None:
     receipts = load_log(GOLDEN, key=KEY)
     assert [r.receipt_id for r in receipts] == ["golden-0", "golden-1", "golden-2"]
 
@@ -37,12 +37,12 @@ def test_load_golden_log_with_signatures():
     assert "英伟达" in r2.result_canonical
 
 
-def test_wrong_key_rejected():
+def test_wrong_key_rejected() -> None:
     with pytest.raises(ReceiptError, match="signature"):
         load_log(GOLDEN, key=b"wrong-key")
 
 
-def test_tampered_value_rejected(tmp_path):
+def test_tampered_value_rejected(tmp_path: Path) -> None:
     lines = GOLDEN.read_text().splitlines()
     # The deadly class: nudge a receipted value, leave everything else.
     tampered = lines[0].replace("62.3", "68.1")
@@ -53,7 +53,7 @@ def test_tampered_value_rejected(tmp_path):
         load_log(bad, key=KEY)
 
 
-def test_tampered_receipt_fails_verify_not_load(tmp_path):
+def test_tampered_receipt_fails_verify_not_load(tmp_path: Path) -> None:
     # Tampering that keeps digest/result consistent still breaks the HMAC.
     line = json.loads(GOLDEN.read_text().splitlines()[1])
     line["tool_name"] = "get_totally_different_tool"
@@ -63,7 +63,7 @@ def test_tampered_receipt_fails_verify_not_load(tmp_path):
     assert not verify_receipt(receipts[0], KEY)
 
 
-def test_duplicate_session_turn_rejected(tmp_path):
+def test_duplicate_session_turn_rejected(tmp_path: Path) -> None:
     lines = GOLDEN.read_text().splitlines()
     bad = tmp_path / "receipts.jsonl"
     bad.write_text(lines[0] + "\n" + lines[0] + "\n")
@@ -71,7 +71,7 @@ def test_duplicate_session_turn_rejected(tmp_path):
         load_log(bad)
 
 
-def test_digest_mismatch_rejected(tmp_path):
+def test_digest_mismatch_rejected(tmp_path: Path) -> None:
     line = json.loads(GOLDEN.read_text().splitlines()[0])
     line["result_digest"] = "sha256:" + "0" * 64
     bad = tmp_path / "receipts.jsonl"
@@ -80,7 +80,7 @@ def test_digest_mismatch_rejected(tmp_path):
         load_log(bad)
 
 
-def test_index_lookup():
+def test_index_lookup() -> None:
     receipts = load_log(GOLDEN, key=KEY)
     conn = build_index(receipts)
 

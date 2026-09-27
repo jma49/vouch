@@ -9,7 +9,7 @@ from vouch_harness.gold import build_gold_set
 from vouch_harness.mutate import inject
 from vouch_verifier.claims import extract_claims
 from vouch_verifier.matcher import match_claims
-from vouch_verifier.receipts import load_log
+from vouch_verifier.receipts import Receipt, load_log
 from vouch_verifier.verdict import Verdict
 
 GOLDEN = Path(__file__).parent.parent.parent / "testdata" / "receipts_golden.jsonl"
@@ -17,26 +17,26 @@ KEY = b"vouch-golden-key"
 
 
 @pytest.fixture(scope="module")
-def receipts():
+def receipts() -> list[Receipt]:
     return load_log(GOLDEN, key=KEY)
 
 
-def entities(receipts):
+def entities(receipts: list[Receipt]) -> set[str]:
     return {f.entity for r in receipts for f in r.facts if f.entity}
 
 
-def verdicts_for(answer, receipts):
+def verdicts_for(answer: str, receipts: list[Receipt]) -> list[Verdict]:
     extraction = extract_claims(answer, known_entities=entities(receipts))
     return [mc.verdict for mc in match_claims(extraction, receipts)]
 
 
-def is_flagged(answer, receipts):
+def is_flagged(answer: str, receipts: list[Receipt]) -> bool:
     return any(
         v in (Verdict.CONTRADICTED, Verdict.UNSUPPORTED) for v in verdicts_for(answer, receipts)
     )
 
 
-def test_synthesized_answers_are_clean(receipts):
+def test_synthesized_answers_are_clean(receipts: list[Receipt]) -> None:
     for cited in (True, False):
         answer = synthesize(receipts, cited=cited)
         vs = verdicts_for(answer, receipts)
@@ -44,11 +44,11 @@ def test_synthesized_answers_are_clean(receipts):
         assert all(v is Verdict.SUPPORTED for v in vs), (cited, vs)
 
 
-def test_gold_set_is_deterministic(receipts):
+def test_gold_set_is_deterministic(receipts: list[Receipt]) -> None:
     assert build_gold_set(receipts, seed=7) == build_gold_set(receipts, seed=7)
 
 
-def test_gold_set_has_clean_and_mutant_cases(receipts):
+def test_gold_set_has_clean_and_mutant_cases(receipts: list[Receipt]) -> None:
     cases = build_gold_set(receipts)
     names = {c.name for c in cases}
     assert "clean_cited" in names and "clean_uncited" in names
@@ -66,14 +66,14 @@ def test_gold_set_has_clean_and_mutant_cases(receipts):
         assert m in mutations, f"missing mutation {m}"
 
 
-def test_mutants_differ_from_original(receipts):
+def test_mutants_differ_from_original(receipts: list[Receipt]) -> None:
     for cited in (True, False):
         answer = synthesize(receipts, cited=cited)
         for m in inject(answer, receipts):
             assert m.answer != answer, m.mutation
 
 
-def test_detectable_mutations_are_flagged(receipts):
+def test_detectable_mutations_are_flagged(receipts: list[Receipt]) -> None:
     """The mutation classes the MVP verifier promises to catch."""
     detectable = {"digit_swap", "magnitude_shift", "sign_flip", "fabricated_citation"}
     for cited in (True, False):
@@ -83,7 +83,7 @@ def test_detectable_mutations_are_flagged(receipts):
                 assert is_flagged(m.answer, receipts), (cited, m.mutation, m.description)
 
 
-def test_entity_swap_flagged_on_uncited(receipts):
+def test_entity_swap_flagged_on_uncited(receipts: list[Receipt]) -> None:
     # Uncited entity swaps must be flagged (wrong entity's value).
     # Cited ones are caught only if the swapped value drifts; not asserted.
     answer = synthesize(receipts, cited=False)
@@ -93,7 +93,7 @@ def test_entity_swap_flagged_on_uncited(receipts):
         assert is_flagged(m.answer, receipts), m.description
 
 
-def test_clean_answers_not_flagged_false_positive_check(receipts):
+def test_clean_answers_not_flagged_false_positive_check(receipts: list[Receipt]) -> None:
     for case in build_gold_set(receipts):
         if case.mutation is None:
             assert not is_flagged(case.answer, receipts), case.name
