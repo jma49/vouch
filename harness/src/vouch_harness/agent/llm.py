@@ -71,6 +71,20 @@ class ModelConfig:
         return self.base_url.rstrip("/") + "/chat/completions"
 
 
+def cache_identity(config: ModelConfig) -> str:
+    """Everything about a model that shapes its requests besides the
+    conversation: endpoint, model id, and params as canonical JSON. A
+    changed setting must miss the cache, not replay old responses.
+    Empty params add nothing, so default-settings caches stay valid."""
+    identity = f"{config.endpoint}|{config.model}"
+    if config.params:
+        params = json.dumps(
+            config.params, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        )
+        identity += f"|{params}"
+    return identity
+
+
 def load_models(path: str | Path) -> dict[str, ModelConfig]:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     out = {}
@@ -198,7 +212,7 @@ class CachedClient:
     def __init__(self, inner: ChatClient, cache_dir: str | Path, identity: str) -> None:
         self._inner = inner
         self._dir = Path(cache_dir)
-        self._identity = identity  # model endpoint and id; part of every key
+        self._identity = identity  # cache_identity(config); part of every key
         self.hits = 0
         self.misses = 0
 

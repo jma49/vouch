@@ -189,6 +189,17 @@ def test_list_content_is_joined_from_its_text_parts() -> None:
     assert transcript[-1]["content"] == parts  # the transcript keeps what the provider sent
 
 
+def test_cache_identity_covers_request_params() -> None:
+    def identity(params: dict[str, Any]) -> str:
+        return llm.cache_identity(ModelConfig("t", "https://x/v1/", "m-1", "K", params=params))
+
+    assert identity({"temperature": 0.0}) != identity({"temperature": 1.0})
+    assert identity({"temperature": 0.0}) != identity({})
+    assert identity({"a": 1, "b": {"c": 2, "d": 3}}) == identity({"b": {"d": 3, "c": 2}, "a": 1})
+    # Default settings keep the identity (and so the cache) of earlier versions.
+    assert identity({}) == "https://x/v1/chat/completions|m-1"
+
+
 def test_cache_reads_entries_written_before_finish_reason(tmp_path: Path) -> None:
     client = CachedClient(ScriptedClient([]), tmp_path, identity="m")
     msgs: list[Message] = [{"role": "user", "content": "hi"}]

@@ -19,7 +19,13 @@ import traceback
 from collections.abc import Callable
 from pathlib import Path
 
-from vouch_harness.agent.llm import CachedClient, LLMError, OpenAICompatClient, load_models
+from vouch_harness.agent.llm import (
+    CachedClient,
+    LLMError,
+    OpenAICompatClient,
+    cache_identity,
+    load_models,
+)
 from vouch_harness.agent.runner import RunSpec, execute, load_tasks, run_dir
 
 EVAL_HMAC_KEY = "vouch-eval-key"
@@ -96,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     except LLMError as e:
         print(f"vouch-agent: {e}", file=sys.stderr)
         return 2
-    client = CachedClient(inner, args.cache, identity=f"{config.endpoint}|{config.model}")
+    client = CachedClient(inner, args.cache, identity=cache_identity(config))
     env = {**os.environ, "VOUCH_HMAC_KEY": os.environ.get("VOUCH_HMAC_KEY", EVAL_HMAC_KEY)}
 
     failed = run_batch(
