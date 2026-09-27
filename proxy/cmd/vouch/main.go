@@ -118,6 +118,9 @@ func runProxy(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Upstreams are spawned with this process's environment; the key's
+	// path is none of their business once the key is loaded (#101).
+	os.Unsetenv("VOUCH_SIGNING_KEY")
 	signer := sign.NewSigner(priv)
 	if *session == "" {
 		*session = "s-" + randomHex(8)
@@ -343,6 +346,9 @@ func parseHeaders(values []string, specs []proxy.UpstreamSpec) (map[string]http.
 			if value == "" {
 				return nil, fmt.Errorf("--upstream-header %q: $%s is empty", v, env)
 			}
+			// The credential is for one HTTP upstream; spawned upstreams
+			// inherit the environment, so it leaves it (#101).
+			os.Unsetenv(env)
 		}
 		if out[name] == nil {
 			out[name] = http.Header{}

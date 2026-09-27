@@ -605,3 +605,11 @@ def test_end_to_end_citation_condition(tmp_path: Path) -> None:
     ]
     assert claim.verdict is Verdict.SUPPORTED
     assert claim.receipt_id == receipts[0].receipt_id
+
+
+def test_the_proxy_gets_no_api_keys() -> None:
+    # #101: the proxy's environment is inherited by the upstream it spawns.
+    models = load_models(ROOT / "eval" / "models.yaml")
+    key_var = next(iter(models.values())).api_key_env
+    env = agent_cli.proxy_environment({key_var: "sk-secret", "PATH": "/bin"}, models)
+    assert env == {"PATH": "/bin"}

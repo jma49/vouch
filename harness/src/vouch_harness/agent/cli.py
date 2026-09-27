@@ -17,12 +17,13 @@ import os
 import sys
 import tempfile
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from vouch_harness.agent.llm import (
     CachedClient,
     LLMError,
+    ModelConfig,
     OpenAICompatClient,
     cache_identity,
     load_models,
@@ -54,6 +55,16 @@ def run_batch(pending: list[RunSpec], run_one: Callable[[RunSpec], Path], out: P
             continue
         print(f"[{i}/{len(pending)}] {spec.session} -> {d}", file=sys.stderr)
     return failed
+
+
+def proxy_environment(
+    environ: Mapping[str, str], models: Mapping[str, ModelConfig]
+) -> dict[str, str]:
+    """The environment for the proxy, and so for the upstream it spawns:
+    this process's, without any model's API key. Only the LLM client,
+    in this process, needs those (#101)."""
+    secrets = {m.api_key_env for m in models.values()}
+    return {k: v for k, v in environ.items() if k not in secrets}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -120,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     with tempfile.TemporaryDirectory(prefix="vouch-agent-") as private_dir:
         # A 0600 copy that lives only for this batch (signing.private_copy).
         key_copy = private_copy(signing_key, Path(private_dir))
-        env = {**os.environ, "VOUCH_SIGNING_KEY": str(key_copy)}
+        env = {**proxy_environment(os.environ, models), "VOUCH_SIGNING_KEY": str(key_copy)}
         failed = run_batch(
             pending,
             lambda spec: execute(spec, client, args.out, args.proxy, args.schemas, env),

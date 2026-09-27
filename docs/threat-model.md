@@ -106,6 +106,11 @@ any system of this shape; the rest are open work.
   or `vouch-verify` with the same options.
 - Rotate keys by adding the new public key to verifiers' keyrings
   before switching the proxy; keyrings accept any trusted signature.
+- Spawned upstreams inherit the proxy's environment minus every
+  `VOUCH_` variable, the key path, and `env:` credentials (#101), but
+  they run as the proxy's user: an upstream that reads the key file
+  directly can still forge receipts. Run untrusted upstreams as another
+  user, or reach them over HTTP.
 - Keep `--listen` on a loopback address. The HTTP endpoint checks
   browser origins (against DNS rebinding) but has no authentication:
   anyone who can reach it can make calls that get receipted. Pass
