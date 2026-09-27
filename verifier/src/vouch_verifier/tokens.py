@@ -84,6 +84,8 @@ _MASKS = [
         r"(?P<m>(?:19|20)\d{2})\b",
         re.IGNORECASE,
     ),
+    # List markers: "1. ", "2) " at the start of a line (issue #15)
+    re.compile(r"(?m)^[ \t]*(?P<m>\d+)[.)](?=[ \t])"),
     # Ordinals: 3rd, 52nd
     re.compile(r"\b\d+(?:st|nd|rd|th)\b", re.IGNORECASE),
     # Period lengths: 50-day, 52-week, 5 sessions, 14 days
