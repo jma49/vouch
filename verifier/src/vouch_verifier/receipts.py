@@ -51,6 +51,12 @@ class Receipt:
     upstream_latency_ms: int
     sig: str
     raw: object = field(repr=False, compare=False, default=None)
+    # The whole tools/call result the agent received (#20). Absent in
+    # logs written before the proxy recorded it; the signature, when
+    # checked, covers it either way.
+    payload_source: str | None = None
+    response_canonical: str | None = None
+    response_digest: str | None = None
 
 
 class ReceiptError(ValueError):
@@ -112,6 +118,11 @@ def _parse_receipt(line: str, lineno: int) -> Receipt:
         tool_name=text("tool_name"),
         args_canonical=serialize(tree.get("args_canonical")),
         result_canonical=serialize(tree.get("result_canonical")),
+        payload_source=optional_text("payload_source"),
+        response_canonical=(
+            serialize(tree["response_canonical"]) if "response_canonical" in tree else None
+        ),
+        response_digest=optional_text("response_digest"),
         result_digest=text("result_digest"),
         facts=tuple(facts),
         data_asof=optional_text("data_asof"),
@@ -171,6 +182,13 @@ def load_log(path: str | Path, key: bytes | None = None) -> list[Receipt]:
             ids.add(r.receipt_id)
             if _sha256_digest(r.result_canonical) != r.result_digest:
                 raise ReceiptError(f"line {lineno}: result_digest does not match result_canonical")
+            if (r.response_digest is None) != (r.response_canonical is None) or (
+                r.response_canonical is not None
+                and _sha256_digest(r.response_canonical) != r.response_digest
+            ):
+                raise ReceiptError(
+                    f"line {lineno}: response_digest does not match response_canonical"
+                )
             dup = seen.get((r.session_id, r.turn_index))
             if dup is not None:
                 raise ReceiptError(

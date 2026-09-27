@@ -32,13 +32,22 @@ type Fact struct {
 // boundaries, (b) third-party re-verifiability of eval results, and
 // (c) replay protection via (SessionID, TurnIndex) uniqueness.
 type Receipt struct {
-	ReceiptID         string          `json:"receipt_id"`
-	SessionID         string          `json:"session_id"`
-	TurnIndex         int             `json:"turn_index"`
-	ToolName          string          `json:"tool_name"`
-	ArgsCanonical     json.RawMessage `json:"args_canonical"`
-	ResultCanonical   json.RawMessage `json:"result_canonical"`
-	ResultDigest      string          `json:"result_digest"`
+	ReceiptID       string          `json:"receipt_id"`
+	SessionID       string          `json:"session_id"`
+	TurnIndex       int             `json:"turn_index"`
+	ToolName        string          `json:"tool_name"`
+	ArgsCanonical   json.RawMessage `json:"args_canonical"`
+	ResultCanonical json.RawMessage `json:"result_canonical"`
+	ResultDigest    string          `json:"result_digest"`
+	// PayloadSource says where in the response result_canonical was
+	// taken from: "structuredContent", "content/<i>/text", or "result".
+	PayloadSource string `json:"payload_source"`
+	// ResponseCanonical is the whole tools/call result exactly as the
+	// agent received it. Facts come from the payload, but the signature
+	// must cover what the model actually read, which can differ (a text
+	// block beside structured content, extra blocks) (#20).
+	ResponseCanonical json.RawMessage `json:"response_canonical"`
+	ResponseDigest    string          `json:"response_digest"`
 	Facts             []Fact          `json:"facts"`
 	DataAsOf          string          `json:"data_asof,omitempty"`
 	WallTime          time.Time       `json:"wall_time"`
