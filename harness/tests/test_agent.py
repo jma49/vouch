@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import needs_proxy
 from keys import EVAL_KEY_ID, EVAL_KEYS, EVAL_PRIV, proxy_env
 
 from vouch_harness import market, signing
@@ -539,7 +540,7 @@ def test_close_kills_a_server_that_does_not_exit(tmp_path: Path) -> None:
     assert _reaped(int(pidfile.read_text()))
 
 
-@pytest.mark.skipif(not PROXY.exists(), reason="proxy binary not built (make build)")
+@needs_proxy
 def test_end_to_end_through_the_go_proxy(tmp_path: Path) -> None:
     spec = runner.RunSpec("fake", runner.Task("t08", "Compare NVDA and AMD."), sample=0)
     client = ScriptedClient(
@@ -561,7 +562,7 @@ def test_end_to_end_through_the_go_proxy(tmp_path: Path) -> None:
     assert nvda_last.value == market.get_quote("NVDA")["last"]
 
 
-@pytest.mark.skipif(not PROXY.exists(), reason="proxy binary not built (make build)")
+@needs_proxy
 def test_end_to_end_malformed_calls_do_not_end_the_run(tmp_path: Path) -> None:
     spec = runner.RunSpec("fake", runner.Task("t01", "How is NVDA?"), sample=0)
     client = ScriptedClient(
@@ -603,7 +604,7 @@ class CitingClient:
         return Reply(answer(f"NVDA last traded at {value} {citation}."), "stop")
 
 
-@pytest.mark.skipif(not PROXY.exists(), reason="proxy binary not built (make build)")
+@needs_proxy
 def test_end_to_end_citation_condition(tmp_path: Path) -> None:
     """P-044 end to end: with --cite the proxy offers citations, a model
     that uses one gets a Tier 1 SUPPORTED verdict from the verifier, and

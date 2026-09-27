@@ -147,9 +147,13 @@ jobs:
         working-directory: verifier
         env:
           VOUCH_DIFF_EXAMPLES: "500"
-      - name: Agent end to end through the proxy
-        run: python -m pytest -q tests/test_agent.py -k end_to_end -rs
+      - name: Harness, end to end through the built proxy
+        run: python -m pytest -q -rs
         working-directory: harness
+        env:
+          # The whole harness suite, and a missing proxy binary fails the
+          # end-to-end tests instead of skipping them (#106).
+          VOUCH_REQUIRE_PROXY: "1"
       # The same Go-signed log, verified independently by the Go reader;
       # the Python side verifies it in the tests above.
       - name: Verify golden log signatures (Go)

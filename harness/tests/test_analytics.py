@@ -13,7 +13,7 @@ import shlex
 import sys
 from pathlib import Path
 
-import pytest
+from conftest import needs_proxy
 from keys import EVAL_KEYS, proxy_env
 
 from vouch_harness import analytics
@@ -93,7 +93,7 @@ def test_the_stdio_loop_survives_bad_messages() -> None:
     assert replies[-1] == {"jsonrpc": "2.0", "id": 2, "result": {}}
 
 
-@pytest.mark.skipif(not PROXY.exists(), reason="proxy binary not built (make build)")
+@needs_proxy
 def test_second_domain_through_the_proxy(tmp_path: Path) -> None:
     upstream = f"{shlex.quote(sys.executable)} -m vouch_harness.analytics"
     argv = [str(PROXY), "proxy", "--upstream", upstream, "--receipts", str(tmp_path),
