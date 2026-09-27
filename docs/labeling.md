@@ -15,6 +15,10 @@ vouch-label stats                               # progress per labeler
 vouch-label agreement <name-a> <name-b>         # Cohen's kappa on shared spans
 ```
 
+Open the tool at `http://127.0.0.1:<port>/` or `http://localhost:<port>/`.
+It refuses any other Host name and any write from another origin, so
+no other web page you have open can read runs or forge labels.
+
 Labels go to `eval/labels/<your-name>.jsonl`. The file is append-only:
 relabeling a span adds a record, and the latest record wins. Commit it
 like any other data.

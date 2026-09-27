@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import threading
 import urllib.error
@@ -125,7 +126,7 @@ def server(tmp_path: Path) -> Iterator[str]:
     make_run(tmp_path / "runs")
     app = LabelApp(tmp_path / "runs", tmp_path / "labels", "alice")
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), _handler(app))
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread = threading.Thread(target=httpd.serve_forever, args=(0.05,), daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{httpd.server_port}"
     httpd.shutdown()
@@ -154,6 +155,73 @@ def test_http_api_round_trip(server: str) -> None:
     )
     with urllib.request.urlopen(req) as resp:
         assert json.loads(resp.read())["labels"][0]["text"] == "1.15%"
+
+
+def _raw(
+    server: str, method: str, path: str, headers: dict[str, str], body: bytes | None = None
+) -> tuple[int, bytes]:
+    """A request with exactly these headers (urllib would fill in Host)."""
+    port = int(server.rsplit(":", 1)[1])
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+        for k, v in headers.items():
+            conn.putheader(k, v)
+        if body is not None:
+            conn.putheader("Content-Length", str(len(body)))
+        conn.endheaders(body)
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
+
+
+def _label_body() -> bytes:
+    start = ANSWER.index("1.15%")
+    return json.dumps(
+        {"run": "m/t01/s0", "start": start, "end": start + 5, "text": "1.15%", "label": "SUPPORTED"}
+    ).encode()
+
+
+@pytest.mark.parametrize(
+    ("headers", "status"),
+    [
+        ({"Content-Type": "text/plain"}, 415),  # a CORS simple request: no preflight
+        ({"Content-Type": "application/json", "Origin": "https://evil.example"}, 403),
+        ({"Content-Type": "application/json", "Origin": "null"}, 403),
+        ({"Content-Type": "application/json", "Host": "attacker.example"}, 403),
+    ],
+)
+def test_http_api_rejects_forged_label_writes(
+    server: str, tmp_path: Path, headers: dict[str, str], status: int
+) -> None:
+    port = server.rsplit(":", 1)[1]
+    sent = {"Host": f"127.0.0.1:{port}", **headers}
+    assert _raw(server, "POST", "/api/label", sent, _label_body())[0] == status
+    assert not (tmp_path / "labels" / "alice.jsonl").exists()
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost"])
+def test_http_api_accepts_same_origin_writes(server: str, host: str) -> None:
+    port = server.rsplit(":", 1)[1]
+    headers = {
+        "Host": f"{host}:{port}",
+        "Origin": f"http://{host}:{port}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    status, body = _raw(server, "POST", "/api/label", headers, _label_body())
+    assert status == 200, body
+    assert json.loads(body)["labels"][0]["label"] == "SUPPORTED"
+
+
+@pytest.mark.parametrize(
+    ("host", "status"),
+    [("attacker.example", 403), ("127.0.0.1:1", 403), (None, 403), ("localhost:{port}", 200)],
+)
+def test_http_api_checks_the_host_header(server: str, host: str | None, status: int) -> None:
+    port = server.rsplit(":", 1)[1]
+    headers = {} if host is None else {"Host": host.format(port=port)}
+    assert _raw(server, "GET", "/api/runs", headers)[0] == status
 
 
 def test_http_api_rejects_bad_requests(server: str) -> None:
