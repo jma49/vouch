@@ -157,7 +157,7 @@ Reproduced 2026-09-27 against `testdata/receipts_golden.jsonl`.
 - **Cause:** entity, metric keyword, and direction word are each chosen
   by character distance (or mere presence) across the whole sentence,
   in either direction, with no notion of clauses.
-- **Status:** open. Reproduced. Roadmap Phase 1.
+- **Status:** fixed in `fix(verifier): attribute entity, metric, and direction by clause`. Reproduced.
 
 ### P-033 Any in-tolerance candidate makes a claim SUPPORTED
 - **Symptom:** with many facts for the same (entity, metric), such as

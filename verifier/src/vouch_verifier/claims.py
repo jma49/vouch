@@ -16,6 +16,7 @@ state the tier mix (design: "Tier 1 covered N% of numeric claims").
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from vouch_verifier.tokens import Kind, NumberToken, tokenize
@@ -109,7 +110,38 @@ _PCT_FALLBACK_METRIC = "change_pct"
 _NEGATION_RE = re.compile(r"\b(down|fell|dropped|declined|lost|slid)\b", re.IGNORECASE)
 
 
-def _sentence_bounds(answer: str, pos: int) -> tuple[int, int]:
+# Scope boundaries inside a sentence (P-032). Independent clauses split
+# at semicolons, and a metric keyword never reaches *back* across one to
+# an earlier number: "top 5 holdings; it closed at 181.52" does not make
+# 5 a close, while "NVDA RSI peaked; it is now 62.3" still reads 62.3 as
+# RSI. Phrases split at commas and coordinating words; entity, metric,
+# and direction are looked for in the phrase first.
+_CLAUSE_SPLIT_RE = re.compile(r";\s*")
+_PHRASE_SPLIT_RE = re.compile(
+    r",\s+|\s+(?:and|but|while|whereas|versus|vs\.?|compared (?:with|to))\s+", re.IGNORECASE
+)
+
+# A sentence that opens with one of these, and names no entity itself,
+# continues the previous sentence's subject: "AMD last traded at 172.04.
+# It is down 1.35%."
+_PRONOUN_START_RE = re.compile(
+    r"^\s*(?:it|its|it's|the stock|the shares|shares|the company)\b", re.IGNORECASE
+)
+
+
+_Bounds = tuple[int, int]  # absolute [start, end) offsets in the answer
+
+
+@dataclass(frozen=True)
+class _Scope:
+    """Absolute bounds of the sentence, clause, and phrase around a number."""
+
+    sentence: _Bounds
+    clause: _Bounds
+    phrase: _Bounds
+
+
+def _sentence_bounds(answer: str, pos: int) -> _Bounds:
     start = 0
     for m in _SENTENCE_SPLIT_RE.finditer(answer, 0, pos):
         start = m.end()
@@ -117,14 +149,83 @@ def _sentence_bounds(answer: str, pos: int) -> tuple[int, int]:
     return start, end.start() + 1 if end else len(answer)
 
 
-def _keyword_hits(sentence: str, offset: int, num_start: int, table: dict[str, str]) -> list[str]:
-    """Metrics named in the sentence, nearest keyword to the number first."""
-    hits: list[tuple[int, str]] = []
-    lowered = sentence.lower()
-    for kw in sorted(table, key=len, reverse=True):
-        for m in re.finditer(r"(?<!\w)" + re.escape(kw) + r"(?!\w)", lowered):
-            hits.append((abs((offset + m.start()) - num_start), table[kw]))
-    return [metric for _, metric in sorted(hits, key=lambda h: h[0])]
+def _segment(answer: str, bounds: _Bounds, pos: int, splitter: re.Pattern[str]) -> _Bounds:
+    start, end = bounds
+    for m in splitter.finditer(answer, start, end):
+        if m.end() <= pos:
+            start = m.end()
+        elif m.start() >= pos:
+            end = m.start()
+            break
+    return start, end
+
+
+def _scope(answer: str, pos: int) -> _Scope:
+    sentence = _sentence_bounds(answer, pos)
+    clause = _segment(answer, sentence, pos, _CLAUSE_SPLIT_RE)
+    phrase = _segment(answer, clause, pos, _PHRASE_SPLIT_RE)
+    return _Scope(sentence, clause, phrase)
+
+
+def _mentions(
+    answer: str, bounds: _Bounds, names: Iterable[str], flags: int = 0
+) -> list[tuple[int, str]]:
+    """(position, name) for every whole-word mention of a name, in order."""
+    start, end = bounds
+    found: list[tuple[int, str]] = []
+    for name in names:
+        rx = re.compile(r"(?<!\w)" + re.escape(name) + r"(?!\w)", flags)
+        found.extend((m.start(), name) for m in rx.finditer(answer, start, end))
+    return sorted(found)
+
+
+def _within(p: int, bounds: _Bounds) -> bool:
+    return bounds[0] <= p < bounds[1]
+
+
+def _entity(answer: str, pos: int, scope: _Scope, entities: set[str]) -> str | None:
+    mentions = _mentions(answer, scope.sentence, entities)
+    before = [(p, e) for p, e in mentions if p < pos]
+    after = [(p, e) for p, e in mentions if p > pos]
+    # Nearest preceding in the phrase, then following in the phrase, then
+    # preceding in the clause and sentence, then following in the clause.
+    for pool, pick_last in (
+        ([m for m in before if _within(m[0], scope.phrase)], True),
+        ([m for m in after if _within(m[0], scope.phrase)], False),
+        ([m for m in before if _within(m[0], scope.clause)], True),
+        (before, True),
+        ([m for m in after if _within(m[0], scope.clause)], False),
+    ):
+        if pool:
+            return (pool[-1] if pick_last else pool[0])[1]
+    if not mentions and scope.sentence[0] > 0:
+        head = answer[scope.sentence[0] : scope.sentence[1]]
+        if _PRONOUN_START_RE.match(head):
+            previous = _sentence_bounds(answer, max(0, scope.sentence[0] - 2))
+            earlier = _mentions(answer, previous, entities)
+            if earlier:
+                return earlier[0][1]  # the previous sentence's subject
+    return None
+
+
+def _keyword_hits(answer: str, pos: int, scope: _Scope, table: dict[str, str]) -> list[str]:
+    """Metrics named around the number, in the order they should be tried:
+    the phrase by distance, then the rest of the clause before and after
+    the number (nearest first), then earlier clauses of the sentence."""
+    keywords = sorted(table, key=len, reverse=True)
+    hits = [(p, table[kw]) for p, kw in _mentions(answer, scope.sentence, keywords, re.IGNORECASE)]
+    phrase: list[tuple[int, str]] = []
+    before: list[tuple[int, str]] = []
+    after: list[tuple[int, str]] = []
+    earlier: list[tuple[int, str]] = []
+    for p, metric in hits:
+        if _within(p, scope.phrase):
+            phrase.append((abs(p - pos), metric))
+        elif _within(p, scope.clause):
+            (before if p < pos else after).append((abs(p - pos), metric))
+        elif p < scope.clause[0]:
+            earlier.append((pos - p, metric))
+    return [m for bucket in (phrase, before, after, earlier) for _, m in sorted(bucket)]
 
 
 def _unit_compatible(claim_unit: str | None, metric_unit: str | None) -> bool:
@@ -140,16 +241,6 @@ def _pick_metric(hits: list[str], unit: str | None, units: dict[str, str | None]
     return metric
 
 
-def _nearest_entity(sentence: str, offset: int, num_start: int, entities: set[str]) -> str | None:
-    best: tuple[int, str] | None = None
-    for ent in entities:
-        for m in re.finditer(r"(?<!\w)" + re.escape(ent) + r"(?!\w)", sentence):
-            distance = abs((offset + m.start()) - num_start)
-            if best is None or distance < best[0]:
-                best = (distance, ent)
-    return best[1] if best else None
-
-
 def _resolve(
     answer: str,
     m: NumberToken,
@@ -159,17 +250,18 @@ def _resolve(
 ) -> Claim:
     """Attach entity and metric to one Tier 2 numeric token."""
     value, unit = m.value, m.unit
-    sent_start, sent_end = _sentence_bounds(answer, m.start)
-    sentence = answer[sent_start:sent_end]
+    scope = _scope(answer, m.start)
+    # A direction word only signs the number it governs: in "Unlike AMD,
+    # which fell 1.35%, NVDA rose 1.92%" the "fell" stays in its phrase.
     if (
         unit == "pct"
         and value > 0
         and not m.text.startswith(("+", "-"))
-        and _NEGATION_RE.search(sentence[: m.start - sent_start])
+        and _NEGATION_RE.search(answer, scope.phrase[0], m.start)
     ):
         value = -value
-    entity = _nearest_entity(sentence, sent_start, m.start, set(known_entities))
-    metric = _pick_metric(_keyword_hits(sentence, sent_start, m.start, synonyms), unit, units)
+    entity = _entity(answer, m.start, scope, set(known_entities))
+    metric = _pick_metric(_keyword_hits(answer, m.start, scope, synonyms), unit, units)
     return Claim(
         value=value,
         span=(m.start, m.end),
