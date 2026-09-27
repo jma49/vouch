@@ -41,6 +41,7 @@ make cover         # coverage for Go and Python (reported, not gated)
 make golden        # regenerate testdata/receipts_golden.jsonl from Go
 make fuzz          # grow the canonical-JSON fuzz corpus, check it against Python
 make integration   # proxy vs the pinned MCP reference server (needs Node)
+make bench         # latency on this machine -> docs/bench/latency.json + README
 make eval          # vouch-eval over the golden log, N=10
 make build         # proxy/bin/vouch
 ```
