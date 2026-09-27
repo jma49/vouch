@@ -74,8 +74,25 @@ _RANGE_RES = [
     re.compile(rf"\bbetween\s+(?P<a>{_NUM})\s+and\s+(?P<b>{_NUM})", re.IGNORECASE),
 ]
 
+# Magnitude words and suffixes scale both the value and its displayed
+# resolution: "52.4 million" is 52,400,000 give or take 50,000.
+_MAGNITUDES = {
+    "thousand": 1e3,
+    "k": 1e3,
+    "million": 1e6,
+    "mln": 1e6,
+    "mn": 1e6,
+    "m": 1e6,
+    "billion": 1e9,
+    "bn": 1e9,
+    "b": 1e9,
+    "trillion": 1e12,
+    "t": 1e12,
+}
+
 _TOKEN_RE = re.compile(
     rf"(?<![\w.\-+/:])(?P<sign>[-+])?(?P<num>{_NUM})"
+    r"(?P<mag>\s(?:thousand|million|mln|mn|billion|bn|trillion)\b|(?:bn|[kKmMbBtT])(?!\w))?"
     r"(?P<pct>\s?%)?(?P<mult>[x\u00d7](?!\w))?"
 )
 
@@ -171,6 +188,8 @@ def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberT
         if _inside(m.start("num"), masked) or _is_parameter(text, m.start(), m.end("num")):
             continue
         value = _value(m["num"])
+        scale = _MAGNITUDES[m["mag"].strip().lower()] if m["mag"] else 1.0
+        value *= scale
         if m["sign"] == "-":
             value = -value
         kind: Kind = "multiple" if m["mult"] else "point"
@@ -182,7 +201,7 @@ def tokenize(text: str, exclude: Sequence[tuple[int, int]] = ()) -> list[NumberT
                 value=value,
                 unit="pct" if m["pct"] else None,
                 kind=kind,
-                resolution=_resolution(m["num"]),
+                resolution=_resolution(m["num"]) * scale,
             )
         )
 

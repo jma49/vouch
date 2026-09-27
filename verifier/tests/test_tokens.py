@@ -78,3 +78,30 @@ def test_spans_index_the_source() -> None:
     s = "On July 24, NVDA closed at 181.52, up 1.9% on 3x volume."
     for t in tokenize(s):
         assert s[t.start : t.end] == t.text
+
+
+@pytest.mark.parametrize(
+    ("s", "text", "value", "resolution"),
+    [
+        ("52.4 million shares", "52.4 million", 52_400_000, 100_000),
+        ("52.41M", "52.41M", 52_410_000, 10_000),
+        ("$1.2B", "1.2B", 1_200_000_000, 100_000_000),
+        ("2bn", "2bn", 2_000_000_000, 1_000_000_000),
+        ("3.4K", "3.4K", 3_400, 100),
+        ("187,340 thousand", "187,340 thousand", 187_340_000, 1_000),
+        ("$15m raise", "15m", 15_000_000, 1_000_000),
+    ],
+)
+def test_magnitudes_scale_value_and_resolution(
+    s: str, text: str, value: float, resolution: float
+) -> None:
+    (tok,) = tokenize(s)
+    assert tok.text == text
+    assert tok.value == pytest.approx(value)
+    assert tok.resolution == pytest.approx(resolution)
+
+
+def test_magnitude_needs_a_word_boundary() -> None:
+    # "5 more" is not five million; "4 bars" is a period, not billions.
+    assert [t.value for t in tokenize("5 more catalysts")] == [5]
+    assert texts("over 4 bars") == []

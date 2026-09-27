@@ -218,46 +218,33 @@ cases:
   # --- magnitude words and suffixes ---
   - text: AMD volume was 52.4 million shares.
     expect: ["52.4 million -> SUPPORTED (AMD volume)"]
-    xfail: P-031
   - text: AMD volume was 52 million shares.
     expect: ["52 million -> SUPPORTED"]
-    xfail: P-031
   - text: AMD volume was 25.4 million shares.
     expect: ["25.4 million -> CONTRADICTED"]
-    xfail: P-031
   - text: AMD volume was 52.41M.
     expect: ["52.41M -> SUPPORTED"]
-    xfail: P-031
   - text: AMD volume was 52.4M shares.
     expect: ["52.4M -> SUPPORTED"]
-    xfail: P-031
   - text: NVDA volume hit 187.3 million.
     expect: ["187.3 million -> SUPPORTED (NVDA volume)"]
-    xfail: P-031
   - text: NVDA volume hit 178.3 million.
     expect: ["178.3 million -> CONTRADICTED"]
-    xfail: P-031
   - text: NVDA volume hit 0.19 billion.
     expect: ["0.19 billion -> SUPPORTED"]
-    xfail: P-031
   - text: NVDA volume was 187,340 thousand.
     expect: ["187,340 thousand -> SUPPORTED"]
-    xfail: P-031
   - text: AAPL volume was 48.2M.
     expect: ["48.2M -> SUPPORTED"]
-    xfail: P-031
   - text: AAPL volume was 4.82M.
     expect: ["4.82M -> CONTRADICTED"]
-    xfail: P-031
   - text: AAPL volume was 482 million.
     expect: ["482 million -> CONTRADICTED"]
-    xfail: P-031
   - text: MSFT volume was 20 million.
     expect: ["20 million -> UNSUPPORTED"]
-    xfail: P-031
   - text: NVDA volume was 187.3M; AMD volume was 52.4M.
     expect: ["187.3M -> SUPPORTED (NVDA)", "52.4M -> SUPPORTED (AMD)"]
-    xfail: P-031
+    xfail: P-032
 
   # --- display rounding against the claim's own precision ---
   - text: NVDA closed at 182.

@@ -146,7 +146,7 @@ Reproduced 2026-09-27 against `testdata/receipts_golden.jsonl`.
 ### P-031 Magnitude words are ignored
 - **Symptom:** `NVDA volume is 12 million shares.` claims `12`.
 - **Cause:** `_parse_number` does not read scale words or suffixes.
-- **Status:** open. Reproduced. Roadmap Phase 1.
+- **Status:** fixed in `feat(verifier): scale magnitude words and suffixes in numeric claims`. Reproduced.
 
 ### P-032 Attribution ignores clause boundaries
 - **Symptom:** `NVDA's RSI is 62, versus AMD's RSI of 48.` attributes
