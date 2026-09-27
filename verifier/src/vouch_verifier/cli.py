@@ -35,16 +35,15 @@ a bad tolerance policy).
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
-from vouch_verifier.claims import extract_claims
+from vouch_verifier.judge import judge
 from vouch_verifier.lookahead import find_lookahead, parse_moment
-from vouch_verifier.matcher import DEFAULT_TOLERANCES, load_tolerances, match_claims
+from vouch_verifier.matcher import DEFAULT_TOLERANCES, load_tolerances
 from vouch_verifier.receipts import ReceiptError, audit_log
 from vouch_verifier.report import build_report, to_html, to_json, to_markdown
-from vouch_verifier.signing import load_keyring
+from vouch_verifier.signing import env_public_keys, load_keyring
 from vouch_verifier.verdict import FAILURES
 from vouch_verifier.vocabulary import FINANCE, load_vocabulary
 
@@ -56,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--answer", required=True, help="file containing the agent's final answer")
-    p.add_argument("--receipts", required=True, help="receipt log (JSONL)")
+    p.add_argument("--receipts", required=True, help="receipt log, or the directory holding it")
     p.add_argument("--tolerances", help="tolerance policy YAML (default: built-in policy)")
     p.add_argument("--format", choices=["md", "json", "html"], default="md")
     p.add_argument(
@@ -78,9 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--vocabulary", help="domain vocabulary YAML (default: finance)")
     args = p.parse_args(argv)
 
-    key_paths = args.public_key or [
-        p for p in os.environ.get("VOUCH_PUBLIC_KEY", "").split(os.pathsep) if p
-    ]
+    key_paths = args.public_key or env_public_keys()
     if not key_paths:
         print(
             "vouch-verify: warning: no public key given (--public-key or VOUCH_PUBLIC_KEY), "
@@ -108,12 +105,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"vouch-verify: error: {e}", file=sys.stderr)
         return 2
 
-    entities = {f.entity for r in receipts for f in r.facts if f.entity}
-    extraction = extract_claims(answer, known_entities=entities, vocabulary=vocabulary)
-    matched = match_claims(extraction, receipts, tolerances, as_of=as_of, vocabulary=vocabulary)
+    _, matched = judge(answer, receipts, tolerances, vocabulary=vocabulary, as_of=as_of)
     lookahead = find_lookahead(receipts, as_of) if as_of is not None else []
     report = build_report(
-        extraction,
         matched,
         tolerances,
         as_of=args.as_of if as_of else None,

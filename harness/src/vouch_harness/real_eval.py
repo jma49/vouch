@@ -31,8 +31,8 @@ from vouch_harness.label import store
 from vouch_harness.label.agreement import agreement
 from vouch_harness.label.runs import discover
 from vouch_harness.signing import resolve_public_keys
-from vouch_verifier.claims import extract_claims
-from vouch_verifier.matcher import load_tolerances, match_claims
+from vouch_verifier.judge import judge
+from vouch_verifier.matcher import load_tolerances
 from vouch_verifier.receipts import Receipt, ReceiptError, audit_log
 from vouch_verifier.signing import Keyring, load_keyring
 from vouch_verifier.verdict import FAILURES, Tolerance
@@ -119,10 +119,7 @@ def score_runs(
             )
         except ReceiptError as e:
             raise ReceiptError(f"{run_id}: {e}") from e
-        entities = {f.entity for r in receipts for f in r.facts if f.entity}
-        matched = match_claims(
-            extract_claims(answer, known_entities=entities), receipts, tolerances
-        )
+        _, matched = judge(answer, receipts, tolerances)
         model, _, sample = run_id.split("/")
         scores.append(
             RunScore(

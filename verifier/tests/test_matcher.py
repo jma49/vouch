@@ -90,19 +90,19 @@ def test_direction_word_supports_negative_fact(receipts: list[Receipt]) -> None:
 
 
 def test_unverifiable_counted_not_dropped(receipts: list[Receipt]) -> None:
-    extraction, matched = run("The magic number is 42.", receipts)
+    _, matched = run("The magic number is 42.", receipts)
     assert len(matched) == 1
     assert matched[0].verdict is Verdict.UNVERIFIABLE
-    report = build_report(extraction, matched, DEFAULT_TOLERANCES)
+    report = build_report(matched, DEFAULT_TOLERANCES)
     assert report.coverage == 0.0
 
 
 def test_report_rendering(receipts: list[Receipt]) -> None:
-    extraction, matched = run(
+    _, matched = run(
         "NVDA RSI(14) is 62.3 [[r:golden-0#/rsi_14]]. NVDA closed at 181.52. Answer is 42.",
         receipts,
     )
-    report = build_report(extraction, matched, DEFAULT_TOLERANCES)
+    report = build_report(matched, DEFAULT_TOLERANCES)
     md = to_markdown(report)
     assert "SUPPORTED: 2" in md
     assert "UNVERIFIABLE: 1" in md
@@ -190,8 +190,8 @@ def test_exact_receipt_id_beats_a_longer_id_with_the_same_prefix() -> None:
 
 def test_markdown_report_escapes_cells(receipts: list[Receipt]) -> None:
     # Issue #18: a json pointer with "|" and markup reached the note cell raw.
-    extraction, matched = run("NVDA RSI is 62.3 [[r:golden-0#/x|y|<b>z</b>]].", receipts)
-    md = to_markdown(build_report(extraction, matched, DEFAULT_TOLERANCES))
+    _, matched = run("NVDA RSI is 62.3 [[r:golden-0#/x|y|<b>z</b>]].", receipts)
+    md = to_markdown(build_report(matched, DEFAULT_TOLERANCES))
     row = next(line for line in md.splitlines() if "62.3" in line)
     assert row.count(" | ") == 6  # seven cells, as in the header
     assert "<b>" not in row and "&lt;b&gt;" in row and "\\|" in row

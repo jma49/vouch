@@ -12,6 +12,8 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +54,13 @@ def load_public_key(path: str | Path) -> Ed25519PublicKey:
     return key
 
 
-def load_keyring(paths: list[str | Path]) -> Keyring:
+def env_public_keys() -> list[Path]:
+    """Public key paths from $VOUCH_PUBLIC_KEY, separated by the OS path
+    separator: the one place every CLI reads it (#105)."""
+    return [Path(p) for p in os.environ.get("VOUCH_PUBLIC_KEY", "").split(os.pathsep) if p]
+
+
+def load_keyring(paths: Sequence[str | Path]) -> Keyring:
     return {key_id(k): k for k in (load_public_key(p) for p in paths)}
 
 

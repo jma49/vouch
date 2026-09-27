@@ -45,7 +45,7 @@ def render(answer: str, **kw: object) -> str:
     receipts = load_log(GOLDEN, GOLDEN_KEYS)
     extraction = extract_claims(answer, {"NVDA", "AMD"})
     matched = match_claims(extraction, receipts, DEFAULT_TOLERANCES)
-    return to_html(build_report(extraction, matched, DEFAULT_TOLERANCES, answer=answer, **kw))  # type: ignore[arg-type]
+    return to_html(build_report(matched, DEFAULT_TOLERANCES, answer=answer, **kw))  # type: ignore[arg-type]
 
 
 def test_every_claim_span_is_marked_with_its_verdict() -> None:

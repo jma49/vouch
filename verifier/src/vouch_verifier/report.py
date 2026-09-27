@@ -10,7 +10,6 @@ import html
 import json
 from dataclasses import dataclass
 
-from vouch_verifier.claims import Extraction
 from vouch_verifier.lookahead import LookAhead
 from vouch_verifier.matcher import MatchedClaim
 from vouch_verifier.verdict import Tolerance, Verdict
@@ -52,7 +51,6 @@ class Report:
 
 
 def build_report(
-    extraction: Extraction,
     matched: list[MatchedClaim],
     tolerances: dict[str, Tolerance],
     as_of: str | None = None,
@@ -60,7 +58,6 @@ def build_report(
     answer: str = "",
     signatures_verified: bool = True,
 ) -> Report:
-    del extraction  # all spans, resolved or not, are present in matched
     return Report(
         matched=tuple(matched),
         tolerances=tolerances,

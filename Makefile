@@ -8,7 +8,14 @@ STAMP := $(VENV)/.installed
 VENV_OK := $(PY) -c 'import sys, vouch_verifier, vouch_harness; \
 	sys.exit(not vouch_verifier.__file__.startswith("$(CURDIR)/"))'
 
-.PHONY: test test-go test-py test-harness fuzz integration bench lint lint-go lint-py fmt cover build install-py eval golden readme readme-check agent eval-real clean
+.PHONY: check golden-check test test-go test-py test-harness fuzz integration bench lint lint-go lint-py fmt cover build install-py eval golden readme readme-check agent eval-real clean
+
+# Everything CI checks, in one command: run it before every commit.
+check: build test lint readme-check golden-check
+
+# The golden log must regenerate byte for byte (invariant 1).
+golden-check: golden
+	git diff --exit-code testdata/receipts_golden.jsonl
 
 test: test-go test-py test-harness
 
@@ -48,11 +55,13 @@ bench: install-py
 FUZZTIME ?= 2m
 fuzz: install-py build
 	cd proxy && go test ./internal/receipt -run '^$$' -fuzz FuzzCanonicalize -fuzztime $(FUZZTIME)
-	cp "$$(cd proxy && go env GOCACHE)"/fuzz/github.com/jma49/vouch/proxy/internal/receipt/FuzzCanonicalize/* \
-		proxy/internal/receipt/testdata/fuzz/FuzzCanonicalize/ 2>/dev/null || true
+	corpus="$$(cd proxy && go env GOCACHE)/fuzz/github.com/jma49/vouch/proxy/internal/receipt/FuzzCanonicalize"; \
+		if [ -d "$$corpus" ]; then cp "$$corpus"/* proxy/internal/receipt/testdata/fuzz/FuzzCanonicalize/; fi
 	cd verifier && VOUCH_DIFF_EXAMPLES=2000 ../$(PY) -m pytest -q tests/test_differential.py
 
-test-harness: install-py
+# build: the end-to-end tests drive the real proxy; without a fresh
+# binary they would skip, or test yesterday's proxy (#105).
+test-harness: install-py build
 	cd harness && ../$(PY) -m pytest -q
 
 lint: lint-go lint-py

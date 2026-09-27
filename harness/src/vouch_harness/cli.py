@@ -9,14 +9,13 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 from vouch_harness.eval import run_eval
 from vouch_harness.report import to_json, to_markdown
 from vouch_verifier.matcher import load_tolerances
 from vouch_verifier.receipts import ReceiptError, load_log
-from vouch_verifier.signing import load_keyring
+from vouch_verifier.signing import env_public_keys, load_keyring
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -36,9 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = p.parse_args(argv)
 
-    key_paths = args.public_key or [
-        k for k in os.environ.get("VOUCH_PUBLIC_KEY", "").split(os.pathsep) if k
-    ]
+    key_paths = args.public_key or env_public_keys()
     if not key_paths:
         print("vouch-eval: warning: no public key given, signatures not checked", file=sys.stderr)
 

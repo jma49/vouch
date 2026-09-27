@@ -220,6 +220,14 @@ def _link(tree: object, lineno: int) -> tuple[int, str]:
     return seq_value, prev
 
 
+def log_path(path: str | Path) -> Path:
+    """A receipt log given as the file or as the directory the proxy
+    writes it to (`vouch proxy --receipts <dir>`), so --receipts means
+    the same thing in every command (#105)."""
+    p = Path(path)
+    return p / "receipts.jsonl" if p.is_dir() else p
+
+
 def audit_log(
     path: str | Path,
     keys: Keyring | None = None,
@@ -249,7 +257,7 @@ def audit_log(
     head, seq, checkpoints, sealed = GENESIS, 0, 0, False
     # utf-8-sig: a byte-order mark from an editor is not a reason to reject
     # a log; a decoding error anywhere else is a ReceiptError (issue #16).
-    with open(path, encoding="utf-8-sig") as f:
+    with open(log_path(path), encoding="utf-8-sig") as f:
         for lineno, line in _numbered_lines(f):
             line = line.strip()
             if not line:

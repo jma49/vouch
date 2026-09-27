@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from itertools import pairwise
 
 from vouch_verifier.claims import Claim, extract_claims
+from vouch_verifier.judge import receipt_entities
 from vouch_verifier.receipts import Receipt
 
 MUTATIONS = (
@@ -37,10 +38,6 @@ class Mutant:
     answer: str
     mutation: str
     description: str
-
-
-def _entities(receipts: list[Receipt]) -> set[str]:
-    return {f.entity for r in receipts for f in r.facts if f.entity}
 
 
 def _replace_span(answer: str, span: tuple[int, int], new: str) -> str:
@@ -197,7 +194,7 @@ def _false_absence(answer: str, claims: list[Claim], rng: random.Random) -> Muta
 
 def inject(answer: str, receipts: list[Receipt], seed: int = 0) -> list[Mutant]:
     """Generate one mutant per applicable mutation type."""
-    entities = _entities(receipts)
+    entities = receipt_entities(receipts)
     extraction = extract_claims(answer, known_entities=entities)
     claims = list(extraction.claims)
     rng = random.Random(seed)

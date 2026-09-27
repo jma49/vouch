@@ -46,7 +46,7 @@ make eval          # vouch-eval over the golden log, N=10
 make build         # proxy/bin/vouch
 ```
 
-`make test lint` must pass before any commit; CI runs the same checks.
+`make check` (build, tests, lint, README and golden-log drift) must pass before any commit; it runs what CI runs.
 `make install-py` (a dependency of the Python targets) rebuilds the
 venv on its own if it is stale.
 

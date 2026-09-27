@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 
 from vouch_harness.gold import build_gold_set
 from vouch_harness.mutate import MUTATIONS
-from vouch_verifier.claims import extract_claims
-from vouch_verifier.matcher import DEFAULT_TOLERANCES, match_claims
+from vouch_verifier.judge import judge
+from vouch_verifier.matcher import DEFAULT_TOLERANCES
 from vouch_verifier.receipts import Receipt
 from vouch_verifier.verdict import FAILURES, Tolerance, Verdict
 
@@ -96,14 +96,12 @@ def summarize(values: list[float], rng: random.Random, resamples: int = 1000) ->
 
 
 def _run_once(receipts: list[Receipt], seed: int, tolerances: dict[str, Tolerance]) -> RunResult:
-    entities = {f.entity for r in receipts for f in r.facts if f.entity}
     flagged: dict[str, bool] = {}
     mutation_of: dict[str, str | None] = {}
     tier1 = judged = total = 0
 
     for case in build_gold_set(receipts, seed=seed):
-        extraction = extract_claims(case.answer, known_entities=entities)
-        matched = match_claims(extraction, receipts, tolerances)
+        _, matched = judge(case.answer, receipts, tolerances)
         flagged[case.name] = any(mc.verdict in FAILURES for mc in matched)
         mutation_of[case.name] = case.mutation
         tier1 += sum(1 for mc in matched if mc.claim.tier == 1)

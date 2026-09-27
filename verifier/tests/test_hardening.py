@@ -93,12 +93,11 @@ def test_canonical_parsing_refuses_what_go_refuses(doc: str) -> None:
 
 
 def test_reports_say_when_signatures_went_unchecked() -> None:
-    extraction = extract_claims("NVDA closed at 181.52.", {"NVDA"})
-    report = build_report(extraction, [], {}, signatures_verified=False)
+    report = build_report([], {}, signatures_verified=False)
     assert "Signatures: not checked" in to_markdown(report)
     assert json.loads(to_json(report))["summary"]["signatures_verified"] is False
     assert "Signatures not checked" in to_html(report)
-    assert "not checked" not in to_markdown(build_report(extraction, [], {}))
+    assert "not checked" not in to_markdown(build_report([], {}))
 
 
 def test_markdown_cells_do_not_render_links() -> None:
@@ -117,3 +116,22 @@ def test_signs_around_currency_and_direction_nouns() -> None:
     assert drop.value == -1.35
     denied = extract_claims("AMD didn't fall 1.35% today.", {"AMD"}, FINANCE)
     assert not denied.claims and [u.text for u in denied.unresolved] == ["1.35%"]
+
+
+def test_one_entry_point_honours_every_option(tmp_path: Path) -> None:
+    # #105: judge() is what every caller uses, so --vocabulary and
+    # --as-of reach all of them.
+    from vouch_verifier import judge
+    from vouch_verifier.receipts import load_log, log_path
+    from vouch_verifier.signing import env_public_keys
+
+    receipts = load_log(GOLDEN)
+    _, plain = judge("NVDA closed at 181.52.", receipts)
+    assert [m.verdict for m in plain] == [Verdict.SUPPORTED]
+    _, backtest = judge("NVDA closed at 181.52.", receipts, as_of=parse_moment("2026-07-20"))
+    assert [m.verdict for m in backtest] == [Verdict.STALE]
+    # --receipts takes the directory the proxy writes, as well as the file.
+    assert log_path(GOLDEN.parent / "receipts_golden.jsonl") == GOLDEN
+    (tmp_path / "receipts.jsonl").write_text("")
+    assert log_path(tmp_path) == tmp_path / "receipts.jsonl"
+    assert env_public_keys() == [] or all(isinstance(p, Path) for p in env_public_keys())
