@@ -234,6 +234,27 @@ def test_cache_keys_on_request_and_sample(tmp_path: Path) -> None:
     )
 
 
+def test_cache_survives_new_receipt_ids(tmp_path: Path) -> None:
+    """#104: under --cite, receipt ids in tool results are random, so a
+    rerun used to miss every turn after the first tool call. The key
+    ignores which ids they are, and a replayed reply cites this run's."""
+
+    def conversation(rid: str) -> list[Message]:
+        return [
+            {"role": "user", "content": "How is NVDA?"},
+            {"role": "tool", "tool_call_id": "c1",
+             "content": f"[vouch] ... rsi_14 = 62.3  -> [[r:{rid}#/rsi_14]]"},
+        ]  # fmt: skip
+
+    inner = ScriptedClient([answer("RSI is 62.3 [[r:aaaaaaaaaaaa#/rsi_14]].")])
+    first = CachedClient(inner, tmp_path, identity="m")
+    first.complete(conversation("aaaaaaaaaaaa"), [], 0)
+    again = CachedClient(inner, tmp_path, identity="m")  # inner has no replies left
+    reply = again.complete(conversation("bbbbbbbbbbbb"), [], 0)
+    assert (again.hits, again.misses) == (1, 0)
+    assert reply.message["content"] == "RSI is 62.3 [[r:bbbbbbbbbbbb#/rsi_14]]."
+
+
 @dataclass
 class FakeProvider:
     """A local OpenAI-compatible endpoint that answers with scripted statuses."""
