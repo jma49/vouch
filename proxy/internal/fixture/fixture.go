@@ -127,7 +127,25 @@ func (s *Store) write(name string, v any) error {
 	if err != nil {
 		return fmt.Errorf("fixture: marshal %s: %w", name, err)
 	}
-	if err := os.WriteFile(filepath.Join(s.Dir, name), append(raw, '\n'), 0o644); err != nil {
+	// Write a temporary file and rename it into place: concurrent
+	// recordings of one call, or a crash mid-write, must never leave a
+	// fixture that is half of one response and half of another (#99).
+	tmp, err := os.CreateTemp(s.Dir, "."+name+".*")
+	if err != nil {
+		return fmt.Errorf("fixture: write %s: %w", name, err)
+	}
+	defer os.Remove(tmp.Name()) // no-op after a successful rename
+	if _, err := tmp.Write(append(raw, '\n')); err != nil {
+		tmp.Close()
+		return fmt.Errorf("fixture: write %s: %w", name, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("fixture: write %s: %w", name, err)
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return fmt.Errorf("fixture: write %s: %w", name, err)
+	}
+	if err := os.Rename(tmp.Name(), filepath.Join(s.Dir, name)); err != nil {
 		return fmt.Errorf("fixture: write %s: %w", name, err)
 	}
 	return nil

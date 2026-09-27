@@ -229,22 +229,37 @@ func GenerateFiles(dir, name string) (privPath, pubPath string, err error) {
 	}
 	privPath = filepath.Join(dir, name+".pem")
 	pubPath = filepath.Join(dir, name+".pub.pem")
-	for path, data := range map[string][]byte{privPath: privPEM, pubPath: pubPEM} {
-		mode := os.FileMode(0o644)
-		if path == privPath {
-			mode = 0o600
-		}
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-		if err != nil {
-			return "", "", fmt.Errorf("sign: %w", err)
-		}
-		if _, err := f.Write(data); err != nil {
-			f.Close()
-			return "", "", fmt.Errorf("sign: write %s: %w", path, err)
-		}
-		if err := f.Close(); err != nil {
-			return "", "", fmt.Errorf("sign: close %s: %w", path, err)
+	// Both or neither: a new private key beside an old public key would
+	// sign receipts nobody can verify with the published key (#99).
+	for _, path := range []string{privPath, pubPath} {
+		if _, err := os.Lstat(path); err == nil {
+			return "", "", fmt.Errorf("sign: %s already exists", path)
 		}
 	}
+	if err := writeNew(privPath, privPEM, 0o600); err != nil {
+		return "", "", err
+	}
+	if err := writeNew(pubPath, pubPEM, 0o644); err != nil {
+		os.Remove(privPath)
+		return "", "", err
+	}
 	return privPath, pubPath, nil
+}
+
+// writeNew creates path with data, failing if it already exists.
+func writeNew(path string, data []byte, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return fmt.Errorf("sign: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(path)
+		return fmt.Errorf("sign: write %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(path)
+		return fmt.Errorf("sign: write %s: %w", path, err)
+	}
+	return nil
 }

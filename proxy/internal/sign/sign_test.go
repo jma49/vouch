@@ -116,3 +116,19 @@ func TestKeyFilesRoundTripAndPermissions(t *testing.T) {
 		t.Fatal("missing key file must be an error")
 	}
 }
+
+// TestGenerateFilesIsAllOrNothing pins #99: an existing public key stops
+// keygen before a new private key is written beside it.
+func TestGenerateFilesIsAllOrNothing(t *testing.T) {
+	dir := t.TempDir()
+	pub := filepath.Join(dir, "vouch.pub.pem")
+	if err := os.WriteFile(pub, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := GenerateFiles(dir, "vouch"); err == nil {
+		t.Fatal("keygen overwrote or ignored an existing public key")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "vouch.pem")); !os.IsNotExist(err) {
+		t.Fatalf("a private key was left behind: %v", err)
+	}
+}
