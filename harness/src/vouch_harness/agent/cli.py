@@ -57,6 +57,13 @@ def run_batch(pending: list[RunSpec], run_one: Callable[[RunSpec], Path], out: P
     return failed
 
 
+def _positive(text: str) -> int:
+    n = int(text)
+    if n < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return n
+
+
 def proxy_environment(
     environ: Mapping[str, str], models: Mapping[str, ModelConfig]
 ) -> dict[str, str]:
@@ -76,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--model", required=True, help="model name from --models")
     p.add_argument("--models", type=Path, default=Path("eval/models.yaml"))
     p.add_argument("--tasks", type=Path, default=Path("eval/tasks.yaml"))
-    p.add_argument("--samples", type=int, default=5, help="runs per task (default 5)")
+    p.add_argument("--samples", type=_positive, default=5, help="runs per task (default 5)")
     p.add_argument("--task", action="append", default=[], help="only this task id (repeatable)")
     p.add_argument("--out", type=Path, default=Path("eval/runs"))
     p.add_argument("--cache", type=Path, default=Path("eval/.cache"))

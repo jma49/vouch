@@ -42,10 +42,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         receipts = load_log(args.receipts, load_keyring(key_paths) if key_paths else None)
+        tolerances = load_tolerances(args.tolerances) if args.tolerances else None
     except (OSError, ReceiptError, ValueError) as e:
         print(f"vouch-eval: error: {e}", file=sys.stderr)
         return 2
-    tolerances = load_tolerances(args.tolerances) if args.tolerances else None
     try:
         result = run_eval(receipts, n=args.n, seed=args.seed, tolerances=tolerances)
     except ValueError as e:

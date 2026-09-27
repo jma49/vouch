@@ -112,8 +112,13 @@ agent: build install-py
 
 # Score real runs against human labels (docs/labeling.md). LABELER is
 # whose labels count as ground truth.
-LABELER ?= $(shell ls eval/labels 2>/dev/null | head -1 | sed 's/\.jsonl$$//')
+# With one labels file it is the default; with several, choose: whoever
+# sorts first is not ground truth by accident (#104).
+LABEL_FILES := $(wildcard eval/labels/*.jsonl)
+LABELER ?= $(if $(filter 1,$(words $(LABEL_FILES))),$(basename $(notdir $(LABEL_FILES))),)
 eval-real: install-py
+	@if [ -z "$(LABELER)" ] && [ $(words $(LABEL_FILES)) -gt 1 ]; then \
+		echo "eval-real: several labelers; choose one with LABELER=<name>"; exit 2; fi
 	$(VENV)/bin/vouch-eval-real --labeler $(or $(LABELER),none)
 
 # README metrics and the example report are generated, never hand-edited

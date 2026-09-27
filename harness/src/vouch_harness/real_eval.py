@@ -33,7 +33,7 @@ from vouch_harness.label.runs import discover
 from vouch_harness.signing import resolve_public_keys
 from vouch_verifier.claims import extract_claims
 from vouch_verifier.matcher import load_tolerances, match_claims
-from vouch_verifier.receipts import ReceiptError, audit_log
+from vouch_verifier.receipts import Receipt, ReceiptError, audit_log
 from vouch_verifier.signing import Keyring, load_keyring
 from vouch_verifier.verdict import FAILURES, Tolerance
 
@@ -74,6 +74,15 @@ class RunScore:
         return out
 
 
+def _no_log(meta: dict[str, object]) -> list[Receipt]:
+    """A run without a receipt log: fine if it never had one, an error if
+    its meta recorded a head, since claims would silently turn
+    UNVERIFIABLE and drop out of every rate (#104)."""
+    if meta.get("head") is not None:
+        raise ReceiptError("receipts.jsonl is missing, but meta.json recorded a head")
+    return []
+
+
 def score_runs(
     runs_dir: Path,
     labels: dict[store.SpanKey, store.LabelRecord],
@@ -106,7 +115,7 @@ def score_runs(
                     expect_head=meta.get("head"),
                 ).receipts
                 if (d / "receipts.jsonl").exists()
-                else []
+                else _no_log(meta)
             )
         except ReceiptError as e:
             raise ReceiptError(f"{run_id}: {e}") from e
@@ -379,6 +388,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--format", choices=["md", "json"], default="md")
     args = p.parse_args(argv)
 
+    # A labeler with no labels file is a typo, not "nothing labeled yet",
+    # once anyone has labeled: silently scoring against nobody would
+    # report no ground truth at all (#104).
+    files = sorted(args.labels.glob("*.jsonl"))
+    if files and not (args.labels / f"{args.labeler}.jsonl").exists():
+        print(
+            f"vouch-eval-real: no labels from {args.labeler!r}; labelers: "
+            f"{', '.join(f.stem for f in files)}",
+            file=sys.stderr,
+        )
+        return 2
     primary = store.load(args.labels / f"{args.labeler}.jsonl")
     others = {
         path.stem: store.load(path)
