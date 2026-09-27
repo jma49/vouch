@@ -175,12 +175,12 @@ numbers reproducible via `make bench`.
 
 ---
 
-## Phase 6 — Product surface (optional, after 0–5)
+## Phase 6 — Product surface (optional, after 0–5) — done except Tier 3
 
 | Item | Status |
 |---|---|
 | `STALE` verdict and look-ahead detection (design §8.4) | done: STALE in Phase 1; look-ahead (`vouch-verify --as-of`) in #84 |
 | `DERIVED` recomputation over whitelisted ops (design §6.2) | done (#90): change over an explicit period, N-session high/low |
-| Tier 3 LLM extraction with strict schema; its nondeterminism measured by the harness | todo |
+| Tier 3 LLM extraction with strict schema; its nondeterminism measured by the harness | todo (needs model calls; the maintainer's approval and budget) |
 | HTML report with span highlighting | done (#86): `vouch-verify --format html` |
 | Second domain schema pack (e.g. text-to-SQL analytics) to prove domain independence | done (#88): `examples/analytics`, per-row entities, `--vocabulary` |

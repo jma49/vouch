@@ -215,6 +215,7 @@ Measurement before features. Full plan with exit criteria in [`docs/roadmap.md`]
 | 3 | Integrity: Ed25519, hash-chained log, tamper suite, [threat model](docs/threat-model.md) | done |
 | 4 | Canonical JSON: specified contract, cross-language differential fuzzing, number-normalized fixture keys | done |
 | 5 | Proxy protocol completeness, Streamable HTTP, reference-server integration tests, latency benchmarks | done |
+| 6 | Product surface: look-ahead, `DERIVED`, HTML report, a second domain; Tier 3 LLM extraction | done except Tier 3 (needs model calls) |
 
 ## Repository layout
 
