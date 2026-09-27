@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"strconv"
 	"sync"
 )
@@ -192,6 +193,9 @@ func (c *Conn) Write(m *Message) error {
 // — the MVP proxy does not forward upstream notifications
 // (docs/design.md section 12, open questions).
 type Client struct {
+	// Logf reports frames the client skips; nil means log.Printf.
+	Logf func(format string, args ...any)
+
 	mu     sync.Mutex
 	conn   *Conn
 	nextID int64
@@ -221,21 +225,52 @@ func (c *Client) Call(method string, params any) (json.RawMessage, error) {
 	if err := c.conn.Write(req); err != nil {
 		return nil, err
 	}
+	// Upstreams share stdout with their own logging more often than they
+	// should. Returning on the first stray line would leave the real
+	// response in the pipe for the next call to read, desynchronizing
+	// the upstream for the rest of the session, so anything that is not
+	// this call's response is skipped. Only EOF, an I/O error, or a
+	// frame too large to read ends the call.
 	for {
 		m, err := c.conn.Read()
+		var fe *FrameError
+		if errors.As(err, &fe) && !errors.Is(err, ErrFrameTooLarge) {
+			c.logf("mcp: %s: skipping upstream output: %v", method, err)
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("mcp: %s: %w", method, err)
 		}
-		if m.IsNotification() {
+		switch {
+		case m.Method != "":
+			// Notifications are not forwarded (see Client). Requests from
+			// the upstream are not supported yet (docs/pitfalls.md P-022).
+			if !m.IsNotification() {
+				c.logf("mcp: %s: ignoring upstream request %s (id %s)", method, m.Method, m.ID)
+			}
 			continue
-		}
-		if !bytes.Equal(m.ID, id) {
-			return nil, fmt.Errorf("mcp: %s: response id %s does not match request id %s", method, m.ID, id)
+		case bytes.Equal(m.ID, id):
+		case bytes.Equal(m.ID, nullID) && m.Error != nil:
+			// The upstream could not read the request (JSON-RPC 2.0
+			// section 5.1). With one call in flight it can only be ours.
+		default:
+			c.logf("mcp: %s: discarding response with id %s while waiting for %s", method, m.ID, id)
+			continue
 		}
 		if m.Error != nil {
 			return nil, m.Error
 		}
 		return m.Result, nil
+	}
+}
+
+var nullID = json.RawMessage("null")
+
+func (c *Client) logf(format string, args ...any) {
+	if c.Logf != nil {
+		c.Logf(format, args...)
+	} else {
+		log.Printf(format, args...)
 	}
 }
 
