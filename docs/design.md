@@ -283,6 +283,8 @@ Because every receipt carries `data_asof` and replay carries a logical clock, lo
 
 Implemented as `vouch-verify --as-of <moment>` (#84). A data time the verifier cannot read counts as later than the moment (it cannot show otherwise), and a fact without its own date is dated as the matcher dates it, by the receipt's `data_asof` or else its call time, in both the list and the verdicts (#96). Every receipt whose `data_asof` or fact `as_of` is later than the moment is listed as a look-ahead violation, and the run fails even if the answer states none of that data: the agent saw the future. Claims are judged only against data available at the moment, so a value that matches only later data is `STALE`, with a note that says look-ahead. A date without a time is the end of that day, on both sides: under an intraday as-of, the same day's close is look-ahead, because it is not known until the day ends.
 
+A worked example, with a committed log, an answer, and the commands, is `examples/backtest`, tested in `harness/tests/test_backtest_example.py`.
+
 ---
 
 ## 9. Mutation injector and gold set
