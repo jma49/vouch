@@ -565,6 +565,20 @@ wrong in the stated way.
   add would need a placeholder label that leaks into label files and
   agreement statistics.
 
+### Positioning
+
+- **An evidence layer, not a better hallucination detector**
+  (2026-09-28, design section 15). Chosen: invest in what does not
+  depend on language understanding (receipt format, signing, hash
+  chain, look-ahead) and keep the heuristic verifier good enough and
+  replaceable by Tier 3 behind `judge()`. Rejected: continuing to grow
+  the rule-based extractor as the core product, since stronger models
+  will out-read it. Cost: more heuristic polish is deprioritized even
+  where it would lift current numbers. Revisit when Phase 2 reports
+  real misreport rates: near zero for frontier models moves the
+  emphasis further to evidence and backtests; high rates keep
+  detection in the headline.
+
 ### Process
 
 - **go.mod declares the Go that CI builds with (1.27)** (#106). Rejected:
@@ -604,3 +618,4 @@ wrong in the stated way.
   actions, vulnerability scanning).
 - 2026-09-27: roadmap status review; assessed fit for agentic trading
   (handoff section, no scope change).
+- 2026-09-28: recorded the positioning decision (design section 15).

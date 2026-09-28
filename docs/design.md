@@ -368,3 +368,60 @@ Built since: `DERIVED` recomputation (§6.2), look-ahead detection (§8.4), and 
 - **Receipt-based verification** (signed tool receipts, cross-referencing agent claims): we adopt the core mechanism and are explicit about the threat model differences in a single-process deployment (§3.1).
 - **Benchmark-reliability audits** (double-digit score swings across identical re-runs): motivates §8 — repetition, variance reporting, and the refusal to print single-run scores.
 - **Multi-agent trading frameworks / market-data MCP servers**: adjacent but orthogonal. They produce answers; we audit them. Crowded spaces we intentionally do not enter.
+
+---
+
+## 15. Durability: what stronger models replace, and what they do not
+
+vouch's lasting value is evidence, not accuracy: a record made outside
+the model, signed at call time, that anyone holding the public key can
+check. A stronger model lowers the error rate; it cannot make its own
+account of what it read count as proof, because it is the party being
+audited. This section records which parts of the project that argument
+covers, so investment goes to the parts that keep their value.
+
+**Expected to lose value as models improve:**
+
+- *Heuristic claim extraction* (Tiers 1-2, section 5): token rules,
+  vocabularies, direction and period cues. It is rule-based language
+  understanding, where LLMs will do better, and it is where most audit
+  findings landed. Tier 3 is the planned replacement.
+- *"Catches hallucinated numbers" as the headline.* If frontier models
+  rarely misreport tool output, that pitch weakens. Phase 2 measures
+  the rate; until then it is unknown, in either direction.
+- *Loose provenance.* Provider citation and grounding features and
+  agent-framework traces cover "roughly traceable" answers.
+
+**Not replaced by model capability:**
+
+- *Independence.* Receipts are written by the proxy, not the model, and
+  are verifiable by a third party (section 3.1). A self-report is not
+  evidence however capable the model is.
+- *Audit need grows with autonomy.* Stronger agents are given more
+  unattended work, so fewer answers are read by a person and each
+  error costs more.
+- *Subtle errors remain.* As gross fabrication falls, what is left is
+  harder to see by eye: a stale value, the wrong date or entity, data
+  from after a backtest's simulated moment. `STALE`, look-ahead
+  (section 8.4), and entity attribution target these.
+- *Backtest leakage gets worse, not better.* A model that memorized
+  more history has more ways to know the future; `--as-of` checks the
+  data, independent of the model.
+- *Vendor neutrality.* One receipt format works across models and
+  providers; a platform's own grounding covers its own models.
+
+**Consequences for the design:**
+
+- The receipt format, signing, hash chain, and look-ahead check are
+  the long-term assets and get the engineering investment.
+- The heuristic verifier is kept good enough and treated as
+  replaceable: Tier 3 extraction should slot in behind `judge()` while
+  receipts and verdict records stay deterministic and reviewable.
+- Positioning is "an evidence layer for agents", with hallucination
+  detection as one use of it.
+
+**Open risks:** value is unproven until Phase 2 has real numbers; the
+scope (MCP, numeric claims) is narrow; if MCP itself gains signed
+responses, the proxy's differentiation shrinks and the verifier and
+backtest checks carry the project.
+
