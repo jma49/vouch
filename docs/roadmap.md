@@ -187,7 +187,7 @@ numbers reproducible via `make bench`.
 
 ---
 
-## Phase 7 — Evidence layer — in progress
+## Phase 7 — Evidence layer — done except `--listen` auth (maintainer's decision)
 
 Goal: make the parts that keep their value as models improve (design
 section 15) usable by third parties: a head to witness, a format they

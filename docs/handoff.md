@@ -11,29 +11,27 @@ Snapshot of where work stands, for the next session. Overwrite
   Phase 2: everything buildable is done; runs and labels are pending**
   (they need the maintainer's model budget and a human labeler; see
   memory: no paid model calls without approval).
-- **Audit 2026-09-27 (second round):** four parallel reviews (Go proxy,
-  Python verifier, security, architecture and docs) led to 13 issues,
-  #94-#106, all fixed in PRs #107-#119. Highlights:
-  - JSON is read by exact key in Go and Python, so a receipt cannot
-    disagree with what ran and both verifiers read the same log (#98);
-  - analytics facts come from the server, not the agent's SQL (#103);
-  - verifier false passes closed: DERIVED over one receipt's series,
-    citations checked against their prose, timeframe ambiguity,
-    pronouns, dates (#94, #95); look-ahead holes and exit codes (#96);
-  - spawned upstreams no longer see the key path or credentials (#101);
-  - one writer per log, owner-only files, Go verify parity (#99);
-  - proxy lifecycle: pagination, timeouts, cancellation races, HTTP
-    session races and limits, SSE memory (#100); underflow, pointers,
-    monotonic latency (#102);
-  - extraction is linear again (#97); cite-mode cache hits (#104);
-  - `vouch_verifier.judge()` as the one entry point and `make check` as
-    the one pre-commit gate (#105).
-- **Toolchain:** CI and the Dockerfile build with Go 1.27 and actions
-  pinned by SHA, with govulncheck, pip-audit, and dependabot (#93);
-  `go.mod` declares 1.27 (#106). CI's job with both toolchains runs the
-  whole harness suite and fails if the proxy binary is missing.
-- Tests: verifier 421 (+1 documented xfail), harness 135, Go under
-  `-race`, integration (stdio and HTTP) in its own CI job. Corpus 166.
+- **Positioning (2026-09-28):** vouch is an evidence layer for agents
+  (design section 15; Positioning decision below). Phase 7 follows
+  from it; its plan was set by a planning review on a separate model,
+  as the maintainer asked for major decisions.
+- **Phase 7 (evidence layer): done except `--listen` auth**, which
+  waits on the maintainer:
+  - `vouch receipts head <log>`: the head to keep outside the log (#123);
+  - `docs/receipt-format.md`, normative, with tests on both sides that
+    read its field tables; it exposed #124 (the verifiers disagreed on
+    bodies no writer produces), fixed in #125: both now require
+    canonical payloads and every required key;
+  - `ClaimExtractor` seam behind `judge()`, for Tier 3 (#126);
+  - `examples/backtest`: look-ahead from a committed, sealed log, tested
+    live and re-recorded (#129); it exposed #127, fixed in #128;
+  - Docker image runs as uid 10001; CI now builds and checks it (#130).
+- **Earlier the same week:** the second audit (#94-#106, fixed in
+  #107-#119) and the toolchain move to Go 1.27 with pinned actions,
+  govulncheck, pip-audit, and dependabot (#93, #106).
+- Tests: verifier 436 (+1 documented xfail), harness 137, Go under
+  `-race`, integration (stdio and HTTP) and the Docker image in their
+  own CI jobs. Corpus 166.
 
 ## Next steps
 
@@ -41,13 +39,18 @@ Snapshot of where work stands, for the next session. Overwrite
    `make agent MODEL=gemini-flash ARGS="--samples 3"` (dry-run first;
    `--cite` for the citation condition), then `vouch-label serve`.
    Never run a model without approval. Then switch the README headline
-   to the real numbers and relabel the synthetic metrics.
-2. Tier 3 LLM extraction (needs model calls).
-3. Follow-ups, only when a need shows up: group commit for appends;
-   authentication before exposing `--listen`; resources and prompts
-   federation; difference/ratio derivations; quarters as dates; a
-   non-root Docker user; `--vocabulary` for vouch-eval and
-   vouch-eval-real (they now share `judge()`, so it is a flag away).
+   to the real numbers and relabel the synthetic metrics. This is what
+   decides the positioning's emphasis (design section 15).
+2. Tier 3 LLM extraction (needs model calls): implement it as a
+   `ClaimExtractor` passed to `judge()`.
+3. `--listen` bearer-token auth, if the maintainer wants it before any
+   exposed deployment (planned scope: `--auth-token env:VAR` only,
+   constant-time compare, 401 otherwise, refuse a non-loopback listen
+   without a token; TLS terminated in front).
+4. Follow-ups, only when a need shows up: witness publishing for heads
+   (needs a choice of witness); group commit for appends; resources and
+   prompts federation; difference/ratio derivations; quarters as dates;
+   `--vocabulary` for vouch-eval and vouch-eval-real.
 
 ## Open questions for the maintainer
 
@@ -58,6 +61,10 @@ Snapshot of where work stands, for the next session. Overwrite
 - Receipt format (docs/receipt-format.md): promise third parties that
   logs of older payload versions stay readable? Today a verifier reads
   the current version only.
+- `--listen` authentication: build it now, or only once someone
+  exposes the proxy (it adds auth surface to maintain)?
+- Head witness: if heads are to be published automatically, where
+  (a transparency log such as Sigstore Rekor, or a file or URL)?
 
 ## Fit for agentic trading (assessment, 2026-09-27)
 
@@ -270,6 +277,34 @@ entry whenever a choice closes off an alternative (AGENTS.md).
 - Cost: those containers can read the private key.
 - Revisit when: compose is used beyond local runs; split the public key
   into its own volume.
+
+
+**Readers require canonical payloads and every required key** (#124)
+- Chosen: a body must equal its own canonicalization, and every key
+  the writer always emits must be present, in Go and Python alike, as
+  `docs/receipt-format.md` states.
+- Rejected: accepting any JSON and re-serializing before digesting
+  (what Python did), which Go, digesting raw bytes, could not match;
+  reading missing keys as zero values.
+- Why: two verifiers of one log must give one answer, and a third
+  party needs a rule to implement, not two behaviors to reverse.
+- Cost: a key holder's hand-built log must be canonical to verify;
+  test helpers had to sign canonical bodies.
+- Revisit when: a third-party writer appears that cannot produce
+  canonical bodies; then specify a digest rule, not leniency.
+
+
+**`receipts head` checks the chain but not signatures** (#123)
+- Chosen: a keyless walk that prints only the head, so whoever keeps
+  the witness needs no key.
+- Rejected: requiring a keyring (verify already does that and prints
+  the head).
+- Why: the witness step should be cheap enough to do every session.
+- Cost: a head taken from a forged log is a forged head; the threat
+  model says to take it from a log you trust, before anyone else holds
+  it.
+- Revisit when: heads are published automatically; then publish from
+  the proxy at seal time, where the log is trusted by construction.
 
 ### Proxy and transport
 
@@ -582,6 +617,15 @@ wrong in the stated way.
   emphasis further to evidence and backtests; high rates keep
   detection in the headline.
 
+
+**Extractor seam without a selector** (#126)
+- Chosen: `judge(..., extractor=)` takes a `ClaimExtractor`; no CLI
+  flag or config chooses one.
+- Rejected: a `--extractor` flag now.
+- Why: there is one extractor; a selector would be untestable surface.
+- Cost: Tier 3 will need its own flag when it lands.
+- Revisit when: Tier 3 exists.
+
 ### Process
 
 - **go.mod declares the Go that CI builds with (1.27)** (#106). Rejected:
@@ -622,3 +666,6 @@ wrong in the stated way.
 - 2026-09-27: roadmap status review; assessed fit for agentic trading
   (handoff section, no scope change).
 - 2026-09-28: recorded the positioning decision (design section 15).
+- 2026-09-28: Phase 7 (evidence layer), planned by a separate-model review:
+  #123, #125 (#124), #126, #128 (#127), #129, #130; `--listen` auth left
+  to the maintainer.
