@@ -116,6 +116,8 @@ any system of this shape; the rest are open work.
   they run as the proxy's user: an upstream that reads the key file
   directly can still forge receipts. Run untrusted upstreams as another
   user, or reach them over HTTP.
+  The Docker image runs as an unprivileged user (uid 10001) for the
+  same reason.
 - Keep `--listen` on a loopback address. The HTTP endpoint checks
   browser origins (against DNS rebinding) but has no authentication:
   anyone who can reach it can make calls that get receipted. Pass

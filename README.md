@@ -196,7 +196,7 @@ Record once, then replay deterministically with no network access:
 ./proxy/bin/vouch proxy --mode=replay --fixtures ./fixtures ...
 ```
 
-A Docker image carrying the whole pipeline is available via `docker compose run --rm proxy|verify|eval`; see [`docker-compose.yml`](docker-compose.yml).
+A Docker image carrying the whole pipeline, running as an unprivileged user, is available via `docker compose run --rm proxy|verify|eval`; see [`docker-compose.yml`](docker-compose.yml).
 
 ## Known limitations
 
