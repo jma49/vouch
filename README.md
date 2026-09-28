@@ -221,7 +221,7 @@ Measurement before features. Full plan with exit criteria in [`docs/roadmap.md`]
 | 4 | Canonical JSON: specified contract, cross-language differential fuzzing, number-normalized fixture keys | done |
 | 5 | Proxy protocol completeness, Streamable HTTP, reference-server integration tests, latency benchmarks | done |
 | 6 | Product surface: look-ahead, `DERIVED`, HTML report, a second domain; Tier 3 LLM extraction | done except Tier 3 (needs model calls) |
-| 7 | Evidence layer: a witnessable head, a normative receipt format, an extractor seam, a backtest example | in progress |
+| 7 | Evidence layer: a witnessable head, a normative [receipt format](docs/receipt-format.md), an extractor seam, a [backtest example](examples/backtest) | done |
 
 ## Repository layout
 
