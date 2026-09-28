@@ -15,7 +15,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TextIO
 
-from vouch_verifier.canonical import number_value, parse_preserving, serialize
+from vouch_verifier.canonical import canonicalize, number_value, parse_preserving, serialize
 from vouch_verifier.signing import (
     CHECKPOINT_PAYLOAD_TYPE,
     RECEIPT_PAYLOAD_TYPE,
@@ -105,6 +105,16 @@ CHECKPOINT_KEYS = frozenset({"seq", "prev_digest", "receipts", "session_id", "se
 FACT_KEYS = frozenset(
     {"entity", "metric", "value", "unit", "as_of", "timeframe", "json_ptr", "tol_class"}
 )
+# What the writer omits when empty (Go's omitempty); every other key is
+# required, in both verifiers and in docs/receipt-format.md (#124).
+RECEIPT_OPTIONAL = frozenset({"data_asof"})
+FACT_OPTIONAL = frozenset({"unit", "as_of", "timeframe"})
+
+
+def _check_present(obj: dict[str, object], required: frozenset[str], where: str) -> None:
+    missing = sorted(required - obj.keys())
+    if missing:
+        raise ReceiptError(f"{where}: missing required key {missing[0]!r}")
 
 
 def _check_case(obj: dict[str, object], known: frozenset[str], where: str) -> None:
@@ -132,6 +142,7 @@ def _parse_receipt(line: str, lineno: int) -> Receipt:
     if not isinstance(tree, dict):
         raise ReceiptError(f"line {lineno}: receipt is not an object")
     _check_case(tree, RECEIPT_KEYS, f"line {lineno}")
+    _check_present(tree, RECEIPT_KEYS - RECEIPT_OPTIONAL, f"line {lineno}")
 
     def optional_text(key: str) -> str | None:
         v = tree.get(key)
@@ -160,6 +171,7 @@ def _parse_receipt(line: str, lineno: int) -> Receipt:
             if not isinstance(f, dict):
                 raise ReceiptError(f"line {lineno}: fact is not an object: {f!r:.60}")
             _check_case(f, FACT_KEYS, f"line {lineno}: fact")
+            _check_present(f, FACT_KEYS - FACT_OPTIONAL, f"line {lineno}: fact")
             _check_fact_types(f, lineno)
             facts.append(
                 Fact(
@@ -276,6 +288,12 @@ def audit_log(
                 else:
                     payload, keyid = decode(envelope, kind), None
                 body = payload.decode("utf-8")
+                # Exactly its canonical form, as in Go (#124): digests
+                # inside are then over one byte string in every reader.
+                if canonicalize(body) != body:
+                    raise ReceiptError(
+                        f"line {lineno}: payload is not in canonical form (docs/receipt-format.md)"
+                    )
                 tree = parse_preserving(body)
                 entry_seq, entry_prev = _link(tree, lineno)
             except ReceiptError:
@@ -298,6 +316,7 @@ def audit_log(
             if kind == CHECKPOINT_PAYLOAD_TYPE:
                 assert isinstance(tree, dict)
                 _check_case(tree, CHECKPOINT_KEYS, f"line {lineno}")
+                _check_present(tree, CHECKPOINT_KEYS, f"line {lineno}")
                 try:
                     counted = int(number_value(tree.get("receipts")))
                 except (ValueError, OverflowError) as e:

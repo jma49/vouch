@@ -203,7 +203,7 @@ vouch is an MVP. The most consequential gaps (known traps with reproductions are
 
 - **Extraction is deterministic, English-only, and keyword-driven.** It handles dates, magnitudes, units, signs (including Unicode minus and accounting parentheses), clause structure, markdown tables and lists, and pronouns that open a sentence, measured by a 166-case adversarial corpus and property-based tests. It does not do general coreference, it reads a threshold (*"below the 70 overbought line"*) as a claim, and a ticker that no tool returned is left unjudged rather than flagged. The LLM fallback (Tier 3) is not built yet.
 - **The headline metrics are synthetic.** See the note under [Measured results](#measured-results); the real evaluation is Phase 2.
-- **Cutting a log's tail needs an outside witness to detect.** Receipts are signed with Ed25519 and hash-chained, so edits, deletions, and reordering are detected, and a cleanly ended session is sealed with a signed checkpoint. But a log cut back to an earlier checkpoint is still a valid chain; only a head digest kept elsewhere (`vouch receipts head`, then `--expect-head`) reveals it. What the receipts do and do not protect, and against whom, is in the [threat model](docs/threat-model.md).
+- **Cutting a log's tail needs an outside witness to detect.** Receipts are signed with Ed25519 and hash-chained, so edits, deletions, and reordering are detected, and a cleanly ended session is sealed with a signed checkpoint. But a log cut back to an earlier checkpoint is still a valid chain; only a head digest kept elsewhere (`vouch receipts head`, then `--expect-head`) reveals it. What the receipts do and do not protect, and against whom, is in the [threat model](docs/threat-model.md); the log format, precise enough to write a verifier from, is in [`docs/receipt-format.md`](docs/receipt-format.md).
 - **Canonicalization is vouch's own, not RFC 8785**, on purpose: number literals are kept exactly as a tool wrote them, so `62.30` and `62.3` digest differently. The rules are specified in [`docs/canonical-json.md`](docs/canonical-json.md), pinned across Go and Python by shared vectors, and differentially fuzzed between the two.
 - **The proxy federates tools only.** Calls run concurrently over stdio or Streamable HTTP, and cancellation, progress, `tools/list_changed`, and sampling/roots/elicitation requests pass through, but resources and prompts are not federated. Over HTTP, one proxy process serves one session, and streams are not resumable.
 
@@ -233,7 +233,7 @@ Measurement before features. Full plan with exit criteria in [`docs/roadmap.md`]
 | [`testdata/`](testdata) | JSON | Cross-language canonicalization vectors, Go-written golden receipt log |
 | [`examples/`](examples) | text, YAML | The answer audited above; [`analytics/`](examples/analytics), a second domain (text-to-SQL) as pure configuration |
 | [`eval/`](eval) | YAML | Real-agent task set and model configs; runs (`eval/runs/`) and labels (`eval/labels/`) are written here once collected |
-| [`docs/`](docs) | Markdown | [Design](docs/design.md), [roadmap](docs/roadmap.md), [threat model](docs/threat-model.md), [pitfalls](docs/pitfalls.md), [labeling guide](docs/labeling.md) |
+| [`docs/`](docs) | Markdown | [Design](docs/design.md), [roadmap](docs/roadmap.md), [receipt format](docs/receipt-format.md), [threat model](docs/threat-model.md), [pitfalls](docs/pitfalls.md), [labeling guide](docs/labeling.md) |
 
 ## Development
 

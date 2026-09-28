@@ -77,8 +77,12 @@ The two runtime languages communicate only through the receipt log (JSONL). Loos
 
 One receipt per tool call, appended to the log. Immutable after write.
 
+The normative format, field by field, with the verification algorithm and conformance cases, is [receipt-format.md](receipt-format.md); this section explains the design.
+
 ```jsonc
 {
+  "seq": 3,                              // position in the log (the chain, below)
+  "prev_digest": "sha256:...",           // digest of the previous entry's payload
   "receipt_id": "a1b2c3...",            // 32 random hex digits
   "session_id": "s-...",
   "turn_index": 3,

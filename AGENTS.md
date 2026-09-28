@@ -58,7 +58,8 @@ Breaking one of these is a bug even if every test passes.
    verifies them. Canonical JSON and signing payloads must be
    byte-identical across both. Any change to `proxy/internal/receipt`
    or `verifier/src/vouch_verifier/canonical.py` requires updating
-   `testdata/canonical_vectors.json`, running `make golden`, and
+   `testdata/canonical_vectors.json` (and `docs/receipt-format.md`,
+   whose field tables tests on both sides read), running `make golden`, and
    passing both suites, including the differential test
    (`verifier/tests/test_differential.py`). CI fails on golden-log drift.
 2. **The receipt is the product.** If a receipt cannot be written, the
