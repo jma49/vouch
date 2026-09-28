@@ -40,7 +40,7 @@ to that statement.
 | P1 | No receipt can be forged or edited without the private key | log holder | Ed25519 signature over the exact payload bytes, in a DSSE envelope (#53) | tamper suites: edit-fact, unknown-key, swap-sig; `sign` package tests |
 | P2 | No entry can be deleted, inserted, duplicated, or reordered without breaking the log | log holder | hash chain: signed `seq` and `prev_digest` on every entry, checked with or without keys (#54) | tamper suites: delete-first, delete-middle, reorder, duplicate-line |
 | P3 | A cleanly ended session is sealed, and a log that stops mid-session is visible | log holder, crashes | signed checkpoint with the receipt count; `--require-sealed` (#54) | tamper suites: miscount-checkpoint, truncate-tail |
-| P4 | A log cut back to an earlier point is detected, **given an external head** | log holder | head digest printed at seal, recorded in eval runs' `meta.json`; `--expect-head` (#54) | `test_tail_truncation_needs_sealing_or_an_external_head`; `test_a_run_whose_log_no_longer_matches_its_head_is_refused` |
+| P4 | A log cut back to an earlier point is detected, **given an external head** | log holder | head digest printed at seal or by `vouch receipts head`, recorded in eval runs' `meta.json`; `--expect-head` (#54) | `test_tail_truncation_needs_sealing_or_an_external_head`; `test_a_run_whose_log_no_longer_matches_its_head_is_refused`; `TestChainHeadIsTheWitness` |
 | P5 | The receipt covers what the agent actually received, not only the extracted payload; under `--cite` the agent also sees a block the proxy derives from the receipt itself (#81) | a misleading upstream response | `response_canonical` and its digest, signed (#20) | `TestReceiptBindsTheResponse`; `test_tampered_response_is_rejected_without_a_key` |
 | P6 | Numbers are recorded exactly as the tool wrote them; ambiguous input is refused | canonicalization drift | vouch canonical JSON v2: literals verbatim; duplicate keys, lone surrogates, and nesting past 256 levels rejected in both languages (#9, #27, #52, #62) | `testdata/canonical_vectors.json` in Go and Python; differential fuzzing (`test_differential.py`, `FuzzCanonicalize`) |
 | P7 | A (session, turn) and a receipt id are recorded once, and each receipt's digests cover what they claim | replay within a log | uniqueness and digests checked by the store and by both verifiers (Go `receipts verify` since #99) | duplicate tests, including a validly signed replay; tamper suites |
@@ -101,8 +101,11 @@ any system of this shape; the rest are open work.
   is created owner-only (0600, in a 0700 directory).
 - Generate a key per proxy deployment with `vouch keygen`; keep the
   private key on that host, mode 0600; distribute only the public key.
-- When a session ends, keep the head digest the proxy prints, or
-  publish it with the results it supports.
+- When a session ends, keep the head digest the proxy prints (or
+  `vouch receipts head <log>` prints later), or publish it with the
+  results it supports. `head` checks the chain but not signatures, so
+  take it from a log you trust, and publish it before anyone else
+  holds the log.
 - Audit with the strongest checks available:
   `vouch receipts verify --require-sealed --expect-head <head> --public-key <key> <log>`,
   or `vouch-verify` with the same options.

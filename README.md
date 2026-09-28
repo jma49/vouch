@@ -168,6 +168,10 @@ vouch-eval --receipts ./receipts/receipts.jsonl --n 10 --public-key ~/.vouch/vou
 # Anyone with the public key can check the log, and read it:
 ./proxy/bin/vouch receipts verify --public-key ~/.vouch/vouch.pub.pem ./receipts/receipts.jsonl
 ./proxy/bin/vouch receipts cat ./receipts/receipts.jsonl | jq .
+# Keep the head somewhere the log holder cannot rewrite; a log cut back
+# later is still a valid chain, but its head no longer matches:
+HEAD=$(./proxy/bin/vouch receipts head ./receipts/receipts.jsonl)
+./proxy/bin/vouch receipts verify --expect-head "$HEAD" --public-key ~/.vouch/vouch.pub.pem ./receipts/receipts.jsonl
 
 # The canonical form any digest in a receipt is computed over:
 echo '{"b": 1.50, "a": [1e2]}' | ./proxy/bin/vouch canon    # {"a":[1e2],"b":1.50}
@@ -199,7 +203,7 @@ vouch is an MVP. The most consequential gaps (known traps with reproductions are
 
 - **Extraction is deterministic, English-only, and keyword-driven.** It handles dates, magnitudes, units, signs (including Unicode minus and accounting parentheses), clause structure, markdown tables and lists, and pronouns that open a sentence, measured by a 166-case adversarial corpus and property-based tests. It does not do general coreference, it reads a threshold (*"below the 70 overbought line"*) as a claim, and a ticker that no tool returned is left unjudged rather than flagged. The LLM fallback (Tier 3) is not built yet.
 - **The headline metrics are synthetic.** See the note under [Measured results](#measured-results); the real evaluation is Phase 2.
-- **Cutting a log's tail needs an outside witness to detect.** Receipts are signed with Ed25519 and hash-chained, so edits, deletions, and reordering are detected, and a cleanly ended session is sealed with a signed checkpoint. But a log cut back to an earlier checkpoint is still a valid chain; only a head digest kept elsewhere (`--expect-head`) reveals it. What the receipts do and do not protect, and against whom, is in the [threat model](docs/threat-model.md).
+- **Cutting a log's tail needs an outside witness to detect.** Receipts are signed with Ed25519 and hash-chained, so edits, deletions, and reordering are detected, and a cleanly ended session is sealed with a signed checkpoint. But a log cut back to an earlier checkpoint is still a valid chain; only a head digest kept elsewhere (`vouch receipts head`, then `--expect-head`) reveals it. What the receipts do and do not protect, and against whom, is in the [threat model](docs/threat-model.md).
 - **Canonicalization is vouch's own, not RFC 8785**, on purpose: number literals are kept exactly as a tool wrote them, so `62.30` and `62.3` digest differently. The rules are specified in [`docs/canonical-json.md`](docs/canonical-json.md), pinned across Go and Python by shared vectors, and differentially fuzzed between the two.
 - **The proxy federates tools only.** Calls run concurrently over stdio or Streamable HTTP, and cancellation, progress, `tools/list_changed`, and sampling/roots/elicitation requests pass through, but resources and prompts are not federated. Over HTTP, one proxy process serves one session, and streams are not resumable.
 
@@ -216,6 +220,7 @@ Measurement before features. Full plan with exit criteria in [`docs/roadmap.md`]
 | 4 | Canonical JSON: specified contract, cross-language differential fuzzing, number-normalized fixture keys | done |
 | 5 | Proxy protocol completeness, Streamable HTTP, reference-server integration tests, latency benchmarks | done |
 | 6 | Product surface: look-ahead, `DERIVED`, HTML report, a second domain; Tier 3 LLM extraction | done except Tier 3 (needs model calls) |
+| 7 | Evidence layer: a witnessable head, a normative receipt format, an extractor seam, a backtest example | in progress |
 
 ## Repository layout
 

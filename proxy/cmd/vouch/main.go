@@ -6,6 +6,7 @@
 //	    [--listen 127.0.0.1:8766] [--cite] --receipts <dir> --schemas <dir> [--session <id>]
 //	    [--mode live|record|replay --fixtures <dir>]
 //	vouch receipts cat <log>
+//	vouch receipts head <log>
 //	vouch canon [--lines] < input
 //	vouch receipts verify --public-key <key.pub.pem> [--public-key ...] \
 //	    [--require-sealed] [--expect-head <digest>] <log>
@@ -83,6 +84,7 @@ func usage() {
       [--listen 127.0.0.1:8766] [--cite] --receipts <dir> --schemas <dir> [--session <id>]
       [--mode live|record|replay --fixtures <dir>]
   vouch receipts cat <log>
+  vouch receipts head <log>
   vouch receipts verify --public-key <key.pub.pem> [--public-key ...] \
       [--require-sealed] [--expect-head <digest>] <log>
   vouch canon [--lines] < input
@@ -263,10 +265,11 @@ func runKeygen(args []string) error {
 
 // runReceipts reads a receipt log for people: cat prints each receipt
 // body as one JSON line (for jq and grep, since envelope payloads are
-// base64), and verify checks every signature against trusted keys.
+// base64), verify checks every signature against trusted keys, and head
+// prints the chain head to keep outside the log.
 func runReceipts(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("receipts: want a subcommand: cat or verify")
+		return fmt.Errorf("receipts: want a subcommand: cat, verify, or head")
 	}
 	switch args[0] {
 	case "cat":
@@ -312,6 +315,20 @@ func runReceipts(args []string) error {
 		}
 		fmt.Printf("%d receipts and %d checkpoints verified; chain intact; sealed: %v\nhead %s\n",
 			len(audit.Receipts), audit.Checkpoints, audit.Sealed, audit.Head)
+		return nil
+	case "head":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: vouch receipts head <log>")
+		}
+		// The digest alone on stdout, so HEAD=$(vouch receipts head log)
+		// works; what it rests on goes to stderr.
+		audit, err := store.ChainHead(args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Println(audit.Head)
+		fmt.Fprintf(os.Stderr, "%d receipts and %d checkpoints; chain intact; sealed: %v; signatures not checked (use verify)\n",
+			len(audit.Receipts), audit.Checkpoints, audit.Sealed)
 		return nil
 	default:
 		return fmt.Errorf("receipts: unknown subcommand %q", args[0])

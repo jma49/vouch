@@ -447,6 +447,34 @@ func Verify(path string, keys sign.Keyring) (*Audit, error) {
 	return a, nil
 }
 
+// ChainHead reads the log at path and checks only its chain: links,
+// sequence, and checkpoint counts, without signatures. It is the
+// witness step (design section 3.1, "What the chain cannot do"): the
+// head it returns is the digest to keep outside the log, where a later
+// Verify with --expect-head compares against it. A log cut back to an
+// earlier entry still has a valid chain; only its head differs.
+func ChainHead(path string) (*Audit, error) {
+	a := &Audit{}
+	chain := chainState{head: receipt.Genesis}
+	err := walk(path, nil, func(e *Entry) error {
+		if err := chain.accept(e); err != nil {
+			return err
+		}
+		if e.Receipt != nil {
+			a.Receipts = append(a.Receipts, *e.Receipt)
+		} else {
+			a.Checkpoints++
+		}
+		a.Sealed = e.Checkpoint != nil
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	a.Head = chain.head
+	return a, nil
+}
+
 // checkDigests confirms a receipt's digests cover what they claim to.
 func checkDigests(r *receipt.Receipt) error {
 	if got := receipt.Digest(r.ResultCanonical); got != r.ResultDigest {

@@ -182,3 +182,44 @@ func resignBody(t *testing.T, line []byte) string {
 	}
 	return string(body)
 }
+
+// TestChainHeadIsTheWitness pins what receipts head is for: it agrees
+// with Verify on an intact log, still accepts a log cut back to an
+// earlier entry (a valid prefix), and reports a different head for it,
+// which is what --expect-head then catches.
+func TestChainHeadIsTheWitness(t *testing.T) {
+	lines, head := sealedLines(t)
+	dir := t.TempDir()
+	write := func(name string, ls [][]byte) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, append(bytes.Join(ls, []byte("\n")), '\n'), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	full := write("full.jsonl", lines)
+	got, err := ChainHead(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := Verify(full, signtest.Keyring(signer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Head != head || got.Head != verified.Head || !got.Sealed || len(got.Receipts) != 3 || got.Checkpoints != 1 {
+		t.Fatalf("ChainHead = %+v, want head %s (Verify: %s), sealed, 3 receipts, 1 checkpoint", got, head, verified.Head)
+	}
+
+	cut, err := ChainHead(write("cut.jsonl", lines[:2]))
+	if err != nil {
+		t.Fatalf("a valid prefix must still read: %v", err)
+	}
+	if cut.Head == head || cut.Sealed {
+		t.Fatalf("cut log: head %s sealed %v; want a different, unsealed head", cut.Head, cut.Sealed)
+	}
+
+	if _, err := ChainHead(write("gap.jsonl", [][]byte{lines[0], lines[2], lines[3]})); err == nil || !strings.Contains(err.Error(), "chain broken") {
+		t.Fatalf("a gap must break the chain, got %v", err)
+	}
+}
