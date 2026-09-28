@@ -192,7 +192,7 @@ A model can cite only what it can see, and the proxy returns results unchanged, 
 
 Behavior on hand-written prose is pinned by an adversarial corpus (`verifier/tests/corpus/claims.yaml`) and by property-based tests.
 
-**Tier 3 — LLM structured extraction (last resort).** Candidates that Tier 2 cannot resolve are passed to a small model with a strict JSON-schema output contract, converting spans into Claims.
+**Tier 3 — LLM structured extraction (last resort).** Candidates that Tier 2 cannot resolve are passed to a small model with a strict JSON-schema output contract, converting spans into Claims. Not built. It plugs in behind `judge()` as a `ClaimExtractor` (the rule tiers are the default one): an extractor sees the answer, the receipts' entities, and the vocabulary, never the receipts' values, and matching and verdicts stay the deterministic code above, so replacing extraction changes no caller and no verdict rule (§15).
 
 **Every eval report states the tier mix** — e.g., "Tier 1 covered 87% of numeric claims." Citation-protocol adherence is itself a measured property of the agent under test, and a headline metric of this project.
 
