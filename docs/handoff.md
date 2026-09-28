@@ -53,6 +53,50 @@ Snapshot of where work stands, for the next session. Overwrite
 
 - Phase 2: when can a Gemini run happen, and is committing its outputs
   under `eval/runs/` acceptable?
+- Agentic trading as a target use case (assessment below): pursue it,
+  and if so, may vouch check a proposed action's numbers?
+
+## Fit for agentic trading (assessment, 2026-09-27)
+
+Not a plan, and it changes no scope: vouch stays read-only (AGENTS.md
+invariant 6). The question was whether it helps teams that build
+trading agents. Short answer: as an audit layer beside the agent, yes;
+as part of the trading loop, only in narrow ways.
+
+Where it helps today:
+- **Pre-decision gate.** `vouch-verify` exits 1 on `CONTRADICTED`,
+  `UNSUPPORTED`, or `STALE`, so a caller can refuse to act on a
+  research memo whose numbers its tools never returned (an RSI of 68
+  where the tool said 62 flips a signal). vouch only reports; the
+  caller decides.
+- **Backtest hygiene.** `--as-of` flags tool data from after the
+  simulated moment (design section 8.4), and `UNSUPPORTED` exposes
+  figures a model recalls from training rather than reads from its
+  tools, a common leak in LLM backtests.
+- **Audit trail.** Signed, hash-chained receipts show what data the
+  agent saw when it decided, and a third party can check them with
+  the public key alone.
+- **Model choice.** Phase 2's per-model misreport rate is the number a
+  team would use to pick a model; it does not exist until runs happen.
+
+Limits, stated plainly:
+- It checks numbers against tool output, not reasoning, not whether a
+  trade is good, and not whether the upstream data is true.
+- Most trading claims are derived (spreads, ratios, returns) or
+  structured (an order's fields), not prose: difference and ratio are
+  not built, and return and Sharpe claims are out of scope.
+- Verification is post hoc; the proxy adds about 5 ms per call
+  (p50, `docs/bench/latency.json`), fine at minute horizons, not for
+  latency-sensitive loops.
+- Real precision and recall are unmeasured until Phase 2 has labels,
+  so no value claim can be made yet.
+
+Candidate work if this use case is pursued (each needs the
+maintainer's decision; none touches execution): difference and ratio
+derivations; a check of the numbers in an agent's *proposed* structured
+action against receipts (read-only, but close to the scope line, so
+invariant 6 would need an explicit wording decision first); a
+backtest example under `examples/`.
 
 ## Decisions and trade-offs
 
@@ -558,3 +602,5 @@ wrong in the stated way.
 - 2026-09-27: second audit (four parallel reviews): issues #94-#106,
   fixed in PRs #107-#119; merged the maintainer's #93 (Go 1.27, pinned
   actions, vulnerability scanning).
+- 2026-09-27: roadmap status review; assessed fit for agentic trading
+  (handoff section, no scope change).
