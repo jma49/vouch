@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jma49/vouch/proxy/internal/receipt"
 	"github.com/jma49/vouch/proxy/internal/sign"
 	"github.com/jma49/vouch/proxy/internal/sign/signtest"
 )
@@ -117,7 +118,7 @@ func TestVerifyDetectsTampering(t *testing.T) {
 		{"duplicate an envelope key", [][]byte{[]byte(strings.Replace(string(r0), `{`, `{"payloadType":"x",`, 1)), r1, r2, cp}, "not an envelope"},
 		{"add a key to a signature", [][]byte{[]byte(strings.Replace(string(r0), `"keyid"`, `"KeyID":"x","keyid"`, 1)), r1, r2, cp}, "not an envelope"},
 		{"re-sign a body with a case-variant key", [][]byte{r0, resign(t, r1, signer, func(b string) string {
-			return strings.Replace(b, `"facts":`, `"Facts":[],"facts":`, 1)
+			return `{"Facts":[],` + b[1:] // "F" sorts first: still canonical
 		}), r2, cp}, "only in case"},
 		// #99: checks Go's verifier used to leave to Python.
 		{"re-sign a receipt with a wrong result digest", [][]byte{r0, resign(t, r1, signer, func(b string) string {
@@ -131,6 +132,19 @@ func TestVerifyDetectsTampering(t *testing.T) {
 			}
 			return strings.Replace(b, id(r1), id(r0), 1)
 		}), r2, cp}, "duplicate receipt_id"},
+		// #124: what every reader requires of a body, not only Go.
+		{"re-sign a receipt without a required key", [][]byte{r0, resign(t, r1, signer, func(b string) string {
+			return dropKey(t, b, "payload_source", false)
+		}), r2, cp}, `missing required key "payload_source"`},
+		{"re-sign a fact without a required key", [][]byte{r0, resign(t, r1, signer, func(b string) string {
+			return dropKey(t, b, "json_ptr", true)
+		}), r2, cp}, `fact 0: missing required key "json_ptr"`},
+		{"re-sign a checkpoint without a required key", [][]byte{r0, r1, r2, resign(t, cp, signer, func(b string) string {
+			return dropKey(t, b, "sealed_at", false)
+		})}, `missing required key "sealed_at"`},
+		{"re-sign a body that is not canonical", [][]byte{r0, resign(t, r1, signer, func(b string) string {
+			return strings.Replace(b, `"facts":`, `"facts": `, 1)
+		}), r2, cp}, "not in canonical form"},
 		{"swap in a checkpoint's signature", [][]byte{r0, r1, r2, func() []byte {
 			var a, b sign.Envelope
 			_ = json.Unmarshal(cp, &a)
@@ -222,4 +236,34 @@ func TestChainHeadIsTheWitness(t *testing.T) {
 	if _, err := ChainHead(write("gap.jsonl", [][]byte{lines[0], lines[2], lines[3]})); err == nil || !strings.Contains(err.Error(), "chain broken") {
 		t.Fatalf("a gap must break the chain, got %v", err)
 	}
+}
+
+// dropKey removes key from a body, or, with inFact, gives the body one
+// fact lacking key, and returns it in canonical form, as a key holder
+// would sign it.
+func dropKey(t *testing.T, body, key string, inFact bool) string {
+	t.Helper()
+	dec := json.NewDecoder(strings.NewReader(body))
+	dec.UseNumber()
+	var tree map[string]any
+	if err := dec.Decode(&tree); err != nil {
+		t.Fatal(err)
+	}
+	if inFact {
+		fact := map[string]any{"entity": "NVDA", "metric": "rsi_14", "value": json.Number("62.3"),
+			"json_ptr": "/rsi_14", "tol_class": "indicator"}
+		delete(fact, key)
+		tree["facts"] = []any{fact}
+	} else {
+		delete(tree, key)
+	}
+	raw, err := json.Marshal(tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canon, err := receipt.Canonicalize(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(canon)
 }

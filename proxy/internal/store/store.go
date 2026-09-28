@@ -366,10 +366,22 @@ func decodeEntry(line []byte, keys sign.Keyring) (*Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A body must be exactly its canonical form: digests inside it are
+	// then over one byte string, the same in every reader (#124).
+	canon, err := receipt.Canonicalize(payload)
+	if err != nil {
+		return nil, fmt.Errorf("payload: %w", err)
+	}
+	if !bytes.Equal(canon, payload) {
+		return nil, fmt.Errorf("payload is not in canonical form (docs/receipt-format.md)")
+	}
 	e := &Entry{Payload: payload, KeyID: keyID}
 	if env.PayloadType == receipt.CheckpointType {
 		var cp receipt.Checkpoint
 		if err := receipt.DecodeStrict(payload, &cp); err != nil {
+			return nil, fmt.Errorf("parse checkpoint: %w", err)
+		}
+		if err := receipt.RequirePresent(payload, cp); err != nil {
 			return nil, fmt.Errorf("parse checkpoint: %w", err)
 		}
 		e.Checkpoint = &cp

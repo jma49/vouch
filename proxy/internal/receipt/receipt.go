@@ -125,5 +125,8 @@ func ParseBody(body []byte) (*Receipt, error) {
 	if err := DecodeStrict(body, &r); err != nil {
 		return nil, fmt.Errorf("receipt: parse body: %w", err)
 	}
+	if err := RequirePresent(body, r); err != nil {
+		return nil, fmt.Errorf("receipt: parse body: %w", err)
+	}
 	return &r, nil
 }

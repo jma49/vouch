@@ -198,7 +198,7 @@ Phase 2 runs and Tier 3 stay blocked on the maintainer's approval).
 | Item | Status |
 |---|---|
 | `vouch receipts head <log>`: keyless chain walk printing the head to keep outside the log, feeding `--expect-head` | done |
-| `docs/receipt-format.md`: normative envelope, body, checkpoint, chain, verification algorithm, versioning; a test that keeps it in step with the code | todo |
+| `docs/receipt-format.md`: normative envelope, body, checkpoint, chain, verification algorithm, versioning; a test that keeps it in step with the code | done: tests on both sides read its field tables; found #124 (the verifiers disagreed on bodies no writer produces) |
 | Extractor seam behind `judge()`: a protocol with the rule tiers as the default, so Tier 3 slots in without touching callers | todo |
 | `examples/backtest`: a committed log from the synthetic market, `--as-of` inside and after the data, the head as the witness step | todo |
 | Docker image runs as a non-root user | todo |

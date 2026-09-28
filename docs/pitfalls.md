@@ -141,6 +141,22 @@ remembering. The 2026-09-27 audit filed #8-#48; all are closed.
 - **Status:** fixed (#62). Reproduced; found by probing edge cases while
   building the differential test.
 
+### P-045 Two verifiers, one log, two answers on bodies no writer produces
+- **Symptom:** a validly signed receipt body without `response_canonical`
+  and `response_digest` passed the Python verifier and failed Go's; one
+  with whitespace inside `result_canonical` did the same. Bodies missing
+  `payload_source`, `args_canonical`, or `facts` passed both as zero
+  values.
+- **Cause:** each reader encoded its own idea of a well-formed body.
+  Python re-serialized values before digesting them, Go digested the
+  raw bytes, and neither checked that required keys were present. The
+  proxy always writes complete canonical bodies, so no test produced
+  anything else. Only a key holder can sign such a body.
+- **Fix / workaround:** `docs/receipt-format.md` states the rules, both
+  readers require canonical payloads and every required key, and tests
+  on both sides read the spec's field tables so the three cannot drift.
+- **Status:** fixed in #124. Reproduced while writing the spec.
+
 ## Proxy
 
 ### P-020 Reusing `--session` after restart fails every tool call

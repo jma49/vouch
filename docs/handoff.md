@@ -55,6 +55,9 @@ Snapshot of where work stands, for the next session. Overwrite
   under `eval/runs/` acceptable?
 - Agentic trading as a target use case (assessment below): pursue it,
   and if so, may vouch check a proposed action's numbers?
+- Receipt format (docs/receipt-format.md): promise third parties that
+  logs of older payload versions stay readable? Today a verifier reads
+  the current version only.
 
 ## Fit for agentic trading (assessment, 2026-09-27)
 

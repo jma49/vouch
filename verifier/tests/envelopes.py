@@ -17,6 +17,7 @@ from typing import Any
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
+from vouch_verifier.canonical import canonicalize, parse_preserving, serialize
 from vouch_verifier.receipts import GENESIS
 from vouch_verifier.signing import Keyring, load_keyring, pae
 
@@ -42,9 +43,12 @@ def edit_body(line: str, edit: Callable[[dict[str, Any]], None]) -> str:
     """Rewrite one envelope's receipt body as JSON, keeping its signature."""
 
     def apply(body: str) -> str:
-        tree = json.loads(body)
+        # Canonical, as a writer would sign it: readers refuse any other
+        # form (#124), and the edit, not the layout, is under test.
+        tree = parse_preserving(body)
+        assert isinstance(tree, dict)
         edit(tree)
-        return json.dumps(tree)
+        return serialize(tree)
 
     return edit_payload(line, apply)
 
@@ -66,6 +70,22 @@ def bodies(lines: list[str]) -> list[tuple[str, str]]:
     return out
 
 
+def sign_line(payload_type: str, payload: bytes) -> str:
+    """One envelope over exactly these payload bytes, signed with the golden key."""
+    key = load_pem_private_key(GOLDEN_PRIVATE.read_bytes(), password=None)
+    assert isinstance(key, Ed25519PrivateKey)
+    sig = key.sign(pae(payload_type, payload))
+    return json.dumps(
+        {
+            "payload": base64.b64encode(payload).decode("ascii"),
+            "payloadType": payload_type,
+            "signatures": [
+                {"keyid": next(iter(GOLDEN_KEYS)), "sig": base64.b64encode(sig).decode("ascii")}
+            ],
+        }
+    )
+
+
 def signed_chain(
     entries: list[tuple[str, dict[str, Any]]],
     overrides: dict[int, dict[str, Any]] | None = None,
@@ -77,22 +97,10 @@ def signed_chain(
     entry after linking, a valid chain. It lets tests reach the checks
     that sit behind the chain, such as duplicate detection.
     """
-    key = load_pem_private_key(GOLDEN_PRIVATE.read_bytes(), password=None)
-    assert isinstance(key, Ed25519PrivateKey)
-    keyid = next(iter(GOLDEN_KEYS))
     head, lines = GENESIS, []
     for seq, (payload_type, body) in enumerate(entries):
         body = {**body, "seq": seq, "prev_digest": head, **(overrides or {}).get(seq, {})}
-        payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        sig = key.sign(pae(payload_type, payload))
-        lines.append(
-            json.dumps(
-                {
-                    "payload": base64.b64encode(payload).decode("ascii"),
-                    "payloadType": payload_type,
-                    "signatures": [{"keyid": keyid, "sig": base64.b64encode(sig).decode("ascii")}],
-                }
-            )
-        )
+        payload = canonicalize(json.dumps(body)).encode("utf-8")
+        lines.append(sign_line(payload_type, payload))
         head = "sha256:" + hashlib.sha256(payload).hexdigest()
     return lines
