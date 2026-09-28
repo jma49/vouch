@@ -161,6 +161,7 @@ vouch-verify --answer answer.txt --public-key ~/.vouch/vouch.pub.pem \
     --receipts ./receipts/receipts.jsonl --tolerances tolerance.yaml
 #    --format html > report.html   one page, every number marked by verdict
 #    --as-of 2026-07-20            a backtest: flag data the agent could not yet have had
+#                                  (worked example: examples/backtest)
 
 # 3. Measure the verifier against machine-generated known-bad answers.
 vouch-eval --receipts ./receipts/receipts.jsonl --n 10 --public-key ~/.vouch/vouch.pub.pem
