@@ -18,6 +18,16 @@ COPY schemas/ ./schemas/
 COPY tolerance.yaml ./
 COPY testdata/ ./testdata/
 
+# Run as an unprivileged user: the proxy spawns upstream servers, and
+# they inherit its user (docs/threat-model.md, operating guidance). The
+# state directories exist in the image so a new named volume mounted on
+# one starts out owned by that user.
+RUN useradd --system --uid 10001 --no-create-home --home-dir /nonexistent vouch \
+    && mkdir -p /app/receipts /app/fixtures /app/keys \
+    && chown vouch:vouch /app/receipts /app/fixtures /app/keys \
+    && chmod 0700 /app/keys
+USER vouch
+
 # Receipts and fixtures are state: mount them.
 VOLUME ["/app/receipts", "/app/fixtures"]
 ENTRYPOINT ["vouch"]

@@ -5,6 +5,9 @@
 # verify and eval use only the public key but mount the whole volume
 # read-only, private key included. For least privilege, copy
 # vouch.pub.pem into a separate volume and mount only that.
+# The image runs as uid 10001. Volumes created by an image from before
+# that change are owned by root; hand them over once with
+#   docker compose run --rm --user root --entrypoint chown proxy -R 10001:10001 /app/receipts /app/fixtures /app/keys
 services:
   # The proxy speaks MCP over stdio, so it is run attached rather than
   # as a background service:

@@ -166,3 +166,24 @@ jobs:
       # behavior change shows up here as a stale README.
       - name: README is current
         run: python -m vouch_harness.readme README.md --check
+
+  docker:
+    name: docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build
+        run: docker build -t vouch:ci .
+      # The image must not run as root, and its user must be able to
+      # write the state volumes compose mounts.
+      - name: Runs as a non-root user
+        run: test "$(docker run --rm --entrypoint id vouch:ci -u)" != 0
+      - name: Keygen into a fresh named volume, then verify with the image
+        run: |
+          docker run --rm -v vouch-keys:/app/keys vouch:ci keygen --out /app/keys
+          docker run --rm vouch:ci receipts verify --require-sealed \
+            --public-key testdata/keys/golden.pub.pem testdata/receipts_golden.jsonl
+          docker run --rm --entrypoint sh vouch:ci -c 'echo "NVDA closed at 181.52." > /tmp/a.txt &&
+            vouch-verify --answer /tmp/a.txt --receipts testdata/receipts_golden.jsonl \
+              --public-key testdata/keys/golden.pub.pem'
+
