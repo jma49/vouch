@@ -184,3 +184,26 @@ numbers reproducible via `make bench`.
 | Tier 3 LLM extraction with strict schema; its nondeterminism measured by the harness | todo (needs model calls; the maintainer's approval and budget) |
 | HTML report with span highlighting | done (#86): `vouch-verify --format html` |
 | Second domain schema pack (e.g. text-to-SQL analytics) to prove domain independence | done (#88): `examples/analytics`, per-row entities, `--vocabulary` |
+
+---
+
+## Phase 7 — Evidence layer — in progress
+
+Goal: make the parts that keep their value as models improve (design
+section 15) usable by third parties: a head to witness, a format they
+can implement from a spec, a seam for Tier 3, and a worked backtest.
+Planned 2026-09-28 (order and scope decided by a planning review;
+Phase 2 runs and Tier 3 stay blocked on the maintainer's approval).
+
+| Item | Status |
+|---|---|
+| `vouch receipts head <log>`: keyless chain walk printing the head to keep outside the log, feeding `--expect-head` | done |
+| `docs/receipt-format.md`: normative envelope, body, checkpoint, chain, verification algorithm, versioning; a test that keeps it in step with the code | todo |
+| Extractor seam behind `judge()`: a protocol with the rule tiers as the default, so Tier 3 slots in without touching callers | todo |
+| `examples/backtest`: a committed log from the synthetic market, `--as-of` inside and after the data, the head as the witness step | todo |
+| Docker image runs as a non-root user | todo |
+| Bearer-token auth for `--listen` | deferred: needs the maintainer's decision (no exposed deployment yet) |
+
+Exit criteria: a third party can verify a log from the spec, the
+golden log, and a public key alone; the backtest example runs in CI.
+
