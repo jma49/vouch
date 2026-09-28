@@ -103,3 +103,19 @@ def test_a_domain_without_a_series_derives_nothing() -> None:
     vocab = load_vocabulary(pack)
     claims = extract_claims("EMEA revenue rose 4% since July 1.", {"EMEA"}, vocab)
     assert all(c.derivation is None for c in (*claims.claims, *claims.unresolved))
+
+
+def test_the_start_date_is_never_the_end_date() -> None:
+    # #127: the previous phrase's "on July 20" is the base, not the end.
+    since_20_to_23 = pct("2026-07-20", "2026-07-23")
+    answer = (
+        "As of the July 23 close, NVDA closed at 176.10, up from 170.00 on July 20, "
+        f"a {since_20_to_23:.2f}% gain since July 20."
+    )
+    matched = match_claims(extract_claims(answer, {"NVDA"}), [_bars(CLOSES)])
+    assert [m.verdict for m in matched] == [Verdict.SUPPORTED, Verdict.SUPPORTED, Verdict.DERIVED]
+    assert "to --07-23" in matched[2].note
+    # With no other date, the window ends on the latest receipted day.
+    answer = f"Up from 170.00 on July 20, NVDA is up {SINCE_20:.1f}% since July 20."
+    *_, mc = match_claims(extract_claims(answer, {"NVDA"}), [_bars(CLOSES)])
+    assert mc.verdict is Verdict.DERIVED and "to " not in mc.note.split("=")[0], mc.note

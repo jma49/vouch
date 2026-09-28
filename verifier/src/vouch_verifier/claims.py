@@ -492,6 +492,12 @@ _SINCE_RE = re.compile(r"\b(since|from)\b", re.IGNORECASE)
 _AMBIGUOUS_PERIOD = "ambiguous period"
 
 
+def _same_date(a: str, b: str) -> bool:
+    """Two stated dates name the same day; "--MM-DD" (no year) matches
+    that day in any year."""
+    return a == b or (a[-5:] == b[-5:] and (a.startswith("--") or b.startswith("--")))
+
+
 def _derivation(
     answer: str, m: NumberToken, scope: _Scope, vocab: Vocabulary
 ) -> Derivation | str | None:
@@ -549,6 +555,12 @@ def _derivation(
         excluded = start[0] if start is not None else hi
         stated = [d for d in _find_dates(answer, lo, hi) if d[0] < excluded and d[0] != m.start]
         clause_before = [d for d in _find_dates(answer, *scope.clause) if d[0] < lo]
+        # The change's own start is never its end: "up from 158.29 on
+        # July 20, a 3.63% gain since July 20" ends at a later date, not
+        # in an empty window (#127).
+        if start is not None:
+            stated = [d for d in stated if not _same_date(d[1], start[1])]
+            clause_before = [d for d in clause_before if not _same_date(d[1], start[1])]
         pool = stated or clause_before
         end = pool[-1][1] if pool else None
 
