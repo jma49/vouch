@@ -42,3 +42,9 @@ coverage.out
 # Pinned MCP reference servers for `make integration` (regenerable)
 /.cache/
 .mypy_cache/
+
+# Personal agent tooling
+.claude/settings.local.json
+.claude/worktrees/
+CLAUDE.local.md
+.cursor/
