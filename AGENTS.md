@@ -100,6 +100,28 @@ Breaking one of these is a bug even if every test passes.
   `make build test lint readme-check` (P-007). Merge a stack of PRs
   bottom-up and retarget each dependent to `main` before deleting its
   base branch (P-006).
+- **Repository hygiene.** Every committed blob stays in history, so a
+  later delete does not undo a commit.
+  - No secrets or env files. The only private keys in git are the
+    throwaway test keys in `testdata/keys/` (see its README); any other
+    `*.pem` stays ignored.
+  - No generated or runtime output: `proxy/bin/`, venvs, caches
+    (`.mypy_cache`, `.ruff_cache`, `.hypothesis`, `eval/.cache/`),
+    coverage, local `receipts/` and `fixtures/`. The fuzz corpus in
+    `proxy/internal/receipt/testdata/fuzz/` is committed on purpose
+    (the differential test replays it). Whether real-agent outputs
+    under `eval/runs/` are committed is the maintainer's call
+    (`docs/handoff.md`, open questions); ask before adding any.
+  - Personal tool files stay local: `.claude/settings.local.json`,
+    `.claude/worktrees/`, `CLAUDE.local.md`, `.cursor/`, editor
+    settings.
+  - A new tool that writes files into the repo gets its output added to
+    `.gitignore` in the same change.
+  - Stage paths explicitly and read `git diff --cached` before
+    committing. If something sensitive was committed, stop and tell the
+    maintainer: it needs rotation and a history rewrite.
+  - Delete merged branches, and remove agent worktrees
+    (`git worktree remove`) when the work is done.
 - **Before declaring done:** tests pass (including `-race` for Go),
   `gofmt -l` is empty, golden log is unchanged or intentionally
   regenerated, and the maintained docs below are updated.

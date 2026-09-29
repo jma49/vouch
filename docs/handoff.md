@@ -669,3 +669,5 @@ wrong in the stated way.
 - 2026-09-28: Phase 7 (evidence layer), planned by a separate-model review:
   #123, #125 (#124), #126, #128 (#127), #129, #130; `--listen` auth left
   to the maintainer.
+- 2026-09-29: repository hygiene audit (no secrets in HEAD or history);
+  ignored personal agent tooling, added the hygiene rules to `AGENTS.md`.
