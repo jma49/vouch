@@ -8,7 +8,7 @@ RUN go mod download
 COPY proxy/ ./
 RUN CGO_ENABLED=0 go build -o /out/vouch ./cmd/vouch
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 WORKDIR /app
 COPY --from=proxy-build /out/vouch /usr/local/bin/vouch
 COPY verifier/ ./verifier/
